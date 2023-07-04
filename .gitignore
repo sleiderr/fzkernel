@@ -1,1 +1,3 @@
-target
+/target
+src/bios/f-initmbr/target
+src/bios/flib/target
