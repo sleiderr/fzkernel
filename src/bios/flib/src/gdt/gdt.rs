@@ -1,8 +1,6 @@
 use core;
 use core::arch::asm;
-use core::mem::transmute;
 use core::ptr::write_volatile;
-use crate::panic;
 
 pub struct Gdtr {
     size : u16,
@@ -26,7 +24,7 @@ impl SegmentDescriptor {
         self.bytes[2] = bytes[0];
         self.bytes[3] = bytes[1];
         self.bytes[4] = bytes[2];
-        self.bytes[7] = bytes[3];;
+        self.bytes[7] = bytes[3];
     }
 
     pub fn set_limit(&mut self, limit : u32) {
