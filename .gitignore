@@ -1,3 +1,5 @@
 /target
+boot.img
 src/bios/f-initmbr/target
 src/bios/flib/target
+src/bios/f-init/target

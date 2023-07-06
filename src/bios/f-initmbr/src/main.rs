@@ -12,7 +12,7 @@ use flib::disk_io::disk::{AddressPacket, edd_ext_check, drive_reset};
 #[no_mangle]
 pub static mut MAGIC_NUMBER: u16 = 0xaa55;
 
-const INIT_TEXT: &[u8] = b"FrozenBoot";
+const INIT_TEXT: &[u8] = b"***";
 
 pub fn main() {
 

@@ -25,7 +25,17 @@ fn main() {
         &stage_1st_triple,
         &target_dir,
         &objcopy,
-        cargo,
+        &cargo,
+    );
+
+    let stage_2_dir = manifest_dir.join("src/bios/f-init");
+    let stage_2_triple = stage_2_dir.join("x86_64-fbios.json");
+    build_subproject(
+        &stage_2_dir,
+        &stage_2_triple,
+        &target_dir,
+        &objcopy,
+        cargo
     );
 }
 
@@ -46,10 +56,10 @@ fn build_subproject(
     let target_file = Path::new(&target_triple)
         .file_stem()
         .expect("Couldn't get target file stem");
-    let target_dir = root_target_dir.join(&subproject_name);
+    let target_dir = root_target_dir.join(subproject_name);
 
     let mut build_cmd = Command::new(cargo);
-    build_cmd.current_dir(&subproject_dir);
+    build_cmd.current_dir(subproject_dir);
     build_cmd.arg("build").arg("--release");
     build_cmd.arg("-Zbuild-std=core,alloc");
     build_cmd.arg(format!("--target-dir={}", &target_dir.display()));
@@ -57,8 +67,8 @@ fn build_subproject(
     let build_status = build_cmd.status().expect("Build failed");
     assert!(build_status.success(), "Build failed");
 
-    let object_dir = target_dir.join(&target_file).join("release");
-    let object_path = object_dir.join(&subproject_name);
+    let object_dir = target_dir.join(target_file).join("release");
+    let object_path = object_dir.join(subproject_name);
     let binary_path = object_dir.join(subproject_name.to_string() + ".bin");
     let mut objcopy_cmd = Command::new(objcopy);
     objcopy_cmd
