@@ -16,18 +16,23 @@ const INIT_TEXT: &[u8] = b"***";
 
 pub fn main() {
 
-    let loader_ptr = 0x07C0 as *const ();
+    let loader_ptr = 0x200 as *const ();
     let loader: fn() = unsafe { core::mem::transmute(loader_ptr) };
 
     if edd_ext_check() {
-        cprint_info(INIT_TEXT);
+        //cprint_info(INIT_TEXT);
     }
 
-    drive_reset(0x80);
-    let stage2 = AddressPacket::new(4, 0x07C0, 0x1);
-    stage2.disk_read(0x80);
+    let stage2 = AddressPacket::new(63, 0x200 | (0x07C0 << 16), 0x1);
+    match stage2.disk_read(0x80) {
+
+        Ok(()) => {},
+        Err(()) => { cprint_info(b"error"); }
+
+    };
 
     loader();
+
 }
 
 #[no_mangle]
