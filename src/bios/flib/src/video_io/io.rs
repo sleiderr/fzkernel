@@ -1,3 +1,4 @@
+use core;
 use core::arch::asm;
 use core::fmt;
 use core::fmt::Write;
@@ -6,7 +7,7 @@ use crate::video_io::writer::Writer;
 #[macro_export]
 macro_rules! print {
     ($($t_elm:tt)*) => {
-        $crate::io::io::__bios_print(format_args!($($t_elm)*))
+        $crate::video_io::io::__bios_print(format_args!($($t_elm)*))
     };
 }
 
@@ -36,13 +37,13 @@ pub fn cprint_info(str: &[u8]) {
     }
 }
 
-pub fn __bios_print(args: fmt::Arguments<'_>) {
+pub fn __bios_print(args: fmt::Arguments) {
     let mut writer = Writer{};
     writer.write_fmt(args).unwrap();
 }
 
 #[inline(never)]
-pub(crate) fn __bios_printc(ch: u8) {
+pub fn __bios_printc(ch: u8) {
     unsafe {
         asm! {
         "mov ah, 0x0e",

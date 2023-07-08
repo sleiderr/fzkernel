@@ -9,7 +9,7 @@ ENTRY(loader)
 SECTIONS {
 
     . = 0x200;
-    .text : { *(.startup*) *(.text*) *(.got.plt*) } >bootinit
+    .text : { *(.startup*) *(.text*) *(.got.plt*) *(.got*) } >bootinit
     .rodata : { *(.rodata*) } >bootinit
     .data : { *(.data*) } >bootinit
     .bss : { *(.bss*) }

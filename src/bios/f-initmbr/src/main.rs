@@ -12,22 +12,21 @@ use flib::disk_io::disk::{AddressPacket, edd_ext_check, drive_reset};
 #[no_mangle]
 pub static mut MAGIC_NUMBER: u16 = 0xaa55;
 
-const INIT_TEXT: &[u8] = b"***";
 
 pub fn main() {
 
     let loader_ptr = 0x200 as *const ();
     let loader: fn() = unsafe { core::mem::transmute(loader_ptr) };
 
-    if edd_ext_check() {
-        //cprint_info(INIT_TEXT);
+    cprint_info(b"tt");
+    if !edd_ext_check() {
+        return;
     }
-
     let stage2 = AddressPacket::new(63, 0x200 | (0x07C0 << 16), 0x1);
     match stage2.disk_read(0x80) {
 
         Ok(()) => {},
-        Err(()) => { cprint_info(b"error"); }
+        Err(()) => { return; }
 
     };
 
