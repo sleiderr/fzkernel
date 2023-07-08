@@ -3,9 +3,11 @@
 
 mod pswitch;
 
+use crate::pswitch::a20::enable_a20;
+
 use core::panic::PanicInfo;
 use core::fmt::Write;
-use flib::video_io::io::{clear_screen, cprint_info, __bios_printc};
+use flib::video_io::io::{clear_screen, cprint_info, color};
 use flib::video_io::writer::Writer;
 use flib::print;
 
@@ -14,10 +16,8 @@ use flib::print;
 pub fn loader() {
 
     clear_screen();
-    let mut writer = Writer{};
-    writeln!(writer, "test");
     cprint_info(b"Loading second stage");
-    print!("test");
+    enable_a20();
 
 }
 

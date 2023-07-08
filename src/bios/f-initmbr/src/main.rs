@@ -18,7 +18,6 @@ pub fn main() {
     let loader_ptr = 0x200 as *const ();
     let loader: fn() = unsafe { core::mem::transmute(loader_ptr) };
 
-    cprint_info(b"tt");
     if !edd_ext_check() {
         return;
     }
