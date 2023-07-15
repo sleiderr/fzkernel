@@ -1,20 +1,20 @@
-MEMORY {
-    body : ORIGIN = 0, LENGTH = 442
-    size : ORIGIN = 442, LENGTH = 2
-    slba : ORIGIN = 444, LENGTH = 2
-    boot : ORIGIN = 510, LENGTH = 2
-}
-
 ENTRY(_start);
 
 SECTIONS {
-    .text : { *(.startup*) *(.text*) } > body
-    .rodata : { *(.rodata*) } > body
-    .data : { *(.data*) } > body
-    .bss : { *(.bss*) } > body
-    .size : { KEEP(*(.size*)) } > size
-    .slba : { KEEP(*(.slba*)) } > slba
-    .boot : { KEEP(*(.boot*)) } > boot
-    /DISCARD/ : { *(.eh_frame*) *(.comment*) *(.got.plt*) *(.got) }
+    _boot_start = .;
+    .text : { *(.startup*) *(.text*) }
+    .rodata : { *(.rodata*) }
+    .data : { *(.data*) }
+    _boot_end = .;
 
+    . = 446;
+    _part_table = .;
+
+    . = 510;
+    .magic_number : {
+        SHORT(0xaa55);
+    }
+    /DISCARD/ : {
+        *(.eh_frame* *.got.plt*)
+    }
 }

@@ -5,10 +5,12 @@ pub fn edd_ext_check() -> bool {
 
     unsafe {
         asm!(
+        "push bx",
         "mov ah, 0x41",
         "mov bx, 0x55aa",
         "mov dl, 0x80",
         "int 0x13",
+        "pop bx",
         "sbb {0}, {0}",
         out(reg_abcd) cflag
         );
@@ -64,11 +66,13 @@ impl AddressPacket {
 
         unsafe {
             asm!(
+                "pusha",
                 "mov ah, 0x42",
                 "mov si, cx",
                 "xor bx, bx",
                 "mov ds, bx",
                 "int 0x13",
+                "popa",
                 in("dl") drive_number,
                 in("cx") dap_addr,
                 out("ah") result

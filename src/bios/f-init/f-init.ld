@@ -1,24 +1,42 @@
-MEMORY {
-
-    bootinit : ORIGIN = 0x00, LENGTH = 0x07E00
-
-}
-
-ENTRY(loader)
+ENTRY(_start)
 
 SECTIONS {
 
     . = 0x200;
-    .text : { *(.startup*) *(.text*) *(.got.plt*) *(.got*) } >bootinit
-    .rodata : { *(.rodata*) } >bootinit
-    .data : { *(.data*) } >bootinit
-    .bss : { *(.bss*) }
+
+    .start : {
+        *(.start)
+    }
+
+    .text : {
+        *(.text .text.*)
+    }
+
+    .bss : {
+        *(.bss .bss.*)
+    }
+
+    .rodata : {
+        *(.rodata .rodata.*)
+    }
+
+    .data : {
+        *(.data .data.*)
+    }
+
+    .eh_frame : {
+        *(.eh_frame .eh_frame.*)
+    }
+
+    .eh_frame_hdr : {
+        *(.eh_frame_hdr .eh_frame_hdr.*)
+    }
+
     .fill : {
 
         FILL(0x00);
         . = 0x7e00;
 
-    } > bootinit
-    /DISCARD/ : { *(.eh_frame*) }
+    }
 
 }

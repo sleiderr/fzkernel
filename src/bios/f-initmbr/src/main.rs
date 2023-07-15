@@ -8,27 +8,17 @@ use core::panic::PanicInfo;
 use flib::video_io::io::{color, cprint_info, clear_screen};
 use flib::disk_io::disk::{AddressPacket, edd_ext_check, drive_reset};
 
-#[link_section = ".boot"]
-#[no_mangle]
-pub static mut MAGIC_NUMBER: u16 = 0xaa55;
-
-
 pub fn main() {
-
     let loader_ptr = 0x200 as *const ();
-    let loader: fn() = unsafe { core::mem::transmute(loader_ptr) };
+    let loader: fn() -> ! = unsafe { core::mem::transmute(loader_ptr) };
+
+    clear_screen();
 
     if !edd_ext_check() {
         return;
     }
-    let stage2 = AddressPacket::new(63, 0x200 | (0x07C0 << 16), 0x1);
-    match stage2.disk_read(0x80) {
-
-        Ok(()) => {},
-        Err(()) => { return; }
-
-    };
-
+    let stage2 = AddressPacket::new(63, 0x07e00, 0x1);
+    stage2.disk_read(0x80);
     loader();
 
 }
@@ -37,6 +27,16 @@ pub fn main() {
 #[link_section = ".startup"]
 pub fn _start() -> ! {
     unsafe {
+        asm!(
+        "xor ax, ax",
+        "mov ds, ax",
+        "mov es, ax",
+        "mov ss, ax",
+        "mov fs, ax",
+        "mov gs, ax",
+        "cld",
+        "mov sp, 0x7c00"
+        );
         main();
         unreachable_unchecked();
     }
