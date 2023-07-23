@@ -17,7 +17,10 @@ pub extern "C" fn _start() -> ! {
 }
 
 pub fn loader() -> ! {
-    print!("Je quitte VR !");
+    cprint_info(b"Loading second stage");
+    cprint_info(b"\r\nAttempt to enable A20 line");
+    enable_a20();
+    cprint_info(b"\r\nA20 line enabled");
     loop {}
 
 }
