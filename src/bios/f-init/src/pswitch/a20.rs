@@ -2,6 +2,7 @@ use core::arch::asm;
 use flib::interrupts::{io_delay, enable_interrupts, disable_interrupts, interrupts_disabled};
 use flib::ps2::ps2::{input_wait, output_wait, send_ps2, read_ps2, send_data};
 use flib::io::io::{outb, inb};
+use flib::video_io::io::cprint_info;
 
 const A20_KTEST_LOOPS: u16 = 32;
 
@@ -14,7 +15,6 @@ pub fn enable_a20() -> Result<(), ()> {
     __bios_enable_a20()
         .or_else(|_| __kb_enable_a20())
         .or_else(|_| __fastg_enable_a20())
-
 }
 
 fn __fastg_enable_a20() -> Result<(), ()> {
@@ -95,22 +95,27 @@ fn __fast_a20_check() -> bool {
     disable_interrupts();
     unsafe {
         asm!(
+        "push es",
+        "push ds",
+        "push di",
+        "push si",
         "xor ax, ax",
         "mov es, ax",
         "not ax",
         "mov ds, ax",
-        "mov di, 0x0500",
         "mov si, 0x0510",
-        "mov eax, 0x00000500",
-        "mov BYTE PTR [eax], 0x00",
-        "mov eax, 0x00100500",
-        "mov BYTE PTR [eax], 0xFF",
-        "mov eax, 0x00000500",
-        "cmp BYTE PTR [eax], 0xFF",
+        "mov di, 0x0500",
+        "mov BYTE PTR es:[di], 0x00",
+        "mov BYTE PTR ds:[si], 0xFF",
+        "cmp BYTE PTR es:[di], 0xFF",
+        "pop si",
+        "pop di",
+        "pop ds",
+        "pop es",
         "mov ax, 0",
         "je 1f",
         "mov ax, 1",
-        "1: ret",
+        "1: nop",
         out("ax") result
         );
     }
