@@ -78,20 +78,6 @@ pub trait DataSource {
     fn load(&self, n: u32, physical_address: u32, length: u32) -> Result<(), ()>;
 }
 
-pub struct SourceTest {}
-
-impl SourceTest {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl DataSource for SourceTest {
-    fn load(&self, n: u32, physical_address: u32, length: u32) -> Result<(), ()> {
-        Ok(())
-    }
-}
-
 pub struct Disk {
     origin: u32,
 }
@@ -112,7 +98,3 @@ impl DataSource for Disk {
         address.disk_read(0x80)
     }
 }
-
-pub trait DataStruct {}
-
-impl DataStruct for u32 {}
