@@ -10,3 +10,4 @@ pub mod x86;
 pub mod io;
 
 pub mod interrupts;
+pub mod data;
