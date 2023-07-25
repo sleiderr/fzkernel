@@ -38,21 +38,23 @@ impl Image {
         switch_graphic();
         let max = max(self.x_size(), self.y_size());
         let n_pixel = self.dim.0 as u64 * self.dim.1 as u64;
-        let mut image_segment: DataSegment<Pixel, S> = DataSegment::default(source);
+        let mut image_segment: DataSegment<[Pixel; 512], S> = DataSegment::default(source);
         image_segment.set_length(2560);
         image_segment.set_physical_origin(origin);
         let mut address = 0x4;
-        for pixel in 0..n_pixel {
-            if let Some(pixel) = image_segment.read_abstract(address) {
-                write(
-                    pixel.x + center.x() - self.x_size() * (640 / max) / 2,
-                    pixel.y + center.y() - self.y_size() * (480 / max) / 2,
-                    pixel.color,
-                );
+        for pixel in 0..n_pixel / 512 {
+            if let Some(p) = image_segment.read_abstract(address) {
+                for pixel in p {
+                    write(
+                        pixel.x + center.x() - self.x_size() * (640 / max) / 2,
+                        pixel.y + center.y() - self.y_size() * (480 / max) / 2,
+                        pixel.color,
+                    );
+                }
             } else {
                 return Err(());
             }
-            address += size_of::<Pixel>() as u32;
+            address += size_of::<[Pixel; 512]>() as u32;
         }
         Ok(())
     }
