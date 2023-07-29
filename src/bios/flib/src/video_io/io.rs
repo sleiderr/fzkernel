@@ -9,6 +9,53 @@ macro_rules! print {
     };
 }
 
+#[macro_export]
+macro_rules! info {
+    ($msg: tt) => {
+        $crate::video_io::io::__bios_print_str("\r\n[info] ");
+        $crate::video_io::io::__bios_print_str($msg);
+    }
+}
+
+#[macro_export]
+macro_rules! error {
+    ($msg: tt) => {
+        $crate::video_io::io::__bios_print_str("\r\n[error] ");
+        $crate::video_io::io::__bios_print_str($msg);
+    }
+}
+
+#[macro_export]
+macro_rules! hex_print {
+    ($num: tt, $type: tt) => {
+        use $crate::numtoa::NumToA;
+
+        let mut dsp_buffer = [0u8; 20];
+        let bytes = ($num as $type).numtoa(16, &mut dsp_buffer);
+        let mut dst_buffer = [0u8; 18];
+
+        dst_buffer[17] = b'0';
+        dst_buffer[16] = b'x';
+        let mut cursor: u32 = 0;
+
+        for (i, b) in bytes.iter().rev().enumerate() {
+            cursor += 1;
+            dst_buffer[i] = *b;
+        }
+
+        while (cursor < 16) {
+            dst_buffer[cursor as usize] = b'0';
+            cursor += 1;
+        }
+
+        dst_buffer.reverse();
+
+        $crate::video_io::io::cprint_info(&dst_buffer);
+
+    }
+}
+
+
 pub fn cprint_info(str: &[u8]) {
     for ch in str {
         __bios_printc(*ch);
