@@ -1,4 +1,4 @@
-use core;
+use core::{self, fmt::Write};
 use core::arch::asm;
 use core::fmt;
 
@@ -24,9 +24,7 @@ pub fn __bios_printc(ch: u8) {
 }
 
 pub fn __bios_print(args: fmt::Arguments) {
-    unsafe {
-        __bios_print_str(args.as_str().unwrap());
-    }
+    let mut writer = Writer{};
 }
 
 pub fn __bios_print_str(s: &str) {
@@ -55,5 +53,14 @@ pub fn clear_screen() {
         "int 0x10",
         "pop ax"
         )
+    }
+}
+
+struct Writer;
+impl Write for Writer {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        __bios_printc(b'X');
+        __bios_print_str(s);
+        Ok(())
     }
 }

@@ -9,6 +9,7 @@ use core::panic::PanicInfo;
 use core::fmt::Write;
 use flib::video_io::io::{clear_screen, cprint_info, color};
 use flib::print;
+use flib::mem::dbg_memory_map;
 
 #[no_mangle]
 #[link_section = ".start"]
@@ -21,6 +22,8 @@ pub fn loader() -> ! {
     cprint_info(b"\r\nAttempt to enable A20 line");
     enable_a20();
     cprint_info(b"\r\nA20 line enabled");
+    dbg_memory_map(0x9000);
+    cprint_info(b"\r\nOther test");
     loop {}
 
 }
