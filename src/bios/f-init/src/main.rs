@@ -8,8 +8,7 @@ use crate::pswitch::a20::enable_a20;
 use core::panic::PanicInfo;
 use core::fmt::Write;
 use flib::video_io::io::{clear_screen, cprint_info, color};
-use flib::print;
-use flib::mem::dbg_memory_map;
+use flib::mem::e820::memory_map;
 use flib::{hex_print, info, error, print};
 
 #[no_mangle]
@@ -22,7 +21,7 @@ pub fn loader() -> ! {
     info!("loading second stage (mem: 0x07C00)");
     info!("enabling A20 line");
     enable_a20();
-    dbg_memory_map(0x9000);
+    memory_map();
     info!("A20 line enabled ");
     loop {}
 

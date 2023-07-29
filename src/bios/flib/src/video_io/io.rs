@@ -28,10 +28,8 @@ macro_rules! error {
 #[macro_export]
 macro_rules! hex_print {
     ($num: tt, $type: tt) => {
-        use $crate::numtoa::NumToA;
-
         let mut dsp_buffer = [0u8; 20];
-        let bytes = ($num as $type).numtoa(16, &mut dsp_buffer);
+        let bytes = $crate::numtoa::NumToA::numtoa($num, 16, &mut dsp_buffer);
         let mut dst_buffer = [0u8; 18];
 
         dst_buffer[17] = b'0';

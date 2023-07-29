@@ -9,3 +9,4 @@ edition = "2021"
 bitfield = "0.14"
 numtoa = "0.2"
 rlibc = "1"
+lazy_static = { version = "1.4", features = ["spin_no_std"] }
