@@ -10,3 +10,7 @@ pub mod x86;
 pub mod io;
 
 pub mod interrupts;
+
+pub use numtoa;
+
+extern crate rlibc;
