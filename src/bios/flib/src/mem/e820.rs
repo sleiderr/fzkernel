@@ -1,21 +1,51 @@
-use core::{arch::asm, mem};
+use core::{arch::asm, mem, ptr};
 
 use bitfield::bitfield;
 
-use crate::{video_io::io::cprint_info, hex_print, info};
+use crate::{hex_print, info, video_io::io::cprint_info};
 
 pub const E820_MAP_ADDR: u16 = 0x9000;
 pub static mut E820_MAP_LENGTH: u16 = 0;
 
-pub struct AddressRangeDescriptor {
+pub struct E820MemoryMap {
+    cursor: u16,
+}
 
+impl E820MemoryMap {
+    pub fn new() -> Self {
+        Self { cursor: 0 }
+    }
+}
+
+impl Iterator for E820MemoryMap {
+    type Item = AddressRangeDescriptor;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if unsafe { E820_MAP_LENGTH == 0 } {
+            panic!();
+        }
+
+        if unsafe { E820_MAP_LENGTH <= self.cursor } {
+            self.cursor = 0;
+            return None;
+        }
+
+        let current_elem = (E820_MAP_ADDR + 24 * (self.cursor)) as *mut AddressRangeDescriptor;
+        let ard: AddressRangeDescriptor = unsafe { ptr::read(current_elem) };
+
+        self.cursor += 1;
+
+        Some(ard)
+    }
+}
+
+pub struct AddressRangeDescriptor {
     pub base_addr_low: u32,
     pub base_addr_high: u32,
     pub length_low: u32,
     pub length_high: u32,
     pub addr_type: E820MemType,
-    pub extended_attributes: ExtendedAttributesARDS
-
+    pub extended_attributes: ExtendedAttributesARDS,
 }
 
 #[repr(u16)]
@@ -27,10 +57,10 @@ pub enum E820MemType {
     UNUSABLE = 5,
     DISABLED = 6,
     PERSISTENT = 7,
-    OEM = 12
+    OEM = 12,
 }
 
-bitfield!{
+bitfield! {
     #[repr(packed)]
     pub struct ExtendedAttributesARDS(u8);
     u32;
@@ -39,7 +69,6 @@ bitfield!{
 }
 
 fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, ()> {
-
     let cf: u32;
 
     unsafe {
@@ -71,11 +100,10 @@ fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, ()> {
     }
 
     if cf == 1 || ebx == 0 {
-        return Err(())
+        return Err(());
     }
 
     Ok(ebx)
-
 }
 
 fn e820_type_print(descriptor: &AddressRangeDescriptor) {
@@ -104,12 +132,10 @@ fn e820_type_print(descriptor: &AddressRangeDescriptor) {
         E820MemType::OEM => {
             cprint_info(b" (OEM) ");
         }
-        _ => {}
     }
 }
 
 pub fn memory_map() -> Result<(), ()> {
-
     let mut entry_count: u16 = 0;
     let mut ebx: u32 = 0;
 
@@ -118,11 +144,9 @@ pub fn memory_map() -> Result<(), ()> {
         entry_count += 1;
 
         let ard = (E820_MAP_ADDR + (entry_count - 1) * 24) as *mut AddressRangeDescriptor;
-        let descriptor: &AddressRangeDescriptor = unsafe {
-            mem::transmute(ard)
-        };
+        let descriptor: &AddressRangeDescriptor = unsafe { mem::transmute(ard) };
 
-        let base_addr = (descriptor.base_addr_high << 16) + descriptor.base_addr_low ;
+        let base_addr = (descriptor.base_addr_high << 16) + descriptor.base_addr_low;
         let length = (descriptor.length_high << 16) + descriptor.length_low;
 
         info!("memory: ");
@@ -131,12 +155,9 @@ pub fn memory_map() -> Result<(), ()> {
         hex_print!((base_addr + length - 1), u32);
 
         e820_type_print(descriptor);
-
     }
 
     unsafe { E820_MAP_LENGTH = entry_count };
-    hex_print!((unsafe { E820_MAP_LENGTH }), u16);
 
     Ok(())
-
 }
