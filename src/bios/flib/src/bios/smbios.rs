@@ -45,6 +45,14 @@ macro_rules! get_str {
     };
 }
 
+macro_rules! str_field {
+    ($self: ident, $func: tt, $field: expr) => {
+        pub fn $func(&$self) -> Option<&'static str> {
+            $self.get_str($field)
+        }
+    };
+}
+
 struct_type!(SM_BIOSINFO, 0);
 struct_type!(SM_SYSINFO, 1);
 struct_type!(SM_BASEBOARDINFO, 2);
@@ -57,6 +65,63 @@ pub struct SMBIOSStructHeader {
     struct_type: u8,
     length: u8,
     handle: u16,
+}
+
+pub struct SMBIOSProcInfo {
+    data_base_addr: u32,
+    data_len: u32,
+    internal: InternalSMBIOSProcInfo,
+}
+
+#[repr(C, packed)]
+struct InternalSMBIOSProcInfo {
+    socket_designation: u8,
+    proc_type: ProcType,
+    proc_family: u8,
+    proc_manufacturer: u8,
+    proc_id: u64,
+    proc_version: u8,
+    voltage: u8,
+    pub external_clock: u16,
+    pub max_speed: u16,
+    pub curr_speed: u16,
+    status: u8,
+    proc_upgrade: u8,
+    l1_cache_handle: u16,
+    l2_cache_handle: u16,
+    l3_cache_handle: u16,
+    serial_number: u8,
+    asset_tag: u8,
+    part_number: u8,
+    pub core_count: u8,
+    pub core_enabled: u8,
+    pub thread_count: u8,
+    proc_characteristics: u16,
+    proc_family_2: u16,
+    pub core_count_2: u16,
+    pub core_enabled_2: u16,
+    pub thread_count_2: u16,
+    pub thread_enabled: u16,
+}
+
+#[repr(u8)]
+pub enum ProcType {
+    Other = 1,
+    Unknown = 2,
+    CentralProc = 3,
+    MathProc = 4,
+    DSPProc = 5,
+    VideoProc = 6,
+}
+
+impl SMBIOSProcInfo {
+    get_str!();
+    str_field!(self, get_asset_tag, self.internal.asset_tag);
+    str_field!(self, get_serial_number, self.internal.serial_number);
+    str_field!(self, get_proc_version, self.internal.proc_version);
+    str_field!(self, get_proc_manufacturer, self.internal.proc_manufacturer);
+    str_field!(self, get_socket_name, self.internal.socket_designation);
+    str_field!(self, get_part_number, self.internal.part_number);
 }
 
 pub struct SMBIOSBiosInfo {
@@ -89,24 +154,12 @@ pub struct SMBIOSSystemInfo {
 
 impl SMBIOSBiosInfo {
     get_str!();
-    pub fn get_vendor(&self) -> Option<&'static str> {
-        self.get_str(self.internal.vendor)
-    }
-    pub fn get_version(&self) -> Option<&'static str> {
-        self.get_str(self.internal.version)
-    }
-    pub fn get_release_date(&self) -> Option<&'static str> {
-        self.get_str(self.internal.release_date)
-    }
-    pub fn get_rom_size(&self) -> u32 {
-        ((self.internal.rom_size + 1) as u32) * 64
-    }
-    pub fn get_major_release(&self) -> Option<&'static str> {
-        self.get_str(self.internal.major_release)
-    }
-    pub fn get_minor_release(&self) -> Option<&'static str> {
-        self.get_str(self.internal.minor_release)
-    }
+    str_field!(self, get_vendor, self.internal.vendor);
+    str_field!(self, get_version, self.internal.version);
+    str_field!(self, get_release_date, self.internal.release_date);
+    str_field!(self, get_rom_size, self.internal.rom_size);
+    str_field!(self, get_major_release, self.internal.major_release);
+    str_field!(self, get_minor_release, self.internal.minor_release);
 }
 
 #[repr(C, packed)]
@@ -136,21 +189,10 @@ pub enum WakeupType {
 
 impl SMBIOSSystemInfo {
     get_str!();
-    pub fn get_manufacturer(&self) -> Option<&'static str> {
-        self.get_str(self.internal.manufacturer)
-    }
-
-    pub fn get_product_name(&self) -> Option<&'static str> {
-        self.get_str(self.internal.product_name)
-    }
-
-    pub fn get_version(&self) -> Option<&'static str> {
-        self.get_str(self.internal.version)
-    }
-
-    pub fn get_serial_number(&self) -> Option<&'static str> {
-        self.get_str(self.internal.serial_number)
-    }
+    str_field!(self, get_manufacturer, self.internal.manufacturer);
+    str_field!(self, get_product_name, self.internal.product_name);
+    str_field!(self, get_version, self.internal.version);
+    str_field!(self, get_serial_number, self.internal.serial_number);
 }
 
 #[repr(C, packed)]
@@ -249,6 +291,13 @@ impl SMBIOSEntryTable {
         SM_BIOSINFO,
         InternalSMBIOSBiosInfo,
         "SM_BIOSINFO"
+    );
+    struct_getter!(
+        get_proc_information,
+        SMBIOSProcInfo,
+        SM_PROCINFO,
+        InternalSMBIOSProcInfo,
+        "SM_PROCINFO"
     );
 }
 
