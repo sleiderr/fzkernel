@@ -11,10 +11,10 @@ global_asm!(include_str!("arch/x86/setup.S"));
 #[no_mangle]
 #[link_section = ".start"]
 pub extern "C" fn _start() -> ! {
-    loader();
+    boot_main();
 }
 
-pub fn loader() -> ! {
+pub fn boot_main() -> ! {
     loop {}
 }
 
