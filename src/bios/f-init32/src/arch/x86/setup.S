@@ -13,9 +13,9 @@ mov eax, cr0
 or eax, 1
 mov cr0, eax
 
-.byte 0x66
-.byte 0xea
-.long _start
-.word 0x10
+//.byte 0x66
+//.byte 0xea
+//.long _start
+//.word 0x10
 
-//ljmp 0x10, offset _start
+ljmp 0x10, offset _start
