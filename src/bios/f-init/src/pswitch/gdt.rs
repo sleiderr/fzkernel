@@ -2,11 +2,12 @@ use core::arch::asm;
 
 use flib::{
     gdt::gdt::{Gdtr, SegmentDescriptor},
+    hex_print, info,
     interrupts::{disable_interrupts, enable_interrupts},
     video_io::io::cprint_info,
 };
 
-const GDT_START: u32 = 0x7da0;
+const GDT_START: u32 = 0x5da0;
 
 pub fn load_gdt() -> Result<(), ()> {
     let mut __boot_ds = SegmentDescriptor::new();
@@ -27,15 +28,17 @@ pub fn load_gdt() -> Result<(), ()> {
 
     gdt.set_offset(GDT_START);
 
-    gdt.add_segment(null_entry);
     gdt.add_segment(__boot_ds);
     gdt.add_segment(__boot_cs);
 
     disable_interrupts();
     unsafe {
-        asm!("lgdt [0x7da0]");
+        asm!("lgdt [0x5da0]");
     }
     enable_interrupts();
+
+    info!("GDT initialized at ");
+    hex_print!(GDT_START, u32);
 
     Ok(())
 }

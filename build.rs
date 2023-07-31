@@ -25,18 +25,16 @@ fn main() {
         &stage_1st_triple,
         &target_dir,
         &objcopy,
-        &cargo,
+        cargo,
     );
 
     let stage_2_dir = manifest_dir.join("src/bios/f-init");
     let stage_2_triple = stage_2_dir.join("x86_64-fbios.json");
-    build_subproject(
-        &stage_2_dir,
-        &stage_2_triple,
-        &target_dir,
-        &objcopy,
-        cargo
-    );
+    build_subproject(&stage_2_dir, &stage_2_triple, &target_dir, &objcopy, cargo);
+
+    let stage_3_dir = manifest_dir.join("src/bios/f-init32");
+    let stage_3_triple = stage_3_dir.join("x86_64-fbios.json");
+    build_subproject(&stage_3_dir, &stage_3_triple, &target_dir, &objcopy, cargo);
 }
 
 fn build_subproject(

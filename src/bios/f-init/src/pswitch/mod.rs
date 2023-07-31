@@ -15,10 +15,11 @@ pub fn protected_jump() -> ! {
             "mov eax, cr0",
             "or eax, 1",
             "mov cr0, eax",
-            /*".byte 0x66",
+            "mov eax, 2",
+            ".byte 0x66",
             ".byte 0xea",
-            ".int 0x01000000",
-            ".word 0x10"*/
+            ".int 0x5e00",
+            ".word 0x10"
         );
         unreachable_unchecked();
     }
