@@ -3,7 +3,7 @@
 
 mod pswitch;
 
-use crate::pswitch::{a20::enable_a20, gdt::load_gdt, protected_jump};
+use crate::pswitch::{a20::enable_a20, gdt::load_gdt};
 
 use core::fmt::Write;
 use core::panic::PanicInfo;
