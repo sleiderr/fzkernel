@@ -8,6 +8,7 @@ pub mod part_mbr;
 pub mod ps2;
 pub mod x86;
 pub mod io;
+pub mod mem;
 
 pub mod interrupts;
 
