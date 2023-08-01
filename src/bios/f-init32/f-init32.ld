@@ -1,17 +1,16 @@
-ENTRY(_start)
+ENTRY(_entry32)
 
 SECTIONS {
 
-    . = 0x200;
-
-    .start : {
-        *(.start)
-    }
+    . = 0x5e00 + 0x7c00;
 
     .text : {
         *(.text .text.*)
     }
 
+    .start : {
+        *(.start)
+    }
     .rodata : {
         *(.rodata .rodata.*)
     }
@@ -33,12 +32,10 @@ SECTIONS {
     .eh_frame_hdr : {
         *(.eh_frame_hdr .eh_frame_hdr.*)
     }
-    . = 0x5da0;
-    _gdt_start = .;
 
     .fill : {
         FILL(0x00);
-        . = 0x5e00;
+        . = 0x7e00 + 0x7c00;
     }
 
 

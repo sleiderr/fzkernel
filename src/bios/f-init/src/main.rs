@@ -3,11 +3,11 @@
 
 mod pswitch;
 
-use crate::pswitch::a20::enable_a20;
+use crate::pswitch::{a20::enable_a20, gdt::load_gdt};
 
-use core::panic::PanicInfo;
 use core::fmt::Write;
-use flib::video_io::io::{clear_screen, cprint_info, color};
+use core::panic::PanicInfo;
+use flib::video_io::io::{clear_screen, color, cprint_info};
 use flib::mem::e820::memory_map;
 use flib::{hex_print, info, error, print};
 
@@ -23,12 +23,17 @@ pub fn loader() -> ! {
     enable_a20();
     memory_map();
     info!("A20 line enabled ");
-    loop {}
+    load_gdt();
+    info!("switching to protected mode (x86)");
 
+    let loader_ptr = 0x5e00 as *const ();
+    let prot_entry: fn() -> ! = unsafe { core::mem::transmute(loader_ptr) };
+
+    prot_entry();
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     error!("Panic occured");
-    loop{}
+    loop {}
 }

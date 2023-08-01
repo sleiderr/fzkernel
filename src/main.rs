@@ -1,13 +1,10 @@
 use std::error::Error;
-use std::path::Path;
 use std::fs;
-use std::io::{self, Read, Write, Seek, SeekFrom, BufWriter, BufReader};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::vec::Vec;
 
-
-
 fn write_to_disk(path: &Path) -> Result<(), Box<dyn Error>> {
-
     let disk_img = fs::OpenOptions::new()
         .write(true)
         .truncate(false)
@@ -34,16 +31,18 @@ fn write_to_disk(path: &Path) -> Result<(), Box<dyn Error>> {
         .collect::<io::Result<Vec<u8>>>()?;
     writer.write_all(&buff)?;
 
+    let mbr = fs::File::open("target/f-init32/x86_64-fbios/release/f-init32.bin")?;
+    let buff = BufReader::new(mbr)
+        .bytes()
+        .collect::<io::Result<Vec<u8>>>()?;
+    writer.write_all(&buff)?;
+
     println!("Bootloader done !");
 
     Ok(())
-
 }
 
-
 fn main() {
-
     let disk_path: &Path = Path::new("./boot.img");
     write_to_disk(disk_path).unwrap();
-
 }
