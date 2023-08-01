@@ -1,4 +1,4 @@
-use core;
+use core::{self, fmt::Write};
 use core::arch::asm;
 use core::fmt;
 
@@ -28,10 +28,8 @@ macro_rules! error {
 #[macro_export]
 macro_rules! hex_print {
     ($num: tt, $type: tt) => {
-        use $crate::numtoa::NumToA;
-
         let mut dsp_buffer = [0u8; 20];
-        let bytes = ($num as $type).numtoa(16, &mut dsp_buffer);
+        let bytes = $crate::numtoa::NumToA::numtoa($num, 16, &mut dsp_buffer);
         let mut dst_buffer = [0u8; 18];
 
         dst_buffer[17] = b'0';
@@ -71,9 +69,7 @@ pub fn __bios_printc(ch: u8) {
 }
 
 pub fn __bios_print(args: fmt::Arguments) {
-    unsafe {
-        __bios_print_str(args.as_str().unwrap());
-    }
+    let mut writer = Writer{};
 }
 
 pub fn __bios_print_str(s: &str) {
@@ -102,5 +98,14 @@ pub fn clear_screen() {
         "int 0x10",
         "pop ax"
         )
+    }
+}
+
+struct Writer;
+impl Write for Writer {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        __bios_printc(b'X');
+        __bios_print_str(s);
+        Ok(())
     }
 }

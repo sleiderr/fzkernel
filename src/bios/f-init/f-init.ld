@@ -12,16 +12,18 @@ SECTIONS {
         *(.text .text.*)
     }
 
-    .bss : {
-        *(.bss .bss.*)
-    }
-
     .rodata : {
         *(.rodata .rodata.*)
     }
 
     .data : {
         *(.data .data.*)
+    }
+
+    .bss : {
+        _bss_start = .;
+        *(.bss .bss.*)
+        _bss_end = .;
     }
 
     .eh_frame : {
@@ -33,10 +35,13 @@ SECTIONS {
     }
 
     .fill : {
-
         FILL(0x00);
-        . = 0x7e00;
-
+        . = 0x7da0;
     }
+
+    _gdt_start = .;
+
+    . = 0x7e00;
+
 
 }
