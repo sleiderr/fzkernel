@@ -8,7 +8,8 @@ use crate::pswitch::{a20::enable_a20, gdt::load_gdt};
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use flib::video_io::io::{clear_screen, color, cprint_info};
-use flib::{error, hex_print, info, print};
+use flib::mem::e820::memory_map;
+use flib::{hex_print, info, error, print};
 
 #[no_mangle]
 #[link_section = ".start"]
@@ -20,6 +21,7 @@ pub fn loader() -> ! {
     info!("loading second stage (mem: 0x07C00)");
     info!("enabling A20 line");
     enable_a20();
+    memory_map();
     info!("A20 line enabled ");
     load_gdt();
     info!("switching to protected mode (x86)");
