@@ -1,12 +1,20 @@
 #![no_std]
 #![no_main]
 
-use core::panic::PanicInfo;
 use core::{arch::global_asm, fmt::Write};
+use core::{panic::PanicInfo, ptr::NonNull};
+use flib::mem::bmalloc::heap::LockedBuddyAllocator;
 use flib::video_io::io::{clear_screen, color, cprint_info};
 use flib::{error, hex_print, info, print};
 
 global_asm!(include_str!("arch/x86/setup.S"));
+
+const HEAP_ADDR: usize = 0x5000000;
+const HEAP_SIZE: usize = 0x1000000;
+
+#[global_allocator]
+static BUDDY_ALLOCATOR: LockedBuddyAllocator<16> =
+    Lazy::new(|| LockedBuddyAllocator::new(NonNull::new(HEAP_ADDR as *mut u8).unwrap(), HEAP_SIZE));
 
 #[no_mangle]
 #[link_section = ".start"]

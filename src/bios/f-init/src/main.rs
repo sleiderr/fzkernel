@@ -5,11 +5,11 @@ mod pswitch;
 
 use crate::pswitch::{a20::enable_a20, gdt::load_gdt};
 
-use core::fmt::Write;
 use core::panic::PanicInfo;
-use flib::video_io::io::{clear_screen, color, cprint_info};
+use core::{fmt::Write, mem};
 use flib::mem::e820::memory_map;
-use flib::{hex_print, info, error, print};
+use flib::video_io::io::{clear_screen, color, cprint_info};
+use flib::{error, hex_print, info, print};
 
 #[no_mangle]
 #[link_section = ".start"]
@@ -24,6 +24,11 @@ pub fn loader() -> ! {
     memory_map();
     info!("A20 line enabled ");
     load_gdt();
+
+    //hex_print!((vbe_lock.vbe_version), u32);
+    //hex_print!((mem::size_of::<VbeInfoBlock>()), u32);
+    //hex_print!(0xc, u32);
+
     info!("switching to protected mode (x86)");
 
     let loader_ptr = 0x5e00 as *const ();
