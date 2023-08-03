@@ -5,5 +5,13 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[workspace]
+members = [
+    "src/bios/f-init",
+    "src/bios/f-init32",
+    "src/bios/f-initmbr",
+    "src/bios/flib",
+]
+
 [build-dependencies]
 llvm-tools = "0.1.1"
