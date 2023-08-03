@@ -28,7 +28,6 @@ dependencies = [
  "bitfield",
  "lazy_static",
  "numtoa",
- "once_cell",
  "rlibc",
  "spin 0.9.8",
 ]
@@ -57,12 +56,6 @@ name = "numtoa"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6aa2c4e539b869820a2b82e1aef6ff40aa85e65decdd5185e83fb4b1249cd00f"
-
-[[package]]
-name = "once_cell"
-version = "1.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd8b5dd2ae5ed71462c540258bedcb51965123ad7e7ccf4b9a8cafaa4a63576d"
 
 [[package]]
 name = "rlibc"
