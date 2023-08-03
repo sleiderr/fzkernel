@@ -18,8 +18,8 @@ const MIN_HEAP_ALIGN: usize = 4096;
 
 /// Locked version of the [`BuddyAllocator`].
 ///
-/// It uses a spinlock-based Mutex to ensure
-/// interior mutability.
+/// It uses a spinlock-based Mutex to ensure interior
+/// mutability.
 pub struct LockedBuddyAllocator<const N: usize> {
     alloc: spin::Mutex<BuddyAllocator<N>>,
 }
@@ -121,7 +121,7 @@ impl<const N: usize> BuddyAllocator<N> {
 
         // Heap has to be aligned on `MIN_HEAP_ALIGN` (4K)
         // boundaries. This ensures that `max_blk_size` is
-        // a multiple of the alignement (and therefore a
+        // a multiple of the alignment (and therefore a
         // multiple of 2 as well, which is also required).
         assert!(max_blk_size & (MIN_HEAP_ALIGN - 1) == 0);
 
@@ -199,18 +199,18 @@ impl<const N: usize> BuddyAllocator<N> {
     // It looks for the smallest block size that can fit
     // the [`Layout`] of the required allocation.
     //
-    // It expects a valid alignement (that is a power of 2
+    // It expects a valid alignment (that is a power of 2
     // and less precise than the `MIN_HEAP_ALIGN`)
     pub fn allocation_level(&self, mut size: usize, align: usize) -> u8 {
         // We cannot allocate a block larger than our
         // heap.
         assert!(size < self.max_blk_size);
 
-        // Make sure the alignement is somewhat standard
+        // Make sure the alignment is somewhat standard
         assert!(align.is_power_of_two());
 
         // We cannot align more precisely than the initial
-        // heap alignement.
+        // heap alignment.
         assert!(align < MIN_HEAP_ALIGN);
 
         // If size < align, we still have to allocate
@@ -221,7 +221,7 @@ impl<const N: usize> BuddyAllocator<N> {
         // block size, and round the final allocation size
         // to the next power of two to match a block size.
         size = cmp::max(size, self.min_blk_size);
-        size.next_power_of_two();
+        size = size.next_power_of_two();
 
         (log2(size) - self.log2_min_blk_size) as u8
     }
@@ -306,7 +306,7 @@ impl<const N: usize> BuddyAllocator<N> {
         // To split the initial block, of level k, we view it
         // as a block of level k - 1, and mark his buddy as free.
         // The buddy was the second half of the level k block, so
-        // we effectively splitted the initial block.
+        // we effectively split the initial block.
         while level > new_level {
             level -= 1;
             let buddy = self.buddy(block, level).unwrap();
