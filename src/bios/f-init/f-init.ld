@@ -33,12 +33,10 @@ SECTIONS {
     .eh_frame_hdr : {
         *(.eh_frame_hdr .eh_frame_hdr.*)
     }
-    . = 0x5da0;
-    _gdt_start = .;
 
     .fill : {
         FILL(0x00);
-        . = 0x5e00;
+        . = 0x3e00;
     }
 
 
