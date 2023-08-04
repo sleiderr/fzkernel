@@ -8,6 +8,7 @@
 
 #[macro_use]
 pub mod video_mode;
+pub mod framebuffer;
 
 /// Changes the VESA video mode to the closest one given
 /// conditions (for now, only width and height). Only
@@ -29,7 +30,7 @@ pub mod video_mode;
 
 #[cfg(feature = "real")]
 pub fn vesa_mode_setup(x: u16, y: u16) {
-    use core::cmp::Ordering;
+    use core::{cmp::Ordering, mem};
 
     use crate::video_io::vesa::video_mode::*;
 
@@ -52,6 +53,15 @@ pub fn vesa_mode_setup(x: u16, y: u16) {
                 != (VBE_MODEATTR_LINEAR | VBE_MODEATTR_GRAPHIC)
             {
                 continue;
+            }
+
+            // We only support packed pixel memory model or direct color,
+            // so we skip any display mode that does not use one of these.
+            match mode_info.memory_model {
+                MemoryModel::PackedPixel | MemoryModel::DirectColor => {}
+                _ => {
+                    continue;
+                }
             }
 
             // If a mode is a perfect fit, we select it
@@ -91,6 +101,15 @@ pub fn vesa_mode_setup(x: u16, y: u16) {
 
     // Set the current mode to the best fit we found
     video_mode::real_set_vesa_mode(best_mode);
+
+    // Keeps the `ModeInfoBlock` of the mode we choose in memory, next to
+    // the `VbeInfoBlock`
+    let best_info = video_mode::real_query_modeinfo(best_mode).unwrap();
+    let info_buffer_ptr =
+        (VESA_VBE_BUFFER as usize + mem::size_of::<VbeInfoBlock>()) as *mut ModeInfoBlock;
+    unsafe {
+        *info_buffer_ptr = best_info;
+    }
 }
 
 #[macro_export]

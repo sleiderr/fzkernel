@@ -7,11 +7,11 @@ use core::mem;
 use crate::vbe_const;
 
 /// In-memory location of the [`VbeInfoBlock`] header
-const VESA_VBE_BUFFER: u16 = 0x4f00;
+pub const VESA_VBE_BUFFER: u16 = 0x4f00;
 
 vbe_const!(VBE_RET_SUPPORTED, 0x4f);
 vbe_const!(VBE_RET_SUCCESS, 0x00);
-vbe_const!(VBE_SUCCESS, (VBE_RET_SUPPORTED << 8) | VBE_RET_SUCCESS);
+vbe_const!(VBE_SUCCESS, (VBE_RET_SUCCESS << 8) | VBE_RET_SUPPORTED);
 
 /// VBE Controller information block
 /// Provides general information about general capabilities
@@ -225,7 +225,7 @@ pub struct ModeInfoBlock {
 
     // Specifies the general type of memory organization
     // used for this display mode.
-    pub memory_model: u8,
+    pub memory_model: MemoryModel,
     pub bank_size: u8,
     pub image_pages_count: u8,
     padding_1: u8,
@@ -242,6 +242,19 @@ pub struct ModeInfoBlock {
     padding_2: u8,
     padding_3: u16,
     reserved: [u8; 206],
+}
+
+/// Memory organization used type used for a display mode.
+#[repr(u8)]
+pub enum MemoryModel {
+    TextMode = 0,
+    CGA = 1,
+    Hercules = 2,
+    Planar = 3,
+    PackedPixel = 4,
+    NonChain4 = 5,
+    DirectColor = 6,
+    YUV = 7,
 }
 
 vbe_const!(VBE_MODEATTR_SUPPORTED, 0x1);
