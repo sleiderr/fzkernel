@@ -18,7 +18,7 @@
   "target-endian": "little",
   "pre-link-args": {
     "ld.lld": [
-      "--script=f-initmbr.ld"
+      "--script=src/bios/f-initmbr/f-initmbr.ld"
     ]
   }
 }

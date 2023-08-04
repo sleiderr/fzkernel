@@ -15,7 +15,7 @@
     "features": "-mmx,-sse,+soft-float",
     "pre-link-args": {
       "ld.lld": [
-        "--script=f-init32.ld"
+        "--script=src/bios/f-init32/f-init32.ld"
       ]
     }
   }

@@ -2,7 +2,7 @@ ENTRY(_entry32)
 
 SECTIONS {
 
-    . = 0x3e00 + 0x7c00;
+    . = 0x7e00 + 0x7c00;
 
     .text : {
         *(.text .text.*)
@@ -35,7 +35,7 @@ SECTIONS {
 
     .fill : {
         FILL(0x00);
-        . = 0x7e00 + 0x7c00;
+        . = 0xae00 + 0x7c00;
     }
 
 
