@@ -228,6 +228,7 @@ pub struct ModeInfoBlock {
 
     // Number of bits in a pixel.
     pub bits_per_pixel: u8,
+
     pub banks_count: u8,
 
     // Specifies the general type of memory organization
@@ -250,7 +251,7 @@ pub struct ModeInfoBlock {
     /// Physical linear address of the start of the framebuffer
     /// for this mode.
     pub framebuffer: u32,
-  
+
     padding_2: u8,
     padding_3: u16,
     reserved: [u8; 206],
