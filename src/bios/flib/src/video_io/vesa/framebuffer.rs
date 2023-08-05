@@ -5,7 +5,7 @@
 //! It is the default graphic mode when initially entering protected
 //! mode.
 
-use core::{fmt::Write, ptr, slice};
+use core::{fmt::Write, slice};
 
 use noto_sans_mono_bitmap::{get_raster, FontWeight, RasterHeight, RasterizedChar};
 use spin::Mutex;
@@ -105,15 +105,12 @@ impl<'b> TextFrameBuffer<'b> {
             stride: info.bytes_per_scanline as usize / (info.bits_per_pixel >> 3) as usize,
         };
 
-        let mut buffer = unsafe {
+        let buffer = unsafe {
             slice::from_raw_parts_mut(
                 info.framebuffer as *mut u8,
                 (info.bits_per_pixel as usize >> 3) * info.height as usize * info.width as usize,
             )
         };
-        unsafe {
-            ptr::write(0x1000000 as *mut u32, info.bits_per_pixel as u32);
-        }
 
         Self {
             buffer,
@@ -122,10 +119,17 @@ impl<'b> TextFrameBuffer<'b> {
         }
     }
 
+    /// Write a string slice into the [`TextFrameBuffer`].
+    pub fn write_str_with_color(&mut self, text: &str, color: &RgbaColor) {
+        for c in text.chars() {
+            self.putchar(c, Some(color));
+        }
+    }
+
     /// Prints a character in the `TextFrameBuffer`.
     /// Moves the buffer's cursor current position afterwards,
     /// and jumps to the next line if necessary.
-    fn putchar(&mut self, ch: char) {
+    fn putchar(&mut self, ch: char, color: Option<&RgbaColor>) {
         match ch {
             '\n' => self.newline(),
             '\r' => self.carriage_return(),
@@ -137,9 +141,29 @@ impl<'b> TextFrameBuffer<'b> {
                     self.clear();
                 }
                 let rendered = render_char(ch);
-                self.write_rasterized_char(rendered);
+                match color {
+                    Some(color) => self.write_rasterized_char_with_color(rendered, color),
+                    None => self.write_rasterized_char(rendered),
+                }
             }
         }
+    }
+
+    // Pixel per pixel write of a colored char into the buffer after it has
+    // been turned into a [`RasterizedChar`].
+    fn write_rasterized_char_with_color(&mut self, char: RasterizedChar, color: &RgbaColor) {
+        for (y, row) in char.raster().iter().enumerate() {
+            for (x, &intensity) in row.iter().enumerate() {
+                let rendered_color = RgbaColor(
+                    ((color.0 as u16 * intensity as u16) / 255) as u8,
+                    ((color.1 as u16 * intensity as u16) / 255) as u8,
+                    ((color.2 as u16 * intensity as u16) / 255) as u8,
+                    color.3,
+                );
+                self.write_px_with_color(self.cursor.x + x, self.cursor.y + y, rendered_color);
+            }
+        }
+        self.cursor.x += char.width() + CHAR_SPACING;
     }
 
     /// Pixel per pixel write to the buffer of a char after it has
@@ -147,11 +171,7 @@ impl<'b> TextFrameBuffer<'b> {
     fn write_rasterized_char(&mut self, char: RasterizedChar) {
         for (y, row) in char.raster().iter().enumerate() {
             for (x, intensity) in row.iter().enumerate() {
-                self.write_px_with_intensity(
-                    self.cursor.x + x,
-                    self.cursor.y + y,
-                    *intensity as u8,
-                );
+                self.write_px_with_intensity(self.cursor.x + x, self.cursor.y + y, *intensity);
             }
         }
         self.cursor.x += char.width() + CHAR_SPACING;
@@ -206,7 +226,7 @@ impl<'b> TextFrameBuffer<'b> {
 impl<'b> Write for TextFrameBuffer<'b> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for ch in s.chars() {
-            self.putchar(ch);
+            self.putchar(ch, None);
         }
         Ok(())
     }
@@ -221,4 +241,5 @@ fn render_char(ch: char) -> RasterizedChar {
 /// the default convention for all color usage among the program.
 ///
 /// If needed, a conversion to another convention is performed.
-pub struct RgbaColor(u8, u8, u8, u8);
+#[derive(Clone, Copy)]
+pub struct RgbaColor(pub u8, pub u8, pub u8, pub u8);

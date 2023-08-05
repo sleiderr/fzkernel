@@ -5,16 +5,70 @@
 //! The former can only be used while in real mode,
 //! or through a vm86 monitor, while the latter is
 //! designed for protected mode.
+//!
+//! It also provides basic graphic utils, such as a
+//! [`TextFrameBuffer`] that serves as the main output
+//! when entering protected mode, as well as general
+//! purpose macros to write formatted text to the screen.
+
+use core::fmt::{self, Write};
 
 use conquer_once::spin::OnceCell;
 
-use crate::video_io::vesa::framebuffer::LockedTextFrameBuffer;
+use crate::video_io::vesa::framebuffer::{LockedTextFrameBuffer, RgbaColor};
 
 #[macro_use]
 pub mod video_mode;
 pub mod framebuffer;
+pub mod macros;
 
 pub static TEXT_BUFFER: OnceCell<LockedTextFrameBuffer> = OnceCell::uninit();
+
+/// Prints a formatted text input to the shared [`TextFrameBuffer`].
+///
+/// # Panics
+///
+/// Panics if called before the shared buffer was initialized.
+pub fn arg_print(args: fmt::Arguments) {
+    TEXT_BUFFER
+        .get()
+        .unwrap()
+        .buffer
+        .lock()
+        .write_fmt(args)
+        .unwrap();
+}
+
+/// Prints a string slice to the shared [`TextFrameBuffer`]
+///
+/// # Panics
+///
+/// Panics if called before the shared buffer was initialized
+pub fn print(str: &str) {
+    TEXT_BUFFER
+        .get()
+        .unwrap()
+        .buffer
+        .lock()
+        .write_str(str)
+        .unwrap();
+}
+
+/// Prints a string slice to the shared [`TextFrameBuffer`],
+/// which is colored according to the [`RgbaColor`] provided
+/// in `color`.
+///
+/// # Panics
+///
+/// Panics if called before the shared buffer was initialized
+pub fn print_colored(str: &str, color: &RgbaColor) {
+    TEXT_BUFFER
+        .get()
+        .unwrap()
+        .buffer
+        .lock()
+        .write_str_with_color(str, color)
+}
 
 /// Changes the VESA video mode to the closest one given
 /// conditions (for now, only width and height). Only
@@ -38,7 +92,7 @@ pub static TEXT_BUFFER: OnceCell<LockedTextFrameBuffer> = OnceCell::uninit();
 pub fn vesa_mode_setup(x: u16, y: u16) {
     use core::{cmp::Ordering, mem};
 
-    use crate::{hex_print, info, video_io::vesa::video_mode::*};
+    use crate::video_io::vesa::video_mode::*;
 
     let mut best_mode: u16 = 1;
     let mut best_diff: u32 = u32::max_value();
@@ -97,10 +151,10 @@ pub fn vesa_mode_setup(x: u16, y: u16) {
     }
 
     // Enable the linear framebuffer (bit 14 of the mode)
-    best_mode = best_mode | 0x4000;
+    best_mode |= 0x4000;
 
     // Set the current mode to the best fit we found
-    video_mode::real_set_vesa_mode(best_mode);
+    video_mode::real_set_vesa_mode(best_mode).unwrap();
 
     // Keeps the `ModeInfoBlock` of the mode we choose in memory, next to
     // the `VbeInfoBlock`

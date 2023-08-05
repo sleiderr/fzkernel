@@ -36,7 +36,7 @@ SECTIONS {
 
     .fill : {
         FILL(0x00);
-        . = 0x7e00;
+        . = 0x5f00;
     }
 
 

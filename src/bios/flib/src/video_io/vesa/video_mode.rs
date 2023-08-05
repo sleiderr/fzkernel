@@ -66,7 +66,7 @@ pub struct VbeInfoBlock {
 /// monitor.
 #[cfg(feature = "real")]
 pub fn real_set_vesa_mode(mode: u16) -> Result<(), ()> {
-    use crate::error;
+    use crate::rerror;
 
     let result: u16;
 
@@ -90,7 +90,7 @@ pub fn real_set_vesa_mode(mode: u16) -> Result<(), ()> {
     }
 
     if result != VBE_SUCCESS {
-        error!("Failed to set VESA mode");
+        rerror!("Failed to set VESA mode");
         return Err(());
     }
 

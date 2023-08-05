@@ -1,6 +1,6 @@
-use core::{self, fmt::Write};
 use core::arch::asm;
 use core::fmt;
+use core::{self, fmt::Write};
 
 #[macro_export]
 macro_rules! print {
@@ -10,19 +10,19 @@ macro_rules! print {
 }
 
 #[macro_export]
-macro_rules! info {
+macro_rules! rinfo {
     ($msg: tt) => {
         $crate::video_io::io::__bios_print_str("\r\n[info] ");
         $crate::video_io::io::__bios_print_str($msg);
-    }
+    };
 }
 
 #[macro_export]
-macro_rules! error {
+macro_rules! rerror {
     ($msg: tt) => {
         $crate::video_io::io::__bios_print_str("\r\n[error] ");
         $crate::video_io::io::__bios_print_str($msg);
-    }
+    };
 }
 
 #[macro_export]
@@ -49,10 +49,8 @@ macro_rules! hex_print {
         dst_buffer.reverse();
 
         $crate::video_io::io::cprint_info(&dst_buffer);
-
-    }
+    };
 }
-
 
 pub fn cprint_info(str: &[u8]) {
     for ch in str {
@@ -60,16 +58,15 @@ pub fn cprint_info(str: &[u8]) {
     }
 }
 
-
 pub fn __bios_printc(ch: u8) {
-    let reg : u16 = u16::from(ch) | 0x0e00;
+    let reg: u16 = u16::from(ch) | 0x0e00;
     unsafe {
         asm!("push bx", "mov bx, 0", "int 0x10", "pop bx", in("ax") reg);
     }
 }
 
 pub fn __bios_print(args: fmt::Arguments) {
-    let mut writer = Writer{};
+    let mut writer = Writer {};
 }
 
 pub fn __bios_print_str(s: &str) {
@@ -79,24 +76,17 @@ pub fn __bios_print_str(s: &str) {
 }
 
 pub fn color() {
-
-    unsafe {
-        asm!(
-        "mov ah, 0x0b",
-        "xor bh, bh",
-        "mov bl, 0x01"
-        )
-    }
+    unsafe { asm!("mov ah, 0x0b", "xor bh, bh", "mov bl, 0x01") }
 }
 
 pub fn clear_screen() {
     unsafe {
         asm!(
-        "push ax",
-        "mov ah, 0x00",
-        "mov al, 0x03",
-        "int 0x10",
-        "pop ax"
+            "push ax",
+            "mov ah, 0x00",
+            "mov al, 0x03",
+            "int 0x10",
+            "pop ax"
         )
     }
 }
