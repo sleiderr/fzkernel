@@ -9,8 +9,9 @@ edition = "2021"
 bitfield = "0.14"
 numtoa = "0.2"
 rlibc = "1"
-lazy_static = { version = "1.4", features = ["spin_no_std"] }
 spin = "0.9"
+noto-sans-mono-bitmap = "0.2"
+conquer-once = { version = "0.4", default-features = false}
 
 [features]
 alloc = []

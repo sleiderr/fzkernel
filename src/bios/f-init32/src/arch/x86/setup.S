@@ -1,5 +1,6 @@
 .global _entry32
 
+.section .start
 _entry32:
 .code16
 cli

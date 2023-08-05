@@ -5,12 +5,23 @@
 
 extern crate alloc;
 
-use alloc::{format, vec};
-use core::{arch::global_asm, fmt::Write};
+use alloc::vec;
+use conquer_once::spin::OnceCell;
+use core::{arch::global_asm, fmt::Write, ptr, slice};
 use core::{panic::PanicInfo, ptr::NonNull};
-use flib::mem::bmalloc::heap::LockedBuddyAllocator;
-use flib::video_io::io::{clear_screen, color, cprint_info};
 use flib::{error, hex_print, info, print};
+use flib::{mem::bmalloc::heap::LockedBuddyAllocator, video_io::vesa::video_mode::ModeInfoBlock};
+use flib::{
+    println,
+    video_io::{
+        io::{clear_screen, color, cprint_info},
+        vesa::{
+            framebuffer::{LockedTextFrameBuffer, TextFrameBuffer},
+            video_mode::VESA_MODE_BUFFER,
+            TEXT_BUFFER,
+        },
+    },
+};
 
 global_asm!(include_str!("arch/x86/setup.S"));
 
@@ -28,11 +39,19 @@ pub extern "C" fn _start() -> ! {
 }
 
 pub fn boot_main() -> ! {
+    init_framebuffer();
     loop {}
+}
+
+pub fn init_framebuffer() {
+    let vesamode_info_ptr = VESA_MODE_BUFFER as *mut ModeInfoBlock;
+    let vesamode_info = unsafe { ptr::read(vesamode_info_ptr) };
+    let mut framebuffer = TextFrameBuffer::from_vesamode_info(&vesamode_info);
+    TEXT_BUFFER.init_once(|| LockedTextFrameBuffer::new(framebuffer));
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    error!("Panic occured");
+    println!("fatal: {info}");
     loop {}
 }
