@@ -91,7 +91,6 @@ pub fn print_colored(str: &str, color: &RgbaColor) {
 #[cfg(feature = "real")]
 pub fn vesa_mode_setup(x: u16, y: u16) {
     use core::{cmp::Ordering, mem};
-
     use crate::video_io::vesa::video_mode::*;
 
     let mut best_mode: u16 = 1;
