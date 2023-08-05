@@ -37,8 +37,7 @@ pub static TEXT_BUFFER: OnceCell<LockedTextFrameBuffer> = OnceCell::uninit();
 #[cfg(feature = "real")]
 pub fn vesa_mode_setup(x: u16, y: u16) {
     use core::{cmp::Ordering, mem};
-
-    use crate::{hex_print, info, video_io::vesa::video_mode::*};
+    use crate::video_io::vesa::video_mode::*;
 
     let mut best_mode: u16 = 1;
     let mut best_diff: u32 = u32::max_value();
