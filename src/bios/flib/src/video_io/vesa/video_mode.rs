@@ -9,6 +9,10 @@ use crate::vbe_const;
 /// In-memory location of the [`VbeInfoBlock`] header
 pub const VESA_VBE_BUFFER: u16 = 0x4f00;
 
+// In-memory location of the [`ModeInfoBlock`] header for the currently
+// selected display mode.
+pub const VESA_MODE_BUFFER: u16 = 0x4f00 + mem::size_of::<VbeInfoBlock>() as u16;
+
 vbe_const!(VBE_RET_SUPPORTED, 0x4f);
 vbe_const!(VBE_RET_SUCCESS, 0x00);
 vbe_const!(VBE_SUCCESS, (VBE_RET_SUCCESS << 8) | VBE_RET_SUPPORTED);
@@ -104,6 +108,7 @@ pub fn real_set_vesa_mode(mode: u16) -> Result<(), ()> {
 /// monitor.
 #[cfg(feature = "real")]
 pub fn real_query_modeinfo(mode: u16) -> Option<ModeInfoBlock> {
+    assert_eq!(core::mem::size_of::<ModeInfoBlock>(), 256);
     let mut mode_info: ModeInfoBlock = unsafe { mem::zeroed() };
     let mode_info_ptr: *mut ModeInfoBlock = unsafe { &mut mode_info };
     let result: u16;
@@ -197,7 +202,7 @@ pub fn real_query_vbeinfo() -> Option<&'static VbeInfoBlock> {
 
 /// Mode information block that contains technical details
 /// relative to a specific display mode.
-#[repr(C, packed)]
+#[repr(C, align(256))]
 pub struct ModeInfoBlock {
     // These bits describe the main characteristics
     // of the display mode.
@@ -217,15 +222,20 @@ pub struct ModeInfoBlock {
 
     // Height for this display mode.
     pub height: u16,
+
     pub char_width: u8,
     pub char_height: u8,
     pub planes_count: u8,
+
+    // Number of bits in a pixel.
     pub bits_per_pixel: u8,
+
     pub banks_count: u8,
 
     // Specifies the general type of memory organization
     // used for this display mode.
     pub memory_model: MemoryModel,
+
     pub bank_size: u8,
     pub image_pages_count: u8,
     padding_1: u8,
@@ -238,10 +248,35 @@ pub struct ModeInfoBlock {
     pub rsvd_mask_size: u8,
     pub rsvd_field_pos: u8,
     pub direct_color_mode: u8,
+
+    /// Physical linear address of the start of the framebuffer
+    /// for this mode.
     pub framebuffer: u32,
+
     padding_2: u8,
     padding_3: u16,
     reserved: [u8; 206],
+}
+
+impl ModeInfoBlock {
+    pub fn pixel_layout(&self) -> PixelLayout {
+        match (
+            self.red_field_pos,
+            self.green_field_pos,
+            self.blue_field_pos,
+        ) {
+            (0, 8, 16) => PixelLayout::RGB,
+            (16, 8, 0) => PixelLayout::BGR,
+            _ => PixelLayout::RGB,
+        }
+    }
+}
+
+/// Byte order convention for a pixel.
+#[derive(Debug, Clone, Copy)]
+pub enum PixelLayout {
+    RGB,
+    BGR,
 }
 
 /// Memory organization used type used for a display mode.

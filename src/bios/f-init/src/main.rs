@@ -29,7 +29,7 @@ pub fn loader() -> ! {
     load_gdt();
     info!("switching to protected mode (x86)");
 
-    vesa_mode_setup(1480, 900);
+    vesa_mode_setup(1440, 900);
 
     let loader_ptr = 0x7e00 as *const ();
     let prot_entry: fn() -> ! = unsafe { core::mem::transmute(loader_ptr) };

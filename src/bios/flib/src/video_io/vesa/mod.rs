@@ -6,9 +6,15 @@
 //! or through a vm86 monitor, while the latter is
 //! designed for protected mode.
 
+use conquer_once::spin::OnceCell;
+
+use crate::video_io::vesa::framebuffer::LockedTextFrameBuffer;
+
 #[macro_use]
 pub mod video_mode;
 pub mod framebuffer;
+
+pub static TEXT_BUFFER: OnceCell<LockedTextFrameBuffer> = OnceCell::uninit();
 
 /// Changes the VESA video mode to the closest one given
 /// conditions (for now, only width and height). Only
@@ -32,7 +38,7 @@ pub mod framebuffer;
 pub fn vesa_mode_setup(x: u16, y: u16) {
     use core::{cmp::Ordering, mem};
 
-    use crate::video_io::vesa::video_mode::*;
+    use crate::{hex_print, info, video_io::vesa::video_mode::*};
 
     let mut best_mode: u16 = 1;
     let mut best_diff: u32 = u32::max_value();
@@ -62,12 +68,6 @@ pub fn vesa_mode_setup(x: u16, y: u16) {
                 _ => {
                     continue;
                 }
-            }
-
-            // If a mode is a perfect fit, we select it
-            if mode_info.width == x && mode_info.height == y {
-                best_mode = mode;
-                break;
             }
 
             // We compute the distance between 2 modes by comparing their euclidean

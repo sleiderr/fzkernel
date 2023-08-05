@@ -4,7 +4,7 @@ use bitfield::bitfield;
 
 use crate::{hex_print, info, video_io::io::cprint_info};
 
-pub const E820_MAP_ADDR: u16 = 0x9000;
+pub const E820_MAP_ADDR: u16 = 0x4000;
 pub static mut E820_MAP_LENGTH: u16 = 0;
 
 pub struct E820MemoryMap {

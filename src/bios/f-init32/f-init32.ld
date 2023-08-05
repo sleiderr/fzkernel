@@ -4,13 +4,14 @@ SECTIONS {
 
     . = 0x7e00 + 0x7c00;
 
+    .start : {
+        *(.start)
+    }
+
     .text : {
         *(.text .text.*)
     }
 
-    .start : {
-        *(.start)
-    }
     .rodata : {
         *(.rodata .rodata.*)
     }
@@ -35,7 +36,7 @@ SECTIONS {
 
     .fill : {
         FILL(0x00);
-        . = 0xae00 + 0x7c00;
+        . = 0xfe00 + 0x7c00;
     }
 
 
