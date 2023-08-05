@@ -1,6 +1,6 @@
 use core::{mem, ptr, slice, str};
 
-use crate::{error, hex_print, info, video_io::io::cprint_info};
+use crate::{hex_print, rerror, rinfo, video_io::io::cprint_info};
 
 macro_rules! struct_type {
     ($name: tt, $val: tt) => {
@@ -230,7 +230,7 @@ macro_rules! struct_getter {
                     $code => {
                         let internal: $internal;
 
-                        info!("found ");
+                        rinfo!("found ");
                         cprint_info($dbg.as_bytes());
                         cprint_info(b" at ");
                         hex_print!(curr_mem, u32);
@@ -307,7 +307,7 @@ pub fn load_smbios_entry() -> Option<SMBIOSEntryTable> {
 
     unsafe { entry_table = ptr::read(mem_addr as *mut SMBIOSEntryTable) }
 
-    info!("SMBIOS entry located at ");
+    rinfo!("SMBIOS entry located at ");
     hex_print!(mem_addr, u32);
 
     Some(entry_table)
@@ -338,7 +338,7 @@ fn __locate_smbios_entry() -> Option<u32> {
             }
 
             if checksum != 0 {
-                error!("Invalid SMBIOS entry checksum");
+                rerror!("Invalid SMBIOS entry checksum");
                 return None;
             }
 

@@ -2,9 +2,9 @@ use core::arch::asm;
 
 use flib::{
     gdt::gdt::{Gdtr, SegmentDescriptor},
-    hex_print, info,
+    hex_print,
     interrupts::{disable_interrupts, enable_interrupts},
-    video_io::io::cprint_info,
+    rinfo,
 };
 
 const GDT_START: u32 = 0x5da0;
@@ -37,7 +37,7 @@ pub fn load_gdt() -> Result<(), ()> {
     }
     enable_interrupts();
 
-    info!("GDT initialized at ");
+    rinfo!("GDT initialized at ");
     hex_print!(GDT_START, u32);
 
     Ok(())

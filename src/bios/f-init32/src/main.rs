@@ -5,21 +5,15 @@
 
 extern crate alloc;
 
-use alloc::vec;
-use conquer_once::spin::OnceCell;
-use core::{arch::global_asm, fmt::Write, ptr, slice};
+use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
-use flib::{error, hex_print, info, print};
 use flib::{mem::bmalloc::heap::LockedBuddyAllocator, video_io::vesa::video_mode::ModeInfoBlock};
 use flib::{
     println,
-    video_io::{
-        io::{clear_screen, color, cprint_info},
-        vesa::{
-            framebuffer::{LockedTextFrameBuffer, TextFrameBuffer},
-            video_mode::VESA_MODE_BUFFER,
-            TEXT_BUFFER,
-        },
+    video_io::vesa::{
+        framebuffer::{LockedTextFrameBuffer, TextFrameBuffer},
+        video_mode::VESA_MODE_BUFFER,
+        TEXT_BUFFER,
     },
 };
 

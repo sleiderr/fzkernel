@@ -2,7 +2,7 @@ ENTRY(_entry32)
 
 SECTIONS {
 
-    . = 0x7e00 + 0x7c00;
+    . = 0x5f00 + 0x7c00;
 
     .start : {
         *(.start)
@@ -33,11 +33,5 @@ SECTIONS {
     .eh_frame_hdr : {
         *(.eh_frame_hdr .eh_frame_hdr.*)
     }
-
-    .fill : {
-        FILL(0x00);
-        . = 0xfe00 + 0x7c00;
-    }
-
 
 }
