@@ -28,6 +28,9 @@ pub const LINE_SPACING: usize = 4;
 /// Default padding for the [`TextFrameBuffer`].
 pub const BORDER: usize = 6;
 
+/// Default background color for the [`TextFrameBuffer`].
+pub const DEFAULT_BG_COLOR: RgbaColor = RgbaColor(26, 28, 34, 0);
+
 /// A text-based buffer.
 ///
 /// It references an underlying physical linear framebuffer,
@@ -104,7 +107,7 @@ impl<'b> TextFrameBuffer<'b> {
             width: info.width as usize,
             height: info.height as usize,
             stride: info.bytes_per_scanline as usize / (info.bits_per_pixel >> 3) as usize,
-            bg_color: Some(RgbaColor(39, 40, 56, 0)),
+            bg_color: Some(DEFAULT_BG_COLOR),
         };
 
         let buffer = unsafe {
@@ -160,21 +163,13 @@ impl<'b> TextFrameBuffer<'b> {
     fn write_rasterized_char_with_color(&mut self, char: RasterizedChar, color: &RgbaColor) {
         for (y, row) in char.raster().iter().enumerate() {
             for (x, &intensity) in row.iter().enumerate() {
-                if intensity != 0 {
-                    let rendered_color = RgbaColor(
-                        ((color.0 as u16 * intensity as u16) / 255) as u8,
-                        ((color.1 as u16 * intensity as u16) / 255) as u8,
-                        ((color.2 as u16 * intensity as u16) / 255) as u8,
-                        color.3,
-                    );
-                    self.write_px_with_color(self.cursor.x + x, self.cursor.y + y, rendered_color);
-                } else {
-                    self.write_px_with_color(
-                        self.cursor.x + x,
-                        self.cursor.y + y,
-                        self.metadata.bg_color.unwrap(),
-                    );
-                }
+                let rendered_color = RgbaColor(
+                    ((color.0 as u16 * intensity as u16) / 255) as u8,
+                    ((color.1 as u16 * intensity as u16) / 255) as u8,
+                    ((color.2 as u16 * intensity as u16) / 255) as u8,
+                    color.3,
+                );
+                self.write_px_with_color(self.cursor.x + x, self.cursor.y + y, rendered_color);
             }
         }
         self.cursor.x += char.width() + CHAR_SPACING;
@@ -204,31 +199,29 @@ impl<'b> TextFrameBuffer<'b> {
     /// uses another convention (Rgb, Bgra, ...), the bytes of the input color
     /// are switched to match that convention.
     fn write_px_with_color(&mut self, x: usize, y: usize, color: RgbaColor) {
-        let effective_color = RgbaColor(
-            (((color.0 as u16 * (255 - self.metadata.bg_color.unwrap().0 as u16)) / 255)
-                + self.metadata.bg_color.unwrap().0 as u16) as u8,
-            (((color.1 as u16 * (255 - self.metadata.bg_color.unwrap().1 as u16)) / 255)
-                + self.metadata.bg_color.unwrap().1 as u16) as u8,
-            (((color.2 as u16 * (255 - self.metadata.bg_color.unwrap().2 as u16)) / 255)
-                + self.metadata.bg_color.unwrap().2 as u16) as u8,
-            color.3,
-        );
-        let color_slice = match (self.metadata.bytes_per_px, self.metadata.layout) {
-            (3, PixelLayout::RGB) => [effective_color.0, effective_color.1, effective_color.2, 0],
-            (3, PixelLayout::BGR) => [effective_color.2, effective_color.1, effective_color.0, 0],
-            (4, PixelLayout::RGB) => [
+        // Rescale the color if a background color is set, to avoid aliasing.
+        let effective_color = match self.metadata.bg_color {
+            Some(bg_color) => RgbaColor(
+                (((color.0 as u16 * (255 - bg_color.0 as u16)) / 255) + bg_color.0 as u16) as u8,
+                (((color.1 as u16 * (255 - bg_color.1 as u16)) / 255) + bg_color.1 as u16) as u8,
+                (((color.2 as u16 * (255 - bg_color.2 as u16)) / 255) + bg_color.2 as u16) as u8,
+                color.3,
+            ),
+            None => color,
+        };
+        let color_slice = match self.metadata.layout {
+            PixelLayout::RGB => [
                 effective_color.0,
                 effective_color.1,
                 effective_color.2,
                 color.3,
             ],
-            (4, PixelLayout::BGR) => [
+            PixelLayout::BGR => [
                 effective_color.2,
                 effective_color.1,
                 effective_color.0,
                 color.3,
             ],
-            _ => [0, 0, 0, 0],
         };
         let bytes_offset = (x + y * self.metadata.stride) * self.metadata.bytes_per_px;
 
@@ -248,29 +241,41 @@ impl<'b> TextFrameBuffer<'b> {
         self.cursor.x = BORDER;
     }
 
-    /// Clears the `TextFrameBuffer`
-    fn clear(&mut self) {
+    /// Clears the `TextFrameBuffer`.
+    ///
+    /// Resets the background to the background color if defined, or else
+    /// full black.
+    pub fn clear(&mut self) {
         self.cursor.x = BORDER;
         self.cursor.y = BORDER;
-        let bpp = self.metadata.bytes_per_px;
-        let color = self.metadata.bg_color.unwrap();
-        let px_slice = match self.metadata.layout {
-            PixelLayout::RGB => [color.0, color.1, color.2, color.3],
-            PixelLayout::BGR => [color.2, color.1, color.0, color.3],
-        };
-        match bpp {
-            3 => {
-                for chk in self.buffer.rchunks_exact_mut(3) {
-                    chk.copy_from_slice(&px_slice[..3]);
+
+        // A background color was defined
+        if let Some(color) = self.metadata.bg_color {
+            let bpp = self.metadata.bytes_per_px;
+            let px_slice = match self.metadata.layout {
+                PixelLayout::RGB => [color.0, color.1, color.2, color.3],
+                PixelLayout::BGR => [color.2, color.1, color.0, color.3],
+            };
+            match bpp {
+                3 => {
+                    for chk in self.buffer.rchunks_exact_mut(3) {
+                        chk.copy_from_slice(&px_slice[..3]);
+                    }
                 }
-            }
-            4 => {
-                for chk in self.buffer.rchunks_exact_mut(4) {
-                    chk.copy_from_slice(&px_slice);
+                4 => {
+                    for chk in self.buffer.rchunks_exact_mut(4) {
+                        chk.copy_from_slice(&px_slice);
+                    }
                 }
+                _ => self.buffer.fill(0),
             }
-            _ => self.buffer.fill(0),
+        } else {
+            self.buffer.fill(0);
         }
+    }
+
+    pub fn set_background(&mut self, color: Option<RgbaColor>) {
+        self.metadata.bg_color = color;
     }
 }
 
