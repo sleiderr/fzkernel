@@ -165,7 +165,7 @@ impl<'b> TextFrameBuffer<'b> {
         }
         self.cursor.x += char.width() + CHAR_SPACING;
     }
-
+  
     /// Pixel per pixel write to the buffer of a char after it has
     /// been turned into a [`RasterizedChar`].
     fn write_rasterized_char(&mut self, char: RasterizedChar) {

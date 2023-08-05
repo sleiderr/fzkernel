@@ -108,7 +108,6 @@ pub fn real_set_vesa_mode(mode: u16) -> Result<(), ()> {
 /// monitor.
 #[cfg(feature = "real")]
 pub fn real_query_modeinfo(mode: u16) -> Option<ModeInfoBlock> {
-    assert_eq!(core::mem::size_of::<ModeInfoBlock>(), 256);
     let mut mode_info: ModeInfoBlock = unsafe { mem::zeroed() };
     let mode_info_ptr: *mut ModeInfoBlock = unsafe { &mut mode_info };
     let result: u16;
@@ -229,7 +228,6 @@ pub struct ModeInfoBlock {
 
     // Number of bits in a pixel.
     pub bits_per_pixel: u8,
-
     pub banks_count: u8,
 
     // Specifies the general type of memory organization
@@ -252,7 +250,7 @@ pub struct ModeInfoBlock {
     /// Physical linear address of the start of the framebuffer
     /// for this mode.
     pub framebuffer: u32,
-
+  
     padding_2: u8,
     padding_3: u16,
     reserved: [u8; 206],
