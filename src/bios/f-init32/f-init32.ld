@@ -20,11 +20,11 @@ SECTIONS {
         *(.data .data.*)
     }
 
+    _bss_start = .;
     .bss : {
-        _bss_start = .;
         *(.bss .bss.*)
-        _bss_end = .;
     }
+    _bss_end = .;
 
     .eh_frame : {
         *(.eh_frame .eh_frame.*)
