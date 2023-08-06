@@ -17,6 +17,7 @@ pub extern "C" fn _start() -> ! {
 }
 
 pub fn loader() -> ! {
+    flib::mem::zero_bss();
     rinfo!("loading second stage (mem: 0x07C00)");
     rinfo!("enabling A20 line");
     enable_a20();

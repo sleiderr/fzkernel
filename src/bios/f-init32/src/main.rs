@@ -33,6 +33,7 @@ pub extern "C" fn _start() -> ! {
 }
 
 pub fn boot_main() -> ! {
+    flib::mem::zero_bss();
     init_framebuffer();
     loop {}
 }
