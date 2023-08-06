@@ -2,7 +2,7 @@ use core::{arch::asm, mem, ptr};
 
 use bitfield::bitfield;
 
-use crate::{hex_print, video_io::io::cprint_info};
+use crate::{hex_print, video::io::cprint_info};
 
 pub const E820_MAP_ADDR: u16 = 0x4000;
 pub static mut E820_MAP_LENGTH: u16 = 0;

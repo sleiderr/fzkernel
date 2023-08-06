@@ -4,6 +4,7 @@ use core::ptr;
 
 pub mod bmalloc;
 pub mod e820;
+pub mod gdt;
 
 /// Zeroise the .bss segment when entering the program.
 ///

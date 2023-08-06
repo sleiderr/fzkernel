@@ -5,23 +5,23 @@ use core::{self, fmt::Write};
 #[macro_export]
 macro_rules! print {
     ($($t_elm:tt)*) => {
-        $crate::video_io::io::__bios_print(format_args!($($t_elm)*))
+        $crate::video::io::__bios_print(format_args!($($t_elm)*))
     };
 }
 
 #[macro_export]
 macro_rules! rinfo {
     ($msg: tt) => {
-        $crate::video_io::io::__bios_print_str("\r\n[info] ");
-        $crate::video_io::io::__bios_print_str($msg);
+        $crate::video::io::__bios_print_str("\r\n[info] ");
+        $crate::video::io::__bios_print_str($msg);
     };
 }
 
 #[macro_export]
 macro_rules! rerror {
     ($msg: tt) => {
-        $crate::video_io::io::__bios_print_str("\r\n[error] ");
-        $crate::video_io::io::__bios_print_str($msg);
+        $crate::video::io::__bios_print_str("\r\n[error] ");
+        $crate::video::io::__bios_print_str($msg);
     };
 }
 
@@ -48,7 +48,7 @@ macro_rules! hex_print {
 
         dst_buffer.reverse();
 
-        $crate::video_io::io::cprint_info(&dst_buffer);
+        $crate::video::io::cprint_info(&dst_buffer);
     };
 }
 

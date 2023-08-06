@@ -1,6 +1,6 @@
 use core::{mem, ptr, slice, str};
 
-use crate::{hex_print, rerror, rinfo, video_io::io::cprint_info};
+use crate::{hex_print, rerror, rinfo, video::io::cprint_info};
 
 macro_rules! struct_type {
     ($name: tt, $val: tt) => {

@@ -1,6 +1,6 @@
 //! General purpose macros for text output.
 
-use crate::video_io::vesa::framebuffer::RgbaColor;
+use crate::video::vesa::framebuffer::RgbaColor;
 
 /// Base color when displaying context
 pub const CTX_COLOR: RgbaColor = RgbaColor(234, 190, 124, 0);
@@ -28,11 +28,11 @@ pub const ERR_COLOR: RgbaColor = RgbaColor(239, 35, 60, 0);
 macro_rules! println {
 
     () => {
-        $crate::video_io::vesa::print("\n");
+        $crate::video::vesa::print("\n");
     };
 
     ($($arg: tt)*) => {{
-        $crate::video_io::vesa::arg_print(format_args_nl!($($arg)*))
+        $crate::video::vesa::arg_print(format_args_nl!($($arg)*))
     }};
 }
 
@@ -55,8 +55,8 @@ macro_rules! println {
 #[macro_export]
 macro_rules! eprintln {
     ($($arg: tt)*) => {
-        $crate::video_io::vesa::print("error: ");
-        $crate::video_io::vesa::arg_print(format_args_nl!($($arg)*))
+        $crate::video::vesa::print("error: ");
+        $crate::video::vesa::arg_print(format_args_nl!($($arg)*))
     };
 }
 
@@ -84,14 +84,14 @@ macro_rules! info {
     // A context was provided, so we insert it at the beginning of
     // the message.
     ($ctx: literal, $($arg: tt)*) => {
-        $crate::video_io::vesa::print("[info] ");
-        $crate::video_io::vesa::print_colored($ctx, &$crate::video_io::vesa::macros::CTX_COLOR);
-        $crate::video_io::vesa::print(" : ");
-        $crate::video_io::vesa::arg_print(format_args_nl!($($arg)*))
+        $crate::video::vesa::print("[info] ");
+        $crate::video::vesa::print_colored($ctx, &$crate::video_io::vesa::macros::CTX_COLOR);
+        $crate::video::vesa::print(" : ");
+        $crate::video::vesa::arg_print(format_args_nl!($($arg)*))
     };
     ($($arg: tt)*) => {
-        $crate::video_io::vesa::print("[info] ");
-        $crate::video_io::vesa::arg_print(format_args_nl!($($arg)*))
+        $crate::video::vesa::print("[info] ");
+        $crate::video::vesa::arg_print(format_args_nl!($($arg)*))
     };
 }
 
@@ -119,13 +119,13 @@ macro_rules! error {
     // A context was provided, so we insert it at the beginning of
     // the message.
     ($ctx: literal, $($arg: tt)*) => {
-        $crate::video_io::vesa::print_colored("[error] ", &$crate::video_io::vesa::macros::ERR_COLOR);
-        $crate::video_io::vesa::print_colored($ctx, &$crate::video_io::vesa::macros::CTX_COLOR);
-        $crate::video_io::vesa::print(" : ");
-        $crate::video_io::vesa::arg_print(format_args_nl!($($arg)*))
+        $crate::video::vesa::print_colored("[error] ", &$crate::video_io::vesa::macros::ERR_COLOR);
+        $crate::video::vesa::print_colored($ctx, &$crate::video_io::vesa::macros::CTX_COLOR);
+        $crate::video::vesa::print(" : ");
+        $crate::video::vesa::arg_print(format_args_nl!($($arg)*))
     };
     ($($arg: tt)*) => {
-        $crate::video_io::vesa::print("[error] ");
-        $crate::video_io::vesa::arg_print(format_args_nl!($($arg)*))
+        $crate::video::vesa::print("[error] ");
+        $crate::video::vesa::arg_print(format_args_nl!($($arg)*))
     };
 }

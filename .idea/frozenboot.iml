@@ -5,9 +5,13 @@
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/bios/f-initmbr/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/bios/flib/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/bios/f-init/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/bios/f-init32/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/src/bios/f-initmbr/target" />
       <excludeFolder url="file://$MODULE_DIR$/src/bios/flib/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
+      <excludeFolder url="file://$MODULE_DIR$/src/bios/f-init/target" />
+      <excludeFolder url="file://$MODULE_DIR$/src/bios/f-init32/target" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

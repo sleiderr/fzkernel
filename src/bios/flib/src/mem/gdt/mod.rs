@@ -1,4 +1,3 @@
-use core;
 use core::arch::asm;
 use core::ptr::write_volatile;
 
