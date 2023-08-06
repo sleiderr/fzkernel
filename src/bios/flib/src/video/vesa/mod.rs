@@ -15,7 +15,7 @@ use core::fmt::{self, Write};
 
 use conquer_once::spin::OnceCell;
 
-use crate::video_io::vesa::framebuffer::{LockedTextFrameBuffer, RgbaColor};
+use crate::video::vesa::framebuffer::{LockedTextFrameBuffer, RgbaColor};
 
 #[macro_use]
 pub mod video_mode;
@@ -90,8 +90,8 @@ pub fn print_colored(str: &str, color: &RgbaColor) {
 
 #[cfg(feature = "real")]
 pub fn vesa_mode_setup(x: u16, y: u16) {
+    use crate::video::vesa::video_mode::*;
     use core::{cmp::Ordering, mem};
-    use crate::video_io::vesa::video_mode::*;
 
     let mut best_mode: u16 = 1;
     let mut best_diff: u32 = u32::max_value();

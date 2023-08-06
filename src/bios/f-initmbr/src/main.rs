@@ -5,8 +5,8 @@ use core::arch::asm;
 use core::hint::unreachable_unchecked;
 use core::panic::PanicInfo;
 
-use flib::disk_io::disk::{drive_reset, edd_ext_check, AddressPacket};
-use flib::video_io::io::{clear_screen, color, cprint_info};
+use flib::io::disk::bios::{edd_ext_check, AddressPacket};
+use flib::video::io::clear_screen;
 
 pub fn main() {
     let loader_ptr = 0x200 as *const ();

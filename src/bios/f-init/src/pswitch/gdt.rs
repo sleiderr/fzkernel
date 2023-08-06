@@ -1,10 +1,10 @@
 use core::arch::asm;
 
 use flib::{
-    gdt::gdt::{Gdtr, SegmentDescriptor},
     hex_print,
-    interrupts::{disable_interrupts, enable_interrupts},
+    mem::gdt::{Gdtr, SegmentDescriptor},
     rinfo,
+    x86::interrupts::{disable_interrupts, enable_interrupts},
 };
 
 const GDT_START: u32 = 0x5da0;

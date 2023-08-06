@@ -10,7 +10,7 @@ use core::{fmt::Write, slice};
 use noto_sans_mono_bitmap::{get_raster, FontWeight, RasterHeight, RasterizedChar};
 use spin::Mutex;
 
-use crate::video_io::vesa::video_mode::{ModeInfoBlock, PixelLayout};
+use crate::video::vesa::video_mode::{ModeInfoBlock, PixelLayout};
 
 /// Default font char height.
 pub const CHAR_HEIGHT: RasterHeight = RasterHeight::Size16;

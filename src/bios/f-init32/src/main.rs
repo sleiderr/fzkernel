@@ -7,10 +7,10 @@ extern crate alloc;
 
 use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
-use flib::{mem::bmalloc::heap::LockedBuddyAllocator, video_io::vesa::video_mode::ModeInfoBlock};
+use flib::{mem::bmalloc::heap::LockedBuddyAllocator, video::vesa::video_mode::ModeInfoBlock};
 use flib::{
     println,
-    video_io::vesa::{
+    video::vesa::{
         framebuffer::{LockedTextFrameBuffer, TextFrameBuffer},
         video_mode::VESA_MODE_BUFFER,
         TEXT_BUFFER,

@@ -7,7 +7,7 @@ use crate::pswitch::{a20::enable_a20, gdt::load_gdt};
 
 use core::panic::PanicInfo;
 use flib::mem::e820::memory_map;
-use flib::video_io::vesa::vesa_mode_setup;
+use flib::video::vesa::vesa_mode_setup;
 use flib::{rerror, rinfo};
 
 #[no_mangle]

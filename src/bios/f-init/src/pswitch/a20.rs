@@ -1,15 +1,13 @@
 use core::arch::asm;
-use flib::interrupts::{io_delay, enable_interrupts, disable_interrupts, interrupts_disabled};
-use flib::ps2::ps2::{input_wait, output_wait, send_ps2, read_ps2, send_data};
-use flib::io::io::{outb, inb};
-use flib::video_io::io::cprint_info;
+use flib::io::io::{inb, outb};
+use flib::io::ps2::{input_wait, output_wait, read_ps2, send_data, send_ps2};
+use flib::x86::interrupts::{disable_interrupts, enable_interrupts, io_delay};
 
 const A20_KTEST_LOOPS: u16 = 32;
 
 pub fn enable_a20() -> Result<(), ()> {
-
     if __fast_a20_check() {
-        return Ok(())
+        return Ok(());
     }
 
     __bios_enable_a20()
@@ -18,20 +16,17 @@ pub fn enable_a20() -> Result<(), ()> {
 }
 
 fn __fastg_enable_a20() -> Result<(), ()> {
-
     let mut sysctrl_prt_a = inb(0x92);
     outb(sysctrl_prt_a | 2, 0x92);
 
     if __fast_a20_check() {
-        return Ok(())
+        return Ok(());
     }
 
     Err(())
-
 }
 
 fn __kb_enable_a20() -> Result<(), ()> {
-
     disable_interrupts();
 
     input_wait(A20_KTEST_LOOPS);
@@ -59,23 +54,17 @@ fn __kb_enable_a20() -> Result<(), ()> {
 }
 
 fn __bios_enable_a20() -> Result<(), ()> {
-
     unsafe {
-        asm!(
-        "mov ax, 0x2401",
-        "int 0x15"
-        );
+        asm!("mov ax, 0x2401", "int 0x15");
     }
 
     if __fast_a20_check() {
         return Ok(());
     }
     Err(())
-
 }
 
 fn __a20_check(mut loops: u16) -> bool {
-
     while (loops > 0) {
         if __fast_a20_check() {
             return true;
@@ -85,11 +74,9 @@ fn __a20_check(mut loops: u16) -> bool {
     }
 
     return false;
-
 }
 
 fn __fast_a20_check() -> bool {
-
     let result: u16;
 
     disable_interrupts();
@@ -126,5 +113,4 @@ fn __fast_a20_check() -> bool {
     }
 
     return true;
-
 }
