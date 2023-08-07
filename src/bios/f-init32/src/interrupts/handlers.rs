@@ -3,9 +3,8 @@ use alloc::format;
 use core::arch::asm;
 use core::mem::transmute;
 use f_macros::{interrupt, interrupt_default};
-use flib::debug::debug::print_str;
 use flib::int::scheduler::{IntScheduler, ScheduledAction};
-use flib::{print, scheduler_ref};
+use flib::{println, scheduler_ref};
 
 /// This module defines every interrupts referenced by the IDT
 /// It provides several utilities to define interrupts.
@@ -72,5 +71,5 @@ pub fn _int0xd() {
 
 #[interrupt_default]
 pub fn _int_default() {
-    print_str(format!("{}", int_code).as_str(), 0);
+    println!("{}", int_code);
 }
