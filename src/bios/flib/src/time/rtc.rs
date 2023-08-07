@@ -5,7 +5,7 @@
 use crate::{
     io::{inb, outb},
     time::{DateTime, Weekday},
-    x86::interrupts::{disable_interrupts, enable_interrupts, io_delay},
+    x86::interrupts::io_delay,
 };
 
 /// Reads a registry from the CMOS chip.
@@ -14,16 +14,12 @@ use crate::{
 /// delay between write and read.
 #[inline]
 fn __cmos_read(registry: u8) -> u8 {
-    disable_interrupts();
     // Set the registry to which we read from.
     outb(0x70, registry);
     io_delay();
 
     // Read the value of the registry.
-    let data = inb(0x71);
-    enable_interrupts();
-
-    data
+    inb(0x71)
 }
 
 /// Checks if the RTC value is being updated (rolls over).
