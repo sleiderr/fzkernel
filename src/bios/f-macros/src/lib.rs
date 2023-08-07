@@ -51,39 +51,32 @@ pub fn interrupt_descriptor_table(
     let file = fs::read_to_string(&path).unwrap();
     let code = parse_file(&file).unwrap();
     let mut interrupts_token: Vec<TokenStream> = Vec::new();
-    for mod_item in code.items {
-        match mod_item {
-            Item::Fn(f) => {
-                let title = f.sig.ident.to_string();
-                if title != "_int_default".to_string() {
-                    let int_number: usize = usize::from_str_radix(
-                        title.split("x").collect::<Vec<&str>>().get(1).unwrap(),
-                        16,
-                    )
-                    .unwrap();
-                    let ident = Ident::new(
-                        &format!("{}{}", "int", int_number),
-                        syn::__private::Span::mixed_site(),
-                    );
-                    let fn_name = Ident::new(&title, Span::mixed_site());
-                    let code = quote! {
+
+    for i in 0..256 {
+        let title = format!("_int0x{:x}", i);
+        let title = title.as_str();
+        let int_number = i as usize;
+        let ident = Ident::new(
+            &format!("{}{}", "int", int_number),
+            syn::__private::Span::mixed_site(),
+        );
+        let fn_name = Ident::new(&title, Span::mixed_site());
+        // Modify offset of entry in table
+        let code = quote! {
                         let #ident = table.get_entry_mut(#int_number).unwrap();
                         #ident.set_offset(interrupts::handlers::#fn_name as *const () as *const u8 as u32);
                     };
-                    interrupts_token.push(code)
-                }
-            }
-            _ => (),
-        }
+        interrupts_token.push(code);
+
     }
 
     let default_table = quote! {
-        /// We create an empty table
+        // We create an empty table
         let mut table = Table::empty();
         let mut default : GateDescriptor = GateDescriptor::new();
-        /// Default type is Interrupt 32 bits
+        // Default type is Interrupt 32 bits
         default.set_type(GateType::InterruptGate32b);
-        /// Segment is hard coded but has to be passed as parameter in the future
+        // Segment is hard coded but has to be passed as parameter in the future
         let mut segment : SegmentSelector = SegmentSelector::new()
             .with_gdt()
             .with_privilege(0b00)
@@ -91,7 +84,7 @@ pub fn interrupt_descriptor_table(
         default.set_segment_selector(segment);
         default.set_valid();
 
-        /// We populate the table
+        // We populate the table
         table.populate(default);
     };
 
@@ -152,6 +145,8 @@ pub fn interrupt(
                     };
                 }
             };
+
+            //panic!("{}", stream.to_string());
             stream.into()
         }
     }
@@ -200,17 +195,17 @@ pub fn interrupt_default(
     let mut default_interrupts = Vec::new();
 
     /// Auto implement other interrupts with default template
-    for i in 0..256 {
+    for i in 0..256{
         if !int_defined.contains(&i) {
             let name = format!("_int0x{:x}", i);
+            let n = i as u32;
             let ident = Ident::new(name.as_str(), Span::mixed_site());
             let section = name.replace("_", ".");
             let default_int = quote! {
                 #[no_mangle]
                 #[link_section = #section]
                 pub fn #ident() {
-                    /// Provide int_code
-                    let int_code : usize = #i;
+                    let int_code : u32 = #n;
                     #(#default_body)*
                     unsafe {
                         asm!(
@@ -226,5 +221,7 @@ pub fn interrupt_default(
     let stream = quote! {
         #(#default_interrupts)*
     };
+
+    //panic!("{}", stream.to_string());
     stream.into()
 }
