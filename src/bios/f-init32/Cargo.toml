@@ -6,9 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-flib = { path = "../flib/", features = ["alloc"]}
-f-macros = {path = "../f-macros/"}
-numtoa = "0.2.4"
+flib = { path = "../flib/", features = ["alloc"] }
+f-macros = { path = "../f-macros/" }
+numtoa = "0.2"
 conquer-once = { version = "0.4", default-features = false}
 
 [profile.release]
