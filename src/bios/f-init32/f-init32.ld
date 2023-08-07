@@ -2,15 +2,20 @@ ENTRY(_entry32)
 
 SECTIONS {
 
-    . = 0x3e00 + 0x7c00;
+    . = 0x7e00 + 0x7c00;
+
+    .start : {
+        *(.start)
+    }
+
+    .interrupts : {
+        KEEP(*(.int*))
+    }
 
     .text : {
         *(.text .text.*)
     }
 
-    .start : {
-        *(.start)
-    }
     .rodata : {
         *(.rodata .rodata.*)
     }
@@ -34,8 +39,8 @@ SECTIONS {
     }
 
     .fill : {
-        FILL(0x00);
-        . = 0x7e00 + 0x7c00;
+        FILL(0xdeadc0de);
+        . = 0x14000 + 0x7c00;
     }
 
 
