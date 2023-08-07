@@ -7,6 +7,7 @@ pub mod bios;
 pub mod fs;
 pub mod io;
 pub mod mem;
+pub mod time;
 pub mod x86;
 
 pub use numtoa;

@@ -1,6 +1,6 @@
 use core::arch::asm;
-use flib::io::io::{inb, outb};
 use flib::io::ps2::{input_wait, output_wait, read_ps2, send_data, send_ps2};
+use flib::io::{inb, outb};
 use flib::x86::interrupts::{disable_interrupts, enable_interrupts, io_delay};
 
 const A20_KTEST_LOOPS: u16 = 32;
@@ -17,7 +17,7 @@ pub fn enable_a20() -> Result<(), ()> {
 
 fn __fastg_enable_a20() -> Result<(), ()> {
     let mut sysctrl_prt_a = inb(0x92);
-    outb(sysctrl_prt_a | 2, 0x92);
+    outb(0x92, sysctrl_prt_a | 2);
 
     if __fast_a20_check() {
         return Ok(());
