@@ -24,8 +24,3 @@ pub use numtoa;
 extern crate alloc;
 
 extern crate rlibc;
-
-#[cfg(feature = "alloc")]
-extern crate alloc;
-
-

@@ -56,13 +56,13 @@ impl Table {
 
     /// Returns a mutable reference to a [GateDescriptor] wrapped in an [Option].
     /// Index starts at 0.
-    pub fn get_entry_mut(&mut self, index : usize) -> Option<&mut GateDescriptor>{
+    pub fn get_entry_mut(&mut self, index : usize) -> Option<&mut GateDescriptor> {
         self.entries.get_mut(index)
     }
 
     /// Returns an immutable reference to a [GateDescriptor] wrapped in an [Option].
     /// Index starts at 0.
-    pub fn get_entry(&self, index : usize) -> Option<&GateDescriptor>{
+    pub fn get_entry(&self, index : usize) -> Option<&GateDescriptor> {
         self.entries.get(index)
     }
 
@@ -84,9 +84,6 @@ impl Table {
             i = self.len()
         }
     }
-
-
-
     /// Returns number of entries in this IDT. Actual memory can
     /// be computed by multiplying it by 8 (8 bytes per entry)
     pub fn len(&self) -> usize {
