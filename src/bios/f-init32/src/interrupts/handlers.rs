@@ -38,6 +38,21 @@ use flib::{print, scheduler_ref};
 ///```
 /// This would typically print the interrupt number for each interrupt triggered
 /// The default function should always be called _int_default and is required.
+///
+/// To import [crate::interrupts] you will have to call a proc macro in front of your
+/// declaration in order to auto generate the IDT from your handlers module.
+/// The proc macro takes an offset as an arg to chose where you want to write the table.
+/// e.g. This example shows how you would save the idt at offset 0x8
+///```
+///#[interrupt_descriptor_table(0x8)]
+///mod interrupts;
+///```
+/// Loading of the table will then be achieved by calling the following function
+/// from your main function.
+/// ```
+/// generate_idt()
+/// ```
+
 
 /// We will write at a fixed memory address the address to a static mutable reference to a global [`IntScheduler`]
 const SCHEDULER_ADDRESS: *mut &mut Box<IntScheduler> = 0x00 as _;
