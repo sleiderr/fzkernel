@@ -7,7 +7,9 @@ extern crate alloc;
 
 use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
-use flib::{mem::bmalloc::heap::LockedBuddyAllocator, video::vesa::video_mode::ModeInfoBlock};
+use flib::{
+    info, mem::bmalloc::heap::LockedBuddyAllocator, time, video::vesa::video_mode::ModeInfoBlock,
+};
 use flib::{
     println,
     video::vesa::{
@@ -35,6 +37,7 @@ pub extern "C" fn _start() -> ! {
 pub fn boot_main() -> ! {
     flib::mem::zero_bss();
     init_framebuffer();
+    clock_init();
     loop {}
 }
 
@@ -43,6 +46,17 @@ pub fn init_framebuffer() {
     let vesamode_info = unsafe { ptr::read(vesamode_info_ptr) };
     let mut framebuffer = TextFrameBuffer::from_vesamode_info(&vesamode_info);
     TEXT_BUFFER.init_once(|| LockedTextFrameBuffer::new(framebuffer));
+}
+
+pub fn clock_init() {
+    let curr_time = time::now();
+    info!("rtc_clock", "Standard UTC time {curr_time}");
+    info!(
+        "rtc_clock",
+        "time: {} date: {}",
+        curr_time.format_shorttime(),
+        curr_time.format_shortdate()
+    );
 }
 
 #[panic_handler]

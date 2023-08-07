@@ -85,7 +85,7 @@ macro_rules! info {
     // the message.
     ($ctx: literal, $($arg: tt)*) => {
         $crate::video::vesa::print("[info] ");
-        $crate::video::vesa::print_colored($ctx, &$crate::video_io::vesa::macros::CTX_COLOR);
+        $crate::video::vesa::print_colored($ctx, &$crate::video::vesa::macros::CTX_COLOR);
         $crate::video::vesa::print(" : ");
         $crate::video::vesa::arg_print(format_args_nl!($($arg)*))
     };
@@ -119,8 +119,8 @@ macro_rules! error {
     // A context was provided, so we insert it at the beginning of
     // the message.
     ($ctx: literal, $($arg: tt)*) => {
-        $crate::video::vesa::print_colored("[error] ", &$crate::video_io::vesa::macros::ERR_COLOR);
-        $crate::video::vesa::print_colored($ctx, &$crate::video_io::vesa::macros::CTX_COLOR);
+        $crate::video::vesa::print_colored("[error] ", &$crate::video::vesa::macros::ERR_COLOR);
+        $crate::video::vesa::print_colored($ctx, &$crate::video::vesa::macros::CTX_COLOR);
         $crate::video::vesa::print(" : ");
         $crate::video::vesa::arg_print(format_args_nl!($($arg)*))
     };
