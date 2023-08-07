@@ -66,19 +66,6 @@ use flib::{println, scheduler_ref};
 /// We will write at a fixed memory address the address to a static mutable reference to a global [`IntScheduler`]
 const SCHEDULER_ADDRESS: *mut &mut Box<IntScheduler> = 0x00 as _;
 
-
-#[interrupt]
-pub fn _int0xd() {
-    print_str("Lol", 0);
-    loop {
-
-    }
-
-    // scheduler_ref!(scheduler);
-    // let action = ScheduledAction::new(0x00);
-    // scheduler.schedule(action);
-}
-
 #[interrupt_default]
 pub fn _int_default() {
     println!("{}", int_code);
