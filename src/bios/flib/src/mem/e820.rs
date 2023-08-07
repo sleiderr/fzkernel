@@ -2,9 +2,9 @@ use core::{arch::asm, mem, ptr};
 
 use bitfield::bitfield;
 
-use crate::{hex_print, info, video_io::io::cprint_info};
+use crate::{hex_print, video::io::cprint_info};
 
-pub const E820_MAP_ADDR: u16 = 0x9000;
+pub const E820_MAP_ADDR: u16 = 0x4000;
 pub static mut E820_MAP_LENGTH: u16 = 0;
 
 pub struct E820MemoryMap {
@@ -135,7 +135,10 @@ fn e820_type_print(descriptor: &AddressRangeDescriptor) {
     }
 }
 
+#[cfg(feature = "real")]
 pub fn memory_map() -> Result<(), ()> {
+    use crate::rinfo;
+
     let mut entry_count: u16 = 0;
     let mut ebx: u32 = 0;
 
@@ -149,7 +152,7 @@ pub fn memory_map() -> Result<(), ()> {
         let base_addr = (descriptor.base_addr_high << 16) + descriptor.base_addr_low;
         let length = (descriptor.length_high << 16) + descriptor.length_low;
 
-        info!("memory: ");
+        rinfo!("memory: ");
         hex_print!(base_addr, u32);
         cprint_info(b" <-> ");
         hex_print!((base_addr + length - 1), u32);

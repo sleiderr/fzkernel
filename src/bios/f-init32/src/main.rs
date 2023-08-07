@@ -5,12 +5,19 @@
 
 extern crate alloc;
 
-use alloc::{format, vec};
-use core::{arch::global_asm, fmt::Write};
+use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
-use flib::mem::bmalloc::heap::LockedBuddyAllocator;
-use flib::video_io::io::{clear_screen, color, cprint_info};
-use flib::{error, hex_print, info, print};
+use flib::{
+    info, mem::bmalloc::heap::LockedBuddyAllocator, time, video::vesa::video_mode::ModeInfoBlock,
+};
+use flib::{
+    println,
+    video::vesa::{
+        framebuffer::{LockedTextFrameBuffer, TextFrameBuffer},
+        video_mode::VESA_MODE_BUFFER,
+        TEXT_BUFFER,
+    },
+};
 
 global_asm!(include_str!("arch/x86/setup.S"));
 
@@ -28,11 +35,32 @@ pub extern "C" fn _start() -> ! {
 }
 
 pub fn boot_main() -> ! {
+    flib::mem::zero_bss();
+    init_framebuffer();
+    clock_init();
     loop {}
+}
+
+pub fn init_framebuffer() {
+    let vesamode_info_ptr = VESA_MODE_BUFFER as *mut ModeInfoBlock;
+    let vesamode_info = unsafe { ptr::read(vesamode_info_ptr) };
+    let mut framebuffer = TextFrameBuffer::from_vesamode_info(&vesamode_info);
+    TEXT_BUFFER.init_once(|| LockedTextFrameBuffer::new(framebuffer));
+}
+
+pub fn clock_init() {
+    let curr_time = time::now();
+    info!("rtc_clock", "Standard UTC time {curr_time}");
+    info!(
+        "rtc_clock",
+        "time: {} date: {}",
+        curr_time.format_shorttime(),
+        curr_time.format_shortdate()
+    );
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    error!("Panic occured");
+    println!("fatal: {info}");
     loop {}
 }

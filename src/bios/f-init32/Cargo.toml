@@ -9,5 +9,7 @@ edition = "2021"
 flib = { path = "../flib/", features = ["alloc"]}
 f-macros = {path = "../f-macros/"}
 numtoa = "0.2.4"
+conquer-once = { version = "0.4", default-features = false}
+
 [profile.release]
 opt-level = "z"

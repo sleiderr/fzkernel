@@ -1,45 +1,29 @@
 #![no_std]
 #![no_main]
 
-use core::arch::asm;
-use core::hint::unreachable_unchecked;
 use core::panic::PanicInfo;
 
-use flib::video_io::io::{color, cprint_info, clear_screen};
-use flib::disk_io::disk::{AddressPacket, edd_ext_check, drive_reset};
+use flib::io::disk::bios::{edd_ext_check, AddressPacket};
+use flib::video::io::clear_screen;
 
-pub fn main() {
+#[no_mangle]
+#[link_section = ".startup"]
+pub fn _start() -> ! {
     let loader_ptr = 0x200 as *const ();
     let loader: fn() -> ! = unsafe { core::mem::transmute(loader_ptr) };
 
     clear_screen();
 
-    if !edd_ext_check() {
-        return;
+    // Check if bios supports disk extensions.
+    if !edd_ext_check(0x80) {
+        // Not supported for now. We should fallback to int13h 0x2 to read from the disk,
+        // but so far I did not manage to fit the code for that inside 512 bytes. That is
+        // definitely possible though.
+        loop {}
     }
-    let stage2 = AddressPacket::new(63, 0x07e00, 0x1);
+    let stage2 = AddressPacket::new(122, 0x0, 0x7e00, 0x1);
     stage2.disk_read(0x80);
     loader();
-
-}
-
-#[no_mangle]
-#[link_section = ".startup"]
-pub fn _start() -> ! {
-    unsafe {
-        asm!(
-        "xor ax, ax",
-        "mov ds, ax",
-        "mov es, ax",
-        "mov ss, ax",
-        "mov fs, ax",
-        "mov gs, ax",
-        "cld",
-        "mov sp, 0x7c00"
-        );
-        main();
-        unreachable_unchecked();
-    }
 }
 
 #[panic_handler]
