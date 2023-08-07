@@ -11,7 +11,6 @@ use crate::debug;
 use crate::debug::debug::print_str;
 use crate::gdt::gdt::SegmentDescriptor;
 
-use numtoa::NumToA;
 use crate::interrupts::{disable_interrupts, enable_interrupts};
 
 pub enum GateType {
