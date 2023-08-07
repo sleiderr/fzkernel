@@ -36,7 +36,7 @@ pub struct Table {
 }
 
 impl Table {
-    /// Writes the [Table] to a given offset. You have to ensure that there is enough
+    /// Writes the `Table` to a given offset. You have to ensure that there is enough
     /// free space to write the table (8 bytes per entry)
     pub fn write(&self, offset: u32) {
         let mut cursor = offset;
@@ -66,7 +66,7 @@ impl Table {
         self.entries.get(index)
     }
 
-    /// Populates the [Table] with default [`GateDescriptor`] to reach 256 entries (required)
+    /// Populates the `Table` with default [`GateDescriptor`] to reach 256 entries (required)
     pub fn populate_default(&mut self) {
         let mut i = self.len();
         while i < 256 {
@@ -76,7 +76,7 @@ impl Table {
         }
     }
 
-    /// Populates the [Table] with given [`GateDescriptor`] to reach 256 entries (required)
+    /// Populates the `Table` with given [`GateDescriptor`] to reach 256 entries (required)
     pub fn populate(&mut self, default : GateDescriptor) {
         let mut i = self.len();
         while i < 256 {
@@ -116,13 +116,13 @@ pub struct SegmentSelector {
 }
 
 impl SegmentSelector {
-    /// Returns the [SegmentSelector] configured to use loaded GDT
+    /// Returns the `SegmentSelector` configured to use loaded GDT.
     pub fn with_gdt(mut self) -> Self {
         self.set_ti(0);
         self
     }
 
-    /// Returns the [SegmentSelector] configured with the given privileges
+    /// Returns the `SegmentSelector` configured with the given privileges.
     pub fn with_privilege(mut self, ring: u8) -> Self {
         self.set_rpl(ring);
         self

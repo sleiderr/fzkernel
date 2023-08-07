@@ -15,6 +15,7 @@ use syn::spanned::Spanned;
 /// This procedural macro will generate a function that will build the IDT from
 /// the module where all interrupts are defined.
 /// This function will then have to be called from the main function.
+///
 /// ```
 /// generate_idt();
 /// ```
@@ -103,7 +104,7 @@ pub fn interrupt_descriptor_table(
 
 /// This proc macro aims to provide a higher level interface for interrupts definition.
 /// It will soon support gate type parameter in order to adapt asm! instructions for
-/// specific cases
+/// specific cases.
 #[proc_macro_attribute]
 pub fn interrupt(
     args: proc_macro::TokenStream,
