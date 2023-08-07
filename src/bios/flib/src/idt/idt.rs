@@ -7,11 +7,8 @@ use modular_bitfield::bitfield;
 use modular_bitfield::BitfieldSpecifier;
 use modular_bitfield::prelude::{B1, B11, B13, B2, B4, B8};
 
-use crate::debug;
-use crate::debug::debug::print_str;
-use crate::gdt::gdt::SegmentDescriptor;
-
-use crate::interrupts::{disable_interrupts, enable_interrupts};
+use crate::mem::gdt::SegmentDescriptor;
+use crate::x86::interrupts::{disable_interrupts, enable_interrupts};
 
 pub enum GateType {
     TaskGate = 0b0101,
@@ -55,13 +52,13 @@ impl Table {
 
     /// Returns a mutable reference to a [GateDescriptor] wrapped in an [Option].
     /// Index starts at 0.
-    pub fn get_entry_mut(&mut self, index : usize) -> Option<&mut GateDescriptor> {
+    pub fn get_entry_mut(&mut self, index: usize) -> Option<&mut GateDescriptor> {
         self.entries.get_mut(index)
     }
 
     /// Returns an immutable reference to a [GateDescriptor] wrapped in an [Option].
     /// Index starts at 0.
-    pub fn get_entry(&self, index : usize) -> Option<&GateDescriptor> {
+    pub fn get_entry(&self, index: usize) -> Option<&GateDescriptor> {
         self.entries.get(index)
     }
 
@@ -76,7 +73,7 @@ impl Table {
     }
 
     /// Populates the `Table` with given [`GateDescriptor`] to reach 256 entries (required)
-    pub fn populate(&mut self, default : GateDescriptor) {
+    pub fn populate(&mut self, default: GateDescriptor) {
         let mut i = self.len();
         while i < 256 {
             self.add_gate(&default);
@@ -161,7 +158,7 @@ impl GateDescriptor {
     }
 
     /// Set gate type
-    pub fn set_type(&mut self, gt : GateType) {
+    pub fn set_type(&mut self, gt: GateType) {
         self.set_gate_type(gt as u8);
     }
 
@@ -186,33 +183,33 @@ impl GateDescriptor {
 /// |             Offset - 1                |     Size    |
 ///  -----------------------------------------------------
 pub struct IDTDescriptor {
-    size : u16,
-    offset : u32
+    size: u16,
+    offset: u32,
 }
 
 impl IDTDescriptor {
     /// Creates a new [`IDTDescriptor`] and set its size to 256 * 8 - 1
     pub fn new() -> Self {
         Self {
-            size: 256*8 - 1,
+            size: 256 * 8 - 1,
             offset: 0x00,
         }
     }
 
     /// Set offset of the [`IDTDescriptor`]
-    pub fn set_offset(&mut self, offset : u32) {
+    pub fn set_offset(&mut self, offset: u32) {
         self.offset = offset
     }
 
     /// Stores the [IDTDescriptor] to a given location in memory
-    pub fn store(&self, offset : usize){
+    pub fn store(&self, offset: usize) {
         let ptr = offset as *mut IDTDescriptor;
         unsafe { write_volatile(ptr, self.clone()) }
     }
 }
 
 /// Loads [IDTDescriptor] in the CPU IDTR using `lidt` instruction
-pub fn load_idt(ptr : usize) {
+pub fn load_idt(ptr: usize) {
     disable_interrupts();
     unsafe {
         asm!(
@@ -221,5 +218,4 @@ pub fn load_idt(ptr : usize) {
         )
     }
     enable_interrupts();
-
 }

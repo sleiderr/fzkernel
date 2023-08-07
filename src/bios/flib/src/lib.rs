@@ -10,11 +10,8 @@ pub mod mem;
 pub mod time;
 pub mod x86;
 
-pub mod interrupts;
 #[cfg(feature = "alloc")]
 pub mod idt;
-#[cfg(feature = "alloc")]
-pub mod debug;
 #[cfg(feature = "alloc")]
 pub mod int;
 
