@@ -6,7 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-flib = { path = "../flib/" }
-
+flib = { path = "../flib/", features = ["alloc"]}
+f-macros = {path = "../f-macros/"}
+numtoa = "0.2.4"
 [profile.release]
 opt-level = "z"

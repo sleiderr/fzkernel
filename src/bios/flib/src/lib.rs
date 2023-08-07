@@ -16,6 +16,8 @@ pub mod interrupts;
 pub mod idt;
 #[cfg(feature = "alloc")]
 pub mod debug;
+#[cfg(feature = "alloc")]
+pub mod int;
 
 pub use numtoa;
 
@@ -23,3 +25,5 @@ extern crate rlibc;
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
+
+

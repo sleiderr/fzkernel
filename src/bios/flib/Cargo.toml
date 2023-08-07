@@ -11,3 +11,7 @@ numtoa = "0.2"
 rlibc = "1"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
 spin = "0.9"
+modular-bitfield = "0.11.2"
+
+[features]
+alloc = []
