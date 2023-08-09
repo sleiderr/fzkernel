@@ -10,9 +10,10 @@ pub mod mem;
 pub mod time;
 pub mod x86;
 
+
 #[cfg(feature = "alloc")]
 pub mod idt;
-#[cfg(feature = "alloc")]
+
 pub mod int;
 
 pub use numtoa;

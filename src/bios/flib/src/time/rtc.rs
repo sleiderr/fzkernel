@@ -4,9 +4,9 @@
 
 use crate::{
     time::{DateTime, Weekday},
-    x86::interrupts::io_delay,
+    io::io_delay
 };
-use crate::io::utils::{inb, outb};
+use crate::io::{inb, outb};
 
 /// Reads a registry from the CMOS chip.
 ///

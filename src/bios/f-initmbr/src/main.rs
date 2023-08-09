@@ -5,7 +5,7 @@ use core::panic::PanicInfo;
 
 use flib::io::disk::bios::{edd_ext_check, AddressPacket};
 use flib::video::io::clear_screen;
-use flib::x86::interrupts::disable_interrupts;
+use flib::int::disable_interrupts;
 
 #[no_mangle]
 #[link_section = ".startup"]

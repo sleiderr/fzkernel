@@ -6,7 +6,7 @@
 //! Slave interrupts are thus be redirected to the master through one single IRQ.
 
 use core::arch::asm;
-use crate::io::utils::{io_wait, outb};
+use crate::io::{io_delay, outb};
 
 /// Initialization is made by sending ICW (Initialization Command Words)
 /// to both Master and Slave controllers.
@@ -140,25 +140,25 @@ impl PIC {
     pub fn remap(&self, master_offset: u8, slave_offset: u8) {
         // Start init sequence
         outb(self.master_cmd_port, DEFAULT_ICW1);
-        io_wait();
+        io_delay();
         outb(self.slave_cmd_port, DEFAULT_ICW1);
-        io_wait();
+        io_delay();
 
         // Set vector offset
         outb(self.master_data_port, master_offset);
-        io_wait();
+        io_delay();
         outb(self.slave_data_port, slave_offset);
-        io_wait();
+        io_delay();
 
         // Master PIC has slave at IRQ2
         outb(self.master_data_port, DEFAULT_MASTER_ICW3);
-        io_wait();
+        io_delay();
         outb(self.slave_data_port, DEFAULT_SLAVE_ICW3);
-        io_wait();
+        io_delay();
 
         //
         outb(self.master_data_port, DEFAULT_ICW4);
-        io_wait();
+        io_delay();
         outb(self.slave_data_port, DEFAULT_ICW4);
     }
 

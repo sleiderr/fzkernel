@@ -1,8 +1,9 @@
 use core::arch::asm;
+use flib::int::{disable_interrupts, enable_interrupts};
+use flib::io::{inb, outb};
 
 use flib::io::ps2::{input_wait, output_wait, read_ps2, send_data, send_ps2};
-use flib::io::utils::{inb, outb};
-use flib::x86::interrupts::{disable_interrupts, enable_interrupts, io_delay};
+use flib::io::io_delay;
 
 const A20_KTEST_LOOPS: u16 = 32;
 

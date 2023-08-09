@@ -6,9 +6,9 @@ use modular_bitfield;
 use modular_bitfield::bitfield;
 use modular_bitfield::prelude::{B1, B11, B13, B2, B4, B8};
 use modular_bitfield::BitfieldSpecifier;
+use crate::int::{disable_interrupts, enable_interrupts};
 
 use crate::mem::gdt::SegmentDescriptor;
-use crate::x86::interrupts::{disable_interrupts, enable_interrupts};
 
 pub enum GateType {
     TaskGate = 0b0101,
