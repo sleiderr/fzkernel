@@ -1,15 +1,13 @@
-use alloc::boxed::Box;
-use alloc::format;
 use core::arch::asm;
-use core::mem::transmute;
 use f_macros::{interrupt, interrupt_default};
-use flib::int::scheduler::{IntScheduler, ScheduledAction};
-use flib::{println, scheduler_ref};
+use flib::io::pic::pic::PIC;
 
 /// This module defines every interrupts referenced by the IDT
 /// It provides several utilities to define interrupts.
-/// To define a simple interrupt, precede your fn definiton with the proc
-/// macro #\[interrupt]
+/// To define a simple interrupt, precede your fn definition with the proc
+/// macro #\[interrupt].
+/// This procedural macro will wrap your routine in a naked rust function
+/// allowing custom prologue and epilogue to handle `icall` CPU instruction
 ///
 /// # Examples:
 ///
@@ -23,7 +21,7 @@ use flib::{println, scheduler_ref};
 /// The naming convention implies that interrupt are named as follows :
 ///
 /// ```
-/// format!("_int{:x}", int_number)
+/// format!("_int0x{:x}", int_number)
 /// ```
 ///
 /// In order to define a default template for interrupt that you don't want to define or
@@ -62,11 +60,16 @@ use flib::{println, scheduler_ref};
 /// generate_idt()
 /// ```
 
-
-/// We will write at a fixed memory address the address to a static mutable reference to a global [`IntScheduler`]
-const SCHEDULER_ADDRESS: *mut &mut Box<IntScheduler> = 0x00 as _;
+//A static CONTROLLER
+const CONTROLLER: PIC = PIC {
+    master_cmd_port: 0x20,
+    master_data_port: 0x21,
+    slave_cmd_port: 0xA0,
+    slave_data_port: 0xA1,
+};
 
 #[interrupt_default]
 pub fn _int_default() {
-    println!("{}", int_code);
+    CONTROLLER.acknowledge_master();
+    CONTROLLER.acknowledge_slave();
 }

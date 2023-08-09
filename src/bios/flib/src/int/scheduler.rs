@@ -1,5 +1,4 @@
 use alloc::collections::VecDeque;
-use core::mem::transmute;
 
 pub struct ScheduledAction {
     action : usize,
