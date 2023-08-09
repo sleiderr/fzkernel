@@ -115,14 +115,14 @@ const DEFAULT_ICW4 : u8 = 0b00000001;
 ///  - - - - - - - - - - - - Rotate priorities (1) or not (0)
 ///
 
-const SIMPLE_ACKNOWLEDGMENT : u8 = 0b00100000;
+const SIMPLE_ACKNOWLEDGMENT : u8 = 0b00010000;
 
 /// A Struct representing a PIC chip
-struct PIC {
-    master_cmd_port: u16,
-    master_data_port: u16,
-    slave_cmd_port: u16,
-    slave_data_port: u16,
+pub struct PIC {
+    pub master_cmd_port: u16,
+    pub master_data_port: u16,
+    pub slave_cmd_port: u16,
+    pub slave_data_port: u16,
 }
 
 impl PIC {
@@ -171,17 +171,17 @@ impl PIC {
 
     /// Masks master PIC with given bitmask.
     pub fn mask_master(&self, bitmask : u8) {
-        outb(self.slave_data_port, bitmask);
+        outb(self.master_data_port, bitmask);
     }
 
     /// Acknowledges master
     pub fn acknowledge_master(&self) {
-        outb(self.master_cmd_port, SIMPLE_ACKNOWLEDGMENT)
+        outb(self.master_cmd_port, 0x20)
     }
 
     /// Acknowledges slave
     pub fn acknowledge_slave(&self) {
-        outb(self.slave_cmd_port, SIMPLE_ACKNOWLEDGMENT)
+        outb(self.slave_cmd_port, 0x20)
     }
 
     /// Acknowledges both master and slave

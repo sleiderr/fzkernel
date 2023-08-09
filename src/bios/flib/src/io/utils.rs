@@ -3,9 +3,9 @@ use core::arch::asm;
 pub fn outb(port: u16, data: u8) {
     unsafe {
         asm!(
-        "out {}, ah",
-        in(reg_byte) port,
-        in("ah") data
+        "out dx, al",
+        in("dx") port,
+        in("al") data
         )
     }
 }
@@ -13,8 +13,8 @@ pub fn outb(port: u16, data: u8) {
 pub fn outw(port: u16, data: u16) {
     unsafe {
         asm!(
-        "out {}, ax",
-        in(reg_abcd) port,
+        "out dx, ax",
+        in("dx") port,
         in("ax") data
         )
     }
@@ -22,14 +22,37 @@ pub fn outw(port: u16, data: u16) {
 
 pub fn outd(port: u16, data: u32) {
     unsafe {
+        asm!("pusha")
+    }
+    unsafe {
         asm!(
-        "out {0}, eax",
-        in(reg) port,
-        in("ax") data
+        "out dx, eax",
+        in("dx") port,
+        in("eax") data
         )
+    }
+    unsafe {
+        asm!("popa")
     }
 }
 
 pub fn io_wait() {
-    unsafe { asm!("out 0x80, 0") }
+    unsafe { asm!(
+    "out dx, al",
+    in("dx") 0x80,
+    in("al") 0 as u8
+    ) }
 }
+
+pub fn inb(port: u32) -> u8 {
+    let data: u8;
+    unsafe {
+        asm!(
+        "in al, dx",
+        in("dx") port,
+        out("al") data
+        );
+    }
+    data
+}
+
