@@ -95,7 +95,7 @@ impl Table {
 #[repr(C, packed)]
 #[bitfield]
 #[derive(BitfieldSpecifier)]
-/// The [SegmentSelector] describes the segment where the Routine is stored.
+/// The `SegmentSelector` describes the segment where the Routine is stored.
 /// It has the following structure :
 ///  _____________________________________________________
 /// | 15                                   3 |  2 |  1  0 |
@@ -162,7 +162,7 @@ impl GateDescriptor {
         self.set_gate_type(gt as u8);
     }
 
-    /// Set p bit to 1. One must always call [set_valid()] on a [GateDescriptor]
+    /// Set p bit to 1. One must always call `set_valid()` on a [`GateDescriptor`]
     pub fn set_valid(&mut self) {
         self.set_p(1)
     }
@@ -201,14 +201,14 @@ impl IDTDescriptor {
         self.offset = offset
     }
 
-    /// Stores the [IDTDescriptor] to a given location in memory
+    /// Stores the [`IDTDescriptor`] to a given location in memory
     pub fn store(&self, offset: usize) {
         let ptr = offset as *mut IDTDescriptor;
         unsafe { write_volatile(ptr, self.clone()) }
     }
 }
 
-/// Loads [IDTDescriptor] in the CPU IDTR using `lidt` instruction
+/// Loads [`IDTDescriptor`] in the CPU IDTR using `lidt` instruction
 pub fn load_idt(ptr: usize) {
     disable_interrupts();
     unsafe {
