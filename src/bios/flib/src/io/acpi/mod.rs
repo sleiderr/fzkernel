@@ -7,7 +7,6 @@ use conquer_once::spin::OnceCell;
 
 use crate::{error, info};
 
-pub mod hpet;
 pub mod sdt;
 
 /// Shared [`RSDPDescriptor`] initialized during ACPI setup.
@@ -125,10 +124,14 @@ pub struct RSDPDescriptorV2 {
     reserved: [u8; 3],
 }
 
+pub fn acpi_init() {
+    __load_rsdp();
+}
+
 /// Initialize the `RSDPDescriptor`.
 ///
 /// The structure must be located in the physical memory.
-pub fn load_rsdp() {
+fn __load_rsdp() {
     // We expect the structure to be in the [0xe0000 - 0xfffff] section of the
     // physical memory.
     let mut address = 0xe0000;

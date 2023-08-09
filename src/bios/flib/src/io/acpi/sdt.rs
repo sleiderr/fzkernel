@@ -95,6 +95,8 @@ macro_rules! sdt_getter {
                 return None;
             }
 
+            $crate::info!("acpi", "{} located at {:#010x}", $sig, address as u32);
+
             Some(unsafe { core::ptr::read(address as *const Self) })
         }
     };
