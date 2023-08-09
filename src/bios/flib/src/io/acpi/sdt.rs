@@ -94,6 +94,7 @@ macro_rules! sdt_getter {
             if !$crate::io::acpi::sdt::table_checksum(unsafe { &*address }) {
                 return None;
             }
+            $crate::println!("{:?}", unsafe { core::ptr::read(address).signature });
 
             $crate::info!("acpi", "{} located at {:#010x}", $sig, address as u32);
 
