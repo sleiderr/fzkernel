@@ -38,4 +38,9 @@ SECTIONS {
         *(.eh_frame_hdr .eh_frame_hdr.*)
     }
 
+    .fill : {
+            FILL(0xdeadc0de);
+            . = 0x100000;
+        }
+
 }
