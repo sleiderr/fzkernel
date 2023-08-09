@@ -1,6 +1,0 @@
-{
-    "rust-analyzer.linkedProjects": [
-        "./src/bios/flib/Cargo.toml",
-        "./src/bios/f-initmbr/Cargo.toml"
-    ]
-}
