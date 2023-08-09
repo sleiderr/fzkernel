@@ -2,11 +2,14 @@
 #![no_main]
 #![feature(const_nonnull_new)]
 #![feature(const_option)]
+#![feature(proc_macro_hygiene)]
+#![feature(naked_functions)]
 
 extern crate alloc;
 
 use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
+use f_macros::interrupt_descriptor_table;
 use flib::{
     info, mem::bmalloc::heap::LockedBuddyAllocator, time, video::vesa::video_mode::ModeInfoBlock,
 };
@@ -18,6 +21,12 @@ use flib::{
         TEXT_BUFFER,
     },
 };
+use flib::idt::idt::{load_idt, IDTDescriptor, SegmentSelector, GateDescriptor, GateType, Table};
+use flib::io::pic::PIC;
+
+#[interrupt_descriptor_table(0x8)]
+mod interrupts;
+
 
 global_asm!(include_str!("arch/x86/setup.S"));
 
@@ -36,9 +45,14 @@ pub extern "C" fn _start() -> ! {
 
 pub fn boot_main() -> ! {
     flib::mem::zero_bss();
+
     init_framebuffer();
     clock_init();
-    loop {}
+    interrupts_init();
+
+    loop {
+
+    }
 }
 
 pub fn init_framebuffer() {
@@ -48,19 +62,33 @@ pub fn init_framebuffer() {
     TEXT_BUFFER.init_once(|| LockedTextFrameBuffer::new(framebuffer));
 }
 
+
 pub fn clock_init() {
     let curr_time = time::now();
     info!("rtc_clock", "Standard UTC time {curr_time}");
     info!(
         "rtc_clock",
+
         "time: {} date: {}",
+
         curr_time.format_shorttime(),
         curr_time.format_shortdate()
     );
+}
+
+pub fn interrupts_init() {
+    let mut idtr = IDTDescriptor::new();
+    idtr.set_offset(0x8);
+    idtr.store(0x0);
+    let pic = PIC::default();
+    pic.remap(0x20, 0x28);
+    generate_idt();
+    load_idt(0x0);
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("fatal: {info}");
     loop {}
+
 }

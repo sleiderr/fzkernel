@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 flib = { path = "../flib/", features = ["alloc"] }
+f-macros = { path = "../f-macros/" }
 conquer-once = { version = "0.4", default-features = false}
 
 [profile.release]
