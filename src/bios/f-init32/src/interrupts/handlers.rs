@@ -1,6 +1,6 @@
 use core::arch::asm;
 use f_macros::{interrupt, interrupt_default};
-use flib::io::pic::pic::PIC;
+use flib::io::pic::PIC;
 
 /// This module defines every interrupts referenced by the IDT
 /// It provides several utilities to define interrupts.

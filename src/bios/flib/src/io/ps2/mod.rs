@@ -1,5 +1,3 @@
-pub mod code;
-
 use core::arch::asm;
 
 pub fn send_data(data: u8) {

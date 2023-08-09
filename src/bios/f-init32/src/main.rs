@@ -22,7 +22,7 @@ use flib::{
     },
 };
 use flib::idt::idt::{load_idt, IDTDescriptor, SegmentSelector, GateDescriptor, GateType, Table};
-use flib::io::pic::pic::PIC;
+use flib::io::pic::PIC;
 
 #[interrupt_descriptor_table(0x8)]
 mod interrupts;
