@@ -1,5 +1,6 @@
 use core::arch::asm;
 
+pub mod acpi;
 pub mod disk;
 pub mod ps2;
 
