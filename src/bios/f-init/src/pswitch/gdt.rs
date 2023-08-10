@@ -4,8 +4,8 @@ use flib::{
     hex_print,
     mem::gdt::{Gdtr, SegmentDescriptor},
     rinfo,
-    x86::interrupts::{disable_interrupts, enable_interrupts},
 };
+use flib::int::{disable_interrupts, enable_interrupts};
 
 const GDT_START: u32 = 0x5da0;
 

@@ -3,10 +3,10 @@
 //! Provides a way to read the current UTC time from the RTC chip.
 
 use crate::{
-    io::{inb, outb},
     time::{DateTime, Weekday},
-    x86::interrupts::io_delay,
+    io::io_delay
 };
+use crate::io::{inb, outb};
 
 /// Reads a registry from the CMOS chip.
 ///

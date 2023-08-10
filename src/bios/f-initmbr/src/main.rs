@@ -5,6 +5,7 @@ use core::panic::PanicInfo;
 
 use flib::io::disk::bios::{edd_ext_check, AddressPacket};
 use flib::video::io::clear_screen;
+use flib::int::disable_interrupts;
 
 #[no_mangle]
 #[link_section = ".startup"]
@@ -21,9 +22,12 @@ pub fn _start() -> ! {
         // definitely possible though.
         loop {}
     }
-    let stage2 = AddressPacket::new(122, 0x0, 0x7e00, 0x1);
+    let stage2 = AddressPacket::new(127, 0x0, 0x7e00, 0x1);
+    stage2.disk_read(0x80);
+    let stage2 = AddressPacket::new(127, 0x17c0, 0x00, 128);
     stage2.disk_read(0x80);
     loader();
+
 }
 
 #[panic_handler]
