@@ -8,7 +8,11 @@ extern crate alloc;
 use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
 use flib::{
-    info, mem::bmalloc::heap::LockedBuddyAllocator, time, video::vesa::video_mode::ModeInfoBlock,
+    info,
+    io::acpi::{acpi_init, hpet::hpet_clk_init},
+    mem::bmalloc::heap::LockedBuddyAllocator,
+    time,
+    video::vesa::video_mode::ModeInfoBlock,
 };
 use flib::{
     println,
@@ -37,6 +41,7 @@ pub extern "C" fn _start() -> ! {
 pub fn boot_main() -> ! {
     flib::mem::zero_bss();
     init_framebuffer();
+    acpi_init();
     clock_init();
     loop {}
 }
@@ -49,7 +54,10 @@ pub fn init_framebuffer() {
 }
 
 pub fn clock_init() {
+    hpet_clk_init();
+
     let curr_time = time::now();
+
     info!("rtc_clock", "Standard UTC time {curr_time}");
     info!(
         "rtc_clock",
