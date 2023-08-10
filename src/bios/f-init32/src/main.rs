@@ -10,6 +10,11 @@ extern crate alloc;
 use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
 use f_macros::interrupt_descriptor_table;
+use flib::io::pic::PIC;
+use flib::{
+    idt::idt::{load_idt, GateDescriptor, GateType, IDTDescriptor, SegmentSelector, Table},
+    x86::tsc::TSCClock,
+};
 use flib::{
     info,
     io::acpi::{acpi_init, hpet::hpet_clk_init},
@@ -25,12 +30,9 @@ use flib::{
         TEXT_BUFFER,
     },
 };
-use flib::idt::idt::{load_idt, IDTDescriptor, SegmentSelector, GateDescriptor, GateType, Table};
-use flib::io::pic::PIC;
 
 #[interrupt_descriptor_table(0x8)]
 mod interrupts;
-
 
 global_asm!(include_str!("arch/x86/setup.S"));
 
@@ -55,9 +57,7 @@ pub fn boot_main() -> ! {
     clock_init();
     interrupts_init();
 
-    loop {
-
-    }
+    loop {}
 }
 
 pub fn init_framebuffer() {
@@ -67,18 +67,16 @@ pub fn init_framebuffer() {
     TEXT_BUFFER.init_once(|| LockedTextFrameBuffer::new(framebuffer));
 }
 
-
 pub fn clock_init() {
     hpet_clk_init();
+    TSCClock::init();
 
     let curr_time = time::now();
 
     info!("rtc_clock", "Standard UTC time {curr_time}");
     info!(
         "rtc_clock",
-
         "time: {} date: {}",
-
         curr_time.format_shorttime(),
         curr_time.format_shortdate()
     );
@@ -98,5 +96,4 @@ pub fn interrupts_init() {
 fn panic(info: &PanicInfo) -> ! {
     println!("fatal: {info}");
     loop {}
-
 }
