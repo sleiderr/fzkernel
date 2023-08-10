@@ -13,14 +13,12 @@ use f_macros::interrupt_descriptor_table;
 use flib::io::pic::PIC;
 use flib::{
     idt::idt::{load_idt, GateDescriptor, GateType, IDTDescriptor, SegmentSelector, Table},
-    x86::tsc::TSCClock,
-};
-use flib::{
     info,
     io::acpi::{acpi_init, hpet::hpet_clk_init},
     mem::bmalloc::heap::LockedBuddyAllocator,
     time,
     video::vesa::video_mode::ModeInfoBlock,
+    x86::tsc::TSCClock,
 };
 use flib::{
     println,
