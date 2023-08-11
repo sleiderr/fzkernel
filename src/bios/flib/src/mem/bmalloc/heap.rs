@@ -134,7 +134,7 @@ impl<const N: usize> BuddyAllocator<N> {
         let base_addr = NullLock::new(base_addr_ptr);
 
         // Initialize the linked lists with null head.
-        let mut free_lists = [NullLock::new(ptr::null_mut() as *mut FreeBlock); N];
+        let mut free_lists = [NullLock::new(ptr::null_mut()); N];
 
         // Except for the last one, which initially contains
         // the entire heap.
@@ -195,12 +195,12 @@ impl<const N: usize> BuddyAllocator<N> {
         }
     }
 
-    // Returns the minimum level for the allocation.
-    // It looks for the smallest block size that can fit
-    // the [`Layout`] of the required allocation.
-    //
-    // It expects a valid alignment (that is a power of 2
-    // and less precise than the `MIN_HEAP_ALIGN`)
+    /// Returns the minimum level for the allocation.
+    /// It looks for the smallest block size that can fit
+    /// the [`Layout`] of the required allocation.
+    ///
+    /// It expects a valid alignment (that is a power of 2
+    /// and less precise than the `MIN_HEAP_ALIGN`)
     pub fn allocation_level(&self, mut size: usize, align: usize) -> u8 {
         // We cannot allocate a block larger than our
         // heap.
@@ -226,16 +226,16 @@ impl<const N: usize> BuddyAllocator<N> {
         (log2(size) - self.log2_min_blk_size) as u8
     }
 
-    // Returns the block size in bytes corresponding
-    // to a given level.
+    /// Returns the block size in bytes corresponding
+    /// to a given level.
     pub fn level_size(&self, level: u8) -> usize {
         self.min_blk_size << level
     }
 
-    // Remove a given [`FreeBlock`] from free lists.
-    //
-    // Returns `false` if the operation was unsuccessful,
-    // it usually means that the `FreeBlock is in use`.
+    /// Remove a given `FreeBlock` from free lists.
+    ///
+    /// Returns `false` if the operation was unsuccessful,
+    /// it usually means that the `FreeBlock is in use`.
     pub fn remove_blk(&mut self, block: *mut u8, level: u8) -> bool {
         let blk_header = block as *mut FreeBlock;
 
@@ -245,8 +245,8 @@ impl<const N: usize> BuddyAllocator<N> {
         let mut curr_blk = &mut self.free_lists[level as usize].inner;
 
         while !(*curr_blk).is_null() {
-            if *(curr_blk) == blk_header {
-                unsafe { (*(*curr_blk)).next_blk = (*blk_header).next_blk }
+            if *curr_blk == blk_header {
+                unsafe { *curr_blk = (*blk_header).next_blk.inner }
                 return true;
             }
 
@@ -257,11 +257,11 @@ impl<const N: usize> BuddyAllocator<N> {
         false
     }
 
-    // Pop a [`FreeBlock`] of a given level from the
-    // corresponding free list.
-    //
-    // Returns `None` if there is no available block for
-    // that size.
+    /// Pop a [`FreeBlock`] of a given level from the
+    /// corresponding free list.
+    ///
+    /// Returns `None` if there is no available block for
+    /// that size.
     pub unsafe fn pop_blk_with_level(&mut self, level: u8) -> Option<*mut u8> {
         let head = self.free_lists[level as usize];
 
@@ -282,10 +282,10 @@ impl<const N: usize> BuddyAllocator<N> {
         None
     }
 
-    // Free a memory block of a given level.
-    //
-    // It adds the [`FreeBlock`] header and adds it to
-    // the free list.
+    /// Free a memory block of a given level.
+    ///
+    /// It adds the [`FreeBlock`] header and adds it to
+    /// the free list.
     pub unsafe fn free_blk(&mut self, block: *mut u8, level: u8) {
         // Initialize / update the header of the block
         let blk_header = block as *mut FreeBlock;
@@ -295,10 +295,10 @@ impl<const N: usize> BuddyAllocator<N> {
         self.free_lists[level as usize] = NullLock::new(blk_header);
     }
 
-    // Split a [`FreeBlock`] until it reaches `new_level`
-    //
-    // It finds the corresponding buddy at each level and
-    // mark it as free.
+    /// Split a [`FreeBlock`] until it reaches `new_level`
+    ///
+    /// It finds the corresponding buddy at each level and
+    /// mark it as free.
     pub unsafe fn split_blk(&mut self, block: *mut u8, mut level: u8, new_level: u8) {
         // We can't make a block larger by splitting it...
         assert!(level >= new_level);
@@ -314,19 +314,18 @@ impl<const N: usize> BuddyAllocator<N> {
         }
     }
 
-    // Find the buddy of a given block and level.
-    //
-    // If the block has a k level, it flips the
-    // (k + `log2_min_blk_size`)-bit in the binary
-    // representation of the memory address of the
-    // block.
-    //
-    // If the minimum block size is 2 = 2^1, and
-    // block A has a level of 1:
-    //
-    // Block A: 1000
-    // Buddy: 1100
-
+    /// Find the buddy of a given block and level.
+    ///
+    /// If the block has a k level, it flips the
+    /// (k + `log2_min_blk_size`)-bit in the binary
+    /// representation of the memory address of the
+    /// block.
+    ///
+    /// If the minimum block size is 2 = 2^1, and
+    /// block A has a level of 1:
+    ///
+    /// Block A: 1000
+    /// Buddy: 1100
     pub fn buddy(&self, block: *mut u8, level: u8) -> Option<*mut u8> {
         // Make sure the block is in our bounds.
         assert!(block >= self.base_addr.inner);
@@ -344,10 +343,10 @@ impl<const N: usize> BuddyAllocator<N> {
     }
 }
 
-// `NullLock` is used to encapsulate types that
-// are not [`Send`] or [`Sync`].
-// It does nothing but simulate the implementation
-// of `Send` and `Sync`
+/// `NullLock` is used to encapsulate types that
+/// are not [`Send`] or [`Sync`].
+/// It does nothing but simulate the implementation
+/// of `Send` and `Sync`
 #[derive(Clone, Copy)]
 struct NullLock<T: Clone + Copy> {
     inner: T,
