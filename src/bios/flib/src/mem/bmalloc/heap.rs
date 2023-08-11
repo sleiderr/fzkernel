@@ -185,13 +185,13 @@ impl<const N: usize> BuddyAllocator<N> {
                     full_block = cmp::min(buddy, block);
                     continue;
                 }
-
-                // We cannot remove the buddy from the free
-                // list, which means it is currently in used,
-                // we can stop merging here.
-                self.free_blk(full_block, level as u8);
-                return;
             }
+
+            // We cannot remove the buddy from the free
+            // list, which means it is currently in used,
+            // we can stop merging here.
+            self.free_blk(full_block, level as u8);
+            return;
         }
     }
 
@@ -339,7 +339,7 @@ impl<const N: usize> BuddyAllocator<N> {
         // To find the address, given a block, of its matching
         // buddy, we want to flip the bit corresponding to
         // the level of the block.
-        Some(((block as usize) ^ (1 << (level + self.log2_min_blk_size as u8))) as *mut u8)
+        Some(((block as usize) ^ (1 << (level - 1 + self.log2_min_blk_size as u8))) as *mut u8)
     }
 }
 
