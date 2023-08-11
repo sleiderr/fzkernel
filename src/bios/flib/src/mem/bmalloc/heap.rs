@@ -232,7 +232,7 @@ impl<const N: usize> BuddyAllocator<N> {
         self.min_blk_size << level
     }
 
-    /// Remove a given [`FreeBlock`] from free lists.
+    /// Remove a given `FreeBlock` from free lists.
     ///
     /// Returns `false` if the operation was unsuccessful,
     /// it usually means that the `FreeBlock is in use`.
