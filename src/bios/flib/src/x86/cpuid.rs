@@ -24,7 +24,7 @@
 //! // `CPUID` instructions are available.
 //! assert!(res.is_some());
 //!
-//! // EAX (first element of the resulting array) contains the maxmum value for basic `CPUID`.
+//! // EAX (first element of the resulting array) contains the maximum value for basic `CPUID`.
 //! println!("Maximum basic leaf number: {}", res[0]);
 //! ```
 //!
