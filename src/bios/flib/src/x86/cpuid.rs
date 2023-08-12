@@ -24,7 +24,7 @@
 //! // `CPUID` instructions are available.
 //! assert!(res.is_some());
 //!
-//! // EAX (first element of the resulting array) contains the maxmum value for basic `CPUID`.
+//! // EAX (first element of the resulting array) contains the maximum value for basic `CPUID`.
 //! println!("Maximum basic leaf number: {}", res[0]);
 //! ```
 //!
@@ -39,6 +39,7 @@
 
 use core::arch::asm;
 
+#[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
 
 /// Defines a CPU feature retrieved from the 01h leaf in the `ecx` register.
@@ -392,6 +393,7 @@ pub fn cpu_feature_support(code: (u8, u32)) -> Option<bool> {
     }
 }
 
+#[cfg(feature = "alloc")]
 /// Returns the CPU Brand String, if available.
 pub fn cpu_brand_string() -> Option<String> {
     let mut str_bytes_1: Vec<u8> = cpu_id(0x80000002)?
@@ -418,6 +420,7 @@ pub fn cpu_brand_string() -> Option<String> {
     Some(String::from(str))
 }
 
+#[cfg(feature = "alloc")]
 /// Returns the CPU Vendor String, if available.
 pub fn cpu_vendor_string() -> Option<String> {
     let res = cpu_id(0)?;
