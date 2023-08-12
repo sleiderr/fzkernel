@@ -1,4 +1,4 @@
 target*
 build/boot.img
-.idea/
+.idea
 .DS_STORE
