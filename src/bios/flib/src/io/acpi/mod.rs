@@ -7,6 +7,7 @@ use conquer_once::spin::OnceCell;
 
 use crate::{error, info};
 
+pub mod hpet;
 pub mod sdt;
 
 /// Shared [`RSDPDescriptor`] initialized during ACPI setup.
@@ -16,6 +17,7 @@ pub static RSDP: OnceCell<RSDPDescriptor> = OnceCell::uninit();
 ///
 /// Used to express register addresses within ACPI-defined tables.
 #[repr(C, packed)]
+#[derive(Debug)]
 pub struct ACPIAddress {
     // Address space to which the data structure / register belongs
     // to.
@@ -39,6 +41,7 @@ pub struct ACPIAddress {
 
 /// ACPI Generic Address Structure access size.
 #[repr(u8)]
+#[derive(Clone, Copy, Debug)]
 pub enum ACPIAddressAccessSize {
     Undefined = 0,
     Byte = 1,
