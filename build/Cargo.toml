@@ -1,0 +1,18 @@
+[package]
+name = "frozenboot"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace]
+members = [
+    "../",
+    "../src/fzboot/mbr",
+    "../src/fzboot/real",
+    "../src/fzboot/main",
+    "../src/fzboot/proc_macros"
+]
+
+[build-dependencies]
+llvm-tools = "0.1.1"

@@ -1,17 +1,21 @@
 [package]
-name = "frozenboot"
+name = "fzboot"
 version = "0.1.0"
 edition = "2021"
+workspace = "build/"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[workspace]
-members = [
-    "src/bios/f-init",
-    "src/bios/f-init32",
-    "src/bios/f-initmbr",
-    "src/bios/flib",
-]
+[dependencies]
+bitfield = "0.14"
+numtoa = "0.2"
+rlibc = "1"
+lazy_static = { version = "1.4", features = ["spin_no_std"] }
+spin = "0.9"
+modular-bitfield = "0.11"
+noto-sans-mono-bitmap = "0.2"
+conquer-once = { version = "0.4", default-features = false }
 
-[build-dependencies]
-llvm-tools = "0.1.1"
+[features]
+alloc = []
+real = []
