@@ -9,7 +9,8 @@ extern crate alloc;
 
 use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
-use fzproc_macros::interrupt_descriptor_table;
+use fzboot::io::pic::PIC;
+use fzboot::x86::idt::{load_idt, GateDescriptor, GateType, IDTDescriptor, SegmentSelector, Table};
 use fzboot::{
     info,
     io::acpi::{acpi_init, hpet::hpet_clk_init},
@@ -25,12 +26,7 @@ use fzboot::{
         TEXT_BUFFER,
     },
 };
-use fzboot::idt::idt::{load_idt, IDTDescriptor, SegmentSelector, GateDescriptor, GateType, Table};
-use fzboot::io::pic::PIC;
-
-#[interrupt_descriptor_table(0x8)]
-mod interrupts;
-
+use fzproc_macros::interrupt_descriptor_table;
 
 global_asm!(include_str!("arch/x86/setup.S"));
 
@@ -55,9 +51,7 @@ pub fn boot_main() -> ! {
     clock_init();
     interrupts_init();
 
-    loop {
-
-    }
+    loop {}
 }
 
 pub fn init_framebuffer() {
@@ -67,7 +61,6 @@ pub fn init_framebuffer() {
     TEXT_BUFFER.init_once(|| LockedTextFrameBuffer::new(framebuffer));
 }
 
-
 pub fn clock_init() {
     hpet_clk_init();
 
@@ -76,9 +69,7 @@ pub fn clock_init() {
     info!("rtc_clock", "Standard UTC time {curr_time}");
     info!(
         "rtc_clock",
-
         "time: {} date: {}",
-
         curr_time.format_shorttime(),
         curr_time.format_shortdate()
     );
@@ -90,7 +81,7 @@ pub fn interrupts_init() {
     idtr.store(0x0);
     let pic = PIC::default();
     pic.remap(0x20, 0x28);
-    generate_idt();
+    fzboot::irq::generate_idt();
     load_idt(0x0);
 }
 
@@ -98,5 +89,4 @@ pub fn interrupts_init() {
 fn panic(info: &PanicInfo) -> ! {
     println!("fatal: {info}");
     loop {}
-
 }

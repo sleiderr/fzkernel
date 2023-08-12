@@ -2,11 +2,11 @@
 //!
 //! Provides a way to read the current UTC time from the RTC chip.
 
-use crate::{
-    time::{DateTime, Weekday},
-    io::io_delay
-};
 use crate::io::{inb, outb};
+use crate::{
+    io::io_delay,
+    time::{DateTime, Weekday},
+};
 
 /// Reads a registry from the CMOS chip.
 ///

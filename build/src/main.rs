@@ -15,7 +15,7 @@ fn write_to_disk(path: &Path) -> Result<(), Box<dyn Error>> {
 
     println!("Burn MBR to disk image");
 
-    let mbr = fs::File::open("target/f-initmbr/x86_64-fbios/release/f-initmbr.bin")?;
+    let mbr = fs::File::open("target/mbr/x86_64-fbios/release/mbr.bin")?;
     let buff = BufReader::new(mbr)
         .bytes()
         .collect::<io::Result<Vec<u8>>>()?;
@@ -25,13 +25,13 @@ fn write_to_disk(path: &Path) -> Result<(), Box<dyn Error>> {
     println!("MBR done !");
 
     println!("Burn bootloader to disk image");
-    let mbr = fs::File::open("target/f-init/x86_64-fbios/release/f-init.bin")?;
+    let mbr = fs::File::open("target/real/x86_64-fbios/release/real.bin")?;
     let buff = BufReader::new(mbr)
         .bytes()
         .collect::<io::Result<Vec<u8>>>()?;
     writer.write_all(&buff)?;
 
-    let mbr = fs::File::open("target/f-init32/x86_64-fbios/release/f-init32.bin")?;
+    let mbr = fs::File::open("target/main/x86_64-fbios/release/main.bin")?;
     let buff = BufReader::new(mbr)
         .bytes()
         .collect::<io::Result<Vec<u8>>>()?;

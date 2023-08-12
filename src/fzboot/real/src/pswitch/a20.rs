@@ -1,9 +1,9 @@
 use core::arch::asm;
-use fzboot::int::{disable_interrupts, enable_interrupts};
 use fzboot::io::{inb, outb};
+use fzboot::x86::int::{disable_interrupts, enable_interrupts};
 
-use fzboot::io::ps2::{input_wait, output_wait, read_ps2, send_data, send_ps2};
 use fzboot::io::io_delay;
+use fzboot::io::ps2::{input_wait, output_wait, read_ps2, send_data, send_ps2};
 
 const A20_KTEST_LOOPS: u16 = 32;
 

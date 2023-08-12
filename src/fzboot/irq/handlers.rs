@@ -1,6 +1,6 @@
+use crate::io::pic::PIC;
 use core::arch::asm;
 use fzproc_macros::{interrupt, interrupt_default};
-use fzboot::io::pic::PIC;
 
 /// This module defines every interrupts referenced by the IDT
 /// It provides several utilities to define interrupts.

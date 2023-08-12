@@ -1,11 +1,11 @@
 use core::arch::asm;
 
+use fzboot::x86::int::{disable_interrupts, enable_interrupts};
 use fzboot::{
     hex_print,
     mem::gdt::{Gdtr, SegmentDescriptor},
     rinfo,
 };
-use fzboot::int::{disable_interrupts, enable_interrupts};
 
 const GDT_START: u32 = 0x5da0;
 

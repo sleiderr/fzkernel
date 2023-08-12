@@ -36,8 +36,9 @@ pub fn interrupt_descriptor_table(
     let item_2 = TokenStream::from(item.clone());
     let item_1 = item;
     let module = parse_macro_input!(item_1 as syn::ItemMod);
+
     let mut mod_filename = format!(
-        "{}/{}/handlers.rs",
+        "{}/handlers.rs",
         proc_macro::Span::call_site()
             .source_file()
             .path()
@@ -45,7 +46,6 @@ pub fn interrupt_descriptor_table(
             .unwrap()
             .to_str()
             .unwrap(),
-        module.ident.to_string()
     );
     let path = PathBuf::from(&mod_filename);
     let file = fs::read_to_string(&path).unwrap();
@@ -64,7 +64,7 @@ pub fn interrupt_descriptor_table(
         // Add statements to set handler's address for this entry in the IDT
         let code = quote! {
             let #ident = table.get_entry_mut(#int_number).unwrap();
-            #ident.set_offset(interrupts::handlers::#fn_name as *const () as *const u8 as u32);
+            #ident.set_offset(handlers::#fn_name as *const () as *const u8 as u32);
         };
         interrupts_token.push(code);
     }
@@ -90,7 +90,7 @@ pub fn interrupt_descriptor_table(
     let stream = quote! {
         #item_2
         // Function name
-        fn generate_idt() {
+        pub fn generate_idt() {
             #default_table
             #(#interrupts_token)*
             table.write(#offset);

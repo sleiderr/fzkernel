@@ -42,6 +42,7 @@ version = "0.1.0"
 dependencies = [
  "bitfield",
  "conquer-once",
+ "fzproc_macros",
  "lazy_static",
  "modular-bitfield",
  "noto-sans-mono-bitmap",

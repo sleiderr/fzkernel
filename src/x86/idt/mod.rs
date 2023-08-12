@@ -2,11 +2,11 @@ use alloc::vec::Vec;
 use core::arch::asm;
 use core::ptr::write_volatile;
 
+use crate::x86::int::{disable_interrupts, enable_interrupts};
 use modular_bitfield;
 use modular_bitfield::bitfield;
 use modular_bitfield::prelude::{B1, B11, B13, B2, B4, B8};
 use modular_bitfield::BitfieldSpecifier;
-use crate::int::{disable_interrupts, enable_interrupts};
 
 use crate::mem::gdt::SegmentDescriptor;
 

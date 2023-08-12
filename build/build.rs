@@ -44,6 +44,7 @@ fn build_subproject(
     objcopy: &Path,
     cargo: &Path,
 ) {
+    println!("cargo:rerun-if-changed={}", Path::new("./").display());
     println!("cargo:rerun-if-changed={}", &target_triple.display());
     println!("cargo:rerun-if-changed={}", &subproject_dir.display());
     let subproject_name = subproject_dir
