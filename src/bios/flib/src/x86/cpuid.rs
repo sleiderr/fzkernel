@@ -302,6 +302,85 @@ cpu_feature_edx!(CPU_FEAT_TM, 1 << 29, "Thermal Monitor (TCC implemented).");
 
 cpu_feature_edx!(CPU_FEAT_PBE, 1 << 31, "Pending Break Enable.");
 
+/// Intel's CPU models.
+pub enum IntelCpuModel {
+    RaptorLakeS,
+    RaptorLakeP,
+    AlderLakeS,
+    AlderLakeP,
+    RocketLakeS,
+    TigerLakeH,
+    TigerLakeU,
+    IceLake,
+    CometLakeS,
+    CannonLake,
+    KabylakeS,
+    KabylakeY,
+    SkylakeS,
+    SkylakeY,
+    BroadwellS,
+    BroadwellH,
+    HaswellS,
+    HaswellU,
+    HaswellG,
+    IvyBridge,
+    SandyBridge,
+    Westmere,
+    Nehalem,
+    SkylakeServer,
+    BroadwellServerE,
+    BroadwellServerDE,
+    HaswellServer,
+    IvyBridgeServer,
+    SandyBridgeServer,
+    WestmereServer,
+    NehalemServer,
+    GoldmontA,
+    Unknown(u8),
+}
+
+impl From<u8> for IntelCpuModel {
+    fn from(value: u8) -> Self {
+        match value {
+            0xB7 => Self::RaptorLakeS,
+            0xBA => Self::RaptorLakeP,
+            0x97 => Self::AlderLakeS,
+            0x9A => Self::AlderLakeP,
+            0xA7 => Self::RocketLakeS,
+            0x8D => Self::TigerLakeH,
+            0x8C => Self::TigerLakeU,
+            0x7E => Self::IceLake,
+            0xA5 => Self::CometLakeS,
+            0x66 => Self::CannonLake,
+            0x8E => Self::KabylakeY,
+            0x9E => Self::KabylakeS,
+            0x5E => Self::SkylakeS,
+            0x4E => Self::SkylakeY,
+            0x3D => Self::BroadwellS,
+            0x47 => Self::BroadwellH,
+            0x3C => Self::HaswellS,
+            0x45 => Self::HaswellU,
+            0x46 => Self::HaswellG,
+            0x3A => Self::IvyBridge,
+            0x2A => Self::SandyBridge,
+            0x25 => Self::Westmere,
+            0x1E => Self::Nehalem,
+            0x55 => Self::SkylakeServer,
+            0x4F => Self::BroadwellServerE,
+            0x56 => Self::BroadwellServerDE,
+            0x3F => Self::HaswellServer,
+            0x3E => Self::IvyBridgeServer,
+            0x2D => Self::SandyBridgeServer,
+            0x2C => Self::WestmereServer,
+            0x2F => Self::WestmereServer,
+            0x2E => Self::NehalemServer,
+            0x1A => Self::NehalemServer,
+            0x5C => Self::GoldmontA,
+            unknown => Self::Unknown(unknown),
+        }
+    }
+}
+
 /// Check if a CPU feature is supported.
 ///
 /// Uses the `CPUID` instruction, that may not be supported on some systems.
@@ -358,6 +437,32 @@ pub fn cpu_vendor_string() -> Option<String> {
     let str: &str = core::str::from_utf8(&str_bytes).unwrap();
 
     Some(String::from(str))
+}
+
+pub fn cpu_family_id() -> Option<u8> {
+    let res = cpu_id(1)?;
+    let family_id = ((res[0] >> 8) & 0xf) as u8;
+
+    if family_id == 0x0f {
+        let extended_family = ((res[0] >> 20) & 0xff) as u8;
+
+        return Some(family_id + extended_family);
+    }
+
+    Some(family_id)
+}
+
+pub fn cpu_model_id() -> Option<IntelCpuModel> {
+    let res = cpu_id(1)?;
+    let model_id = ((res[0]) >> 4 & 0xf) as u8;
+    let family_id = ((res[0] >> 8) & 0xf) as u8;
+
+    if family_id == 0x0f || family_id == 0x06 {
+        let extended_model_id = ((res[0] >> 16) & 0xf) as u8;
+        return Some(((extended_model_id << 4) + model_id).into());
+    }
+
+    Some(model_id.into())
 }
 
 /// Executes a `CPUID` operation, using the argument as the input value in `eax`.
