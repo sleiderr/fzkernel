@@ -17,6 +17,7 @@ use fzboot::{
     mem::bmalloc::heap::LockedBuddyAllocator,
     time,
     video::vesa::video_mode::ModeInfoBlock,
+    x86::tsc::TSCClock,
 };
 use fzboot::{
     println,
@@ -26,7 +27,6 @@ use fzboot::{
         TEXT_BUFFER,
     },
 };
-use fzproc_macros::interrupt_descriptor_table;
 
 global_asm!(include_str!("arch/x86/setup.S"));
 
@@ -63,6 +63,7 @@ pub fn init_framebuffer() {
 
 pub fn clock_init() {
     hpet_clk_init();
+    TSCClock::init();
 
     let curr_time = time::now();
 
