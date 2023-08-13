@@ -26,5 +26,6 @@ jobs:
 
       - name: Build
         run: |
+          ls
           cd ./build
           cargo build
