@@ -1,11 +1,8 @@
 <h1 align="center">
-  <br>
   <!--<a href="http://frozenpeach.org/fzboot"><img src="" alt="FrozenBoot" width="200"></a>-->
-  <br>
   FrozenBoot
-  <br>
 </h1>
-
+<br>
  <h4 align="center"><a href="https://frozenpeach.org/fzboot" target="_blank">FrozenBoot</a> is a modern, feature-rich x86 bootloader.</h4>
 
 ---
