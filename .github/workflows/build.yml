@@ -6,7 +6,7 @@ on:
       - main
   pull_request:
 
-default:
+defaults:
   run:
     working-directory: ./build
 
