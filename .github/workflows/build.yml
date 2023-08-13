@@ -23,6 +23,7 @@ jobs:
         with:
           toolchain: stable
           override: true
+          components: clippy,rust-src,llvm-tools-preview
 
       - name: Build
         uses: actions-rs/cargo@v1
