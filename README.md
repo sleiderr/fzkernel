@@ -25,7 +25,7 @@
 FrozenBoot aims to become a stable, user-friendly and feature rich x86 bootloader. It will be usable
 with custom kernels, through a simple API, or through multiboot2 support. But it can also be used as
 a bootloader for most of the available Linux distributions (Ubuntu, Debian).
-Not only that, but it will also provide various utilities to diagnose your system, or customize it 
+Not only that, but it will also provide various utilities to diagnose your system, or customize it
 through a user-friendly interface.
 
 For now, the project is still in a very early phase, but we except to be able to boot common Linux-based
@@ -35,7 +35,7 @@ distributions soon.
 
 ### Get the source code
 
-The main repository [`frozenpeach-dev/bootloader`](https://github.com/frozenpeach-dev/bootloader) contains all 
+The main repository [`frozenpeach-dev/bootloader`](https://github.com/frozenpeach-dev/bootloader) contains all
 of the required files to build a minimal standalone version of the bootloader.
 
 ```shell
@@ -60,12 +60,11 @@ rustup component add rust-src --toolchain nightly
 
 ### Build FrozenBoot
 
-You can now build the project, by changing directory to the `build/` directory that contains all the 
+You can now build the project, by changing directory to the `build/` directory that contains all the
 necessary build tools.
 
 ```shell
 cd build/
-cargo build
 cargo run
 ````
 
@@ -101,12 +100,11 @@ A version of that license is made available when cloning this repository in [LIC
 
 ## Contributing
 
-Thank you for considering contributing to the FrozenBoot project! 
+Thank you for considering contributing to the FrozenBoot project!
 We welcome all contributions – from bug reports and feature requests to code changes and documentation improvements.
 
 Before you start, please take a moment to review our [Code of Conduct](), and make sure to check out our
 [Contributing Guide]().
-
 
 
 
