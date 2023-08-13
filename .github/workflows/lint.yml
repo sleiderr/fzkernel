@@ -42,8 +42,9 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          override: false
-          components: clippy
+          toolchain: nightly
+          override: true
+          components: clippy,rust-src,llvm-tools-preview
           target: i686-unknown-linux-gnu
 
       - name: Run clippy
