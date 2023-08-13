@@ -42,9 +42,9 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: nightly
           override: false
           components: clippy
+          target: i686-unknown-linux-gnu
 
       - name: Run clippy
         uses: actions-rs/clippy-check@v1
