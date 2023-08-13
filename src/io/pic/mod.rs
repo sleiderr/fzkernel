@@ -5,8 +5,8 @@
 //! Usually there are 2 PICs configured as master/slave.
 //! Slave interrupts are thus be redirected to the master through one single IRQ.
 
-use core::arch::asm;
 use crate::io::{io_delay, outb};
+use core::arch::asm;
 
 /// Initialization is made by sending ICW (Initialization Command Words)
 /// to both Master and Slave controllers.
@@ -77,10 +77,10 @@ use crate::io::{io_delay, outb};
 /// Usually you won't set any of this bits except if you have advanced knowledge.
 
 //Most common IRQs
-const DEFAULT_ICW1 : u8 = 0b00010001;
-const DEFAULT_MASTER_ICW3 : u8 = 0b00000100;
-const DEFAULT_SLAVE_ICW3 : u8 = 0b00000010;
-const DEFAULT_ICW4 : u8 = 0b00000001;
+const DEFAULT_ICW1: u8 = 0b00010001;
+const DEFAULT_MASTER_ICW3: u8 = 0b00000100;
+const DEFAULT_SLAVE_ICW3: u8 = 0b00000010;
+const DEFAULT_ICW4: u8 = 0b00000001;
 
 /// Most of the time, you will have to talk to PICs to send them specific commands.
 /// That's why OCWs are made for (OCW stands for Operation Control Word).
@@ -115,7 +115,7 @@ const DEFAULT_ICW4 : u8 = 0b00000001;
 ///  - - - - - - - - - - - - Rotate priorities (1) or not (0)
 ///
 
-const SIMPLE_ACKNOWLEDGMENT : u8 = 0b00010000;
+const SIMPLE_ACKNOWLEDGMENT: u8 = 0b00010000;
 
 /// A Struct representing a PIC chip
 pub struct PIC {
@@ -165,12 +165,12 @@ impl PIC {
     // Mask utilities are used to enable/disable interrupts on a given controller
 
     /// Masks slave PIC with given bitmask.
-    pub fn mask_slave(&self, bitmask : u8) {
+    pub fn mask_slave(&self, bitmask: u8) {
         outb(self.slave_data_port, bitmask);
     }
 
     /// Masks master PIC with given bitmask.
-    pub fn mask_master(&self, bitmask : u8) {
+    pub fn mask_master(&self, bitmask: u8) {
         outb(self.master_data_port, bitmask);
     }
 
