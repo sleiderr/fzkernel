@@ -1,0 +1,13 @@
+[package]
+name = "real"
+version = "0.1.0"
+edition = "2021"
+workspace = "../../../build"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+fzboot = { path = "../../../" , features = ["real"]}
+
+[profile.release]
+opt-level = "z"

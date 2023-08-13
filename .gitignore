@@ -1,7 +1,4 @@
-/target
-boot.img
-src/bios/f-initmbr/target
-src/bios/flib/target
-src/bios/f-init/target
-src/bios/f-init32/target
+target*
+build/boot.img
+.idea
 .DS_STORE
