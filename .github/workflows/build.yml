@@ -12,7 +12,7 @@ defaults:
 
 jobs:
   test:
-    name: cargo-test-x86_64-linux (build)
+    name: cargo-test-x86_64-linux
     runs-on: self-hosted
     steps:
       - name: Checkout source code
@@ -25,7 +25,7 @@ jobs:
           override: true
 
       - name: Build
-        run: |
-          ls
-          cd ./build
-          cargo build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --manifest-path=build/Cargo.toml
