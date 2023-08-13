@@ -2,8 +2,8 @@ use core::arch::asm;
 
 pub mod acpi;
 pub mod disk;
-pub mod ps2;
 pub mod pic;
+pub mod ps2;
 
 pub fn outb(port: u16, data: u8) {
     unsafe {
@@ -26,9 +26,7 @@ pub fn outw(port: u16, data: u16) {
 }
 
 pub fn outd(port: u16, data: u32) {
-    unsafe {
-        asm!("pusha")
-    }
+    unsafe { asm!("pusha") }
     unsafe {
         asm!(
         "out dx, eax",
@@ -36,11 +34,8 @@ pub fn outd(port: u16, data: u32) {
         in("eax") data
         )
     }
-    unsafe {
-        asm!("popa")
-    }
+    unsafe { asm!("popa") }
 }
-
 
 pub fn inb(port: u32) -> u8 {
     let data: u8;
