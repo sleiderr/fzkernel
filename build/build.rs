@@ -26,15 +26,30 @@ fn main() {
         &target_dir,
         &objcopy,
         cargo,
+        "mbr",
     );
 
     let stage_2_dir = manifest_dir.join("../src/fzboot/real");
     let stage_2_triple = stage_2_dir.join("x86_64-fbios.json");
-    build_subproject(&stage_2_dir, &stage_2_triple, &target_dir, &objcopy, cargo);
+    build_subproject(
+        &stage_2_dir,
+        &stage_2_triple,
+        &target_dir,
+        &objcopy,
+        cargo,
+        "real",
+    );
 
     let stage_3_dir = manifest_dir.join("../src/fzboot/main");
     let stage_3_triple = stage_3_dir.join("x86_64-fbios.json");
-    build_subproject(&stage_3_dir, &stage_3_triple, &target_dir, &objcopy, cargo);
+    build_subproject(
+        &stage_3_dir,
+        &stage_3_triple,
+        &target_dir,
+        &objcopy,
+        cargo,
+        "main",
+    );
 }
 
 fn build_subproject(
@@ -43,6 +58,7 @@ fn build_subproject(
     root_target_dir: &Path,
     objcopy: &Path,
     cargo: &Path,
+    profile: &str,
 ) {
     println!("cargo:rerun-if-changed={}", Path::new("./").display());
     println!("cargo:rerun-if-changed={}", &target_triple.display());
@@ -59,14 +75,15 @@ fn build_subproject(
 
     let mut build_cmd = Command::new(cargo);
     build_cmd.current_dir(subproject_dir);
-    build_cmd.arg("build").arg("--release");
+    build_cmd.arg("build");
+    build_cmd.arg("--profile").arg(profile);
     build_cmd.arg("-Zbuild-std=core,alloc");
     build_cmd.arg(format!("--target-dir={}", &target_dir.display()));
     build_cmd.arg("--target").arg(target_triple);
     let build_status = build_cmd.status().expect("Build failed");
     assert!(build_status.success(), "Build failed");
 
-    let object_dir = target_dir.join(target_file).join("release");
+    let object_dir = target_dir.join(target_file).join(profile);
     let object_path = object_dir.join(subproject_name);
     let binary_path = object_dir.join(subproject_name.to_string() + ".bin");
     let mut objcopy_cmd = Command::new(objcopy);
