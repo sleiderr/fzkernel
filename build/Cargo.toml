@@ -1,9 +1,13 @@
 [package]
 name = "frozenboot"
 version = "0.1.0"
+authors = ["Sacha Dupuydauby <sacha.dupuydauby@student-cs.fr>", "Raphaël Faure <raphael.faure2@student-cs.fr>"]
+description = "FrozenBoot is a modern, feature-rich x86 bootloader"
+repository = "https://github.com/frozenpeach-dev/bootloader"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+license = "GPL-3.0-or-later"
+keywords = ["bootloader", "os"]
+categories = ["no-std", "embedded"]
 
 [workspace]
 members = [
@@ -14,5 +18,34 @@ members = [
     "../src/fzboot/proc_macros"
 ]
 
+[workspace.package]
+authors = ["Sacha Dupuydauby <sacha.dupuydauby@student-cs.fr>", "Raphaël Faure <raphael.faure2@student-cs.fr>"]
+description = "FrozenBoot is a modern, feature-rich x86 bootloader"
+repository = "https://github.com/frozenpeach-dev/bootloader"
+license = "GPL-3.0-or-later"
+keywords = ["bootloader", "os"]
+categories = ["no-std", "embedded"]
+
 [build-dependencies]
 llvm-tools = "0.1.1"
+
+[profile.mbr]
+inherits = "release"
+opt-level = "z"
+codegen-units = 1
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = false
+
+[profile.real]
+inherits = "release"
+opt-level = "s"
+panic = "abort"
+codegen-units = 1
+
+[profile.main]
+inherits = "release"
+panic = "abort"
+opt-level = "s"
+lto = true
