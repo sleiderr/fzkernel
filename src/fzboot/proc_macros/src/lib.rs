@@ -6,10 +6,13 @@ use std::fs;
 use std::path;
 use std::path::PathBuf;
 
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::{Literal, Span, TokenStream};
 use quote::quote;
+use syn;
+use syn::parse::Parser;
 use syn::spanned::Spanned;
-use syn::{parse_file, parse_macro_input, Ident, Item, ItemFn, Stmt};
+use syn::token::Token;
+use syn::{parse_file, parse_macro_input, Ident, Item, ItemFn, LitInt, Stmt, Token};
 
 /// This procedural macro will generate a function that will build the IDT from
 /// the module where all interrupts are defined.
@@ -166,6 +169,7 @@ pub fn interrupt(
             let wrapper_ident = Ident::new(&name, Span::mixed_site());
 
             let wrapper = quote! {
+                #[link_section = ".int"]
                 #[naked]
                 pub fn #wrapper_ident () {
                     unsafe {
@@ -274,4 +278,70 @@ pub fn interrupt_default(
     };
 
     stream.into()
+}
+
+#[proc_macro_attribute]
+pub fn field_setter(
+    args: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let arg = syn::punctuated::Punctuated::<LitInt, Token!(,)>::parse_terminated
+        .parse(args)
+        .unwrap();
+    let args = arg.into_iter().collect::<Vec<LitInt>>();
+    let offset = args.get(0).unwrap();
+    let offset = LitInt::base10_parse::<usize>(offset).unwrap();
+    let from_byte = args.get(1).unwrap();
+    let from_byte = LitInt::base10_parse::<u32>(from_byte).unwrap();
+    let to_byte = args.get(2).unwrap();
+    let to_byte = LitInt::base10_parse::<u32>(to_byte).unwrap();
+    let func = parse_macro_input!(item as syn::ItemFn);
+    let ItemFn {
+        attrs,
+        vis,
+        sig,
+        block,
+    } = func;
+    let a = quote! {
+        #[allow(clippy::all)]
+        #(#attrs)* #vis #sig {
+            let reg = self.read_reg(#offset);
+            let new = set_value_inside(reg, #from_byte, #to_byte, value as u32);
+            self.write_reg(#offset, new as u32);
+        }
+    };
+    a.into()
+}
+
+#[proc_macro_attribute]
+pub fn field_getter(
+    args: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let arg = syn::punctuated::Punctuated::<LitInt, Token!(,)>::parse_terminated
+        .parse(args)
+        .unwrap();
+    let args = arg.into_iter().collect::<Vec<LitInt>>();
+    let offset = args.get(0).unwrap();
+    let offset = LitInt::base10_parse::<usize>(offset).unwrap();
+    let from_byte = args.get(1).unwrap();
+    let from_byte = LitInt::base10_parse::<u32>(from_byte).unwrap();
+    let to_byte = args.get(2).unwrap();
+    let to_byte = LitInt::base10_parse::<u32>(to_byte).unwrap();
+    let func = parse_macro_input!(item as syn::ItemFn);
+    let ItemFn {
+        attrs,
+        vis,
+        sig,
+        block,
+    } = func;
+    let a = quote! {
+        #[allow(clippy::all)]
+        #(#attrs)* #vis  #sig {
+            let reg = self.read_reg(#offset);
+            let value = get_value_inside(reg, #from_byte, #to_byte);
+            value
+        }
+    };
+    a.into()
 }
