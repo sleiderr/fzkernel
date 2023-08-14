@@ -1,8 +1,12 @@
 [package]
 name = "fzboot"
 version = "0.1.0"
-authors = ["Sacha Dupuydauby <sacha.dupuydauby@student-cs.fr>", "Raphaël Faure <raphael.faure2@student-cs.fr>"]
-description = "FrozenBoot is a modern, feature-rich x86 bootloader"
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
 edition = "2021"
 workspace = "build/"
 
