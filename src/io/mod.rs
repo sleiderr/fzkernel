@@ -1,6 +1,9 @@
 use core::arch::asm;
 
+#[cfg(feature = "alloc")]
 pub mod acpi;
+#[cfg(feature = "alloc")]
+pub mod apic;
 pub mod disk;
 pub mod pic;
 pub mod ps2;
