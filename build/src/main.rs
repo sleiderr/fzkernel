@@ -46,12 +46,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     TERMINAL.init_once(|| Arc::new(Mutex::new(term)));
-    panic::set_hook(Box::new(|_| {
+    panic::set_hook(Box::new(|panic| {
         unsafe { TERMINAL.get_unchecked().force_unlock() };
 
         let mut term = unsafe { TERMINAL.get_unchecked().lock() };
         disable_raw_mode();
-        execute!(io::stdout(), LeaveAlternateScreen);
+        execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        println!("{panic}");
     }));
 
     let mut app = APP.get().unwrap().lock();

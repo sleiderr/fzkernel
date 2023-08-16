@@ -22,9 +22,4 @@ pub fn draw_ui<B: Backend>(f: &mut Frame<B>) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(1)])
         .split(main_horizontal[1]);
-
-    f.render_widget(Footer::new(), main_vertical[2]);
-    f.render_widget(ActionSelector::new(), main_horizontal[0]);
-    f.render_widget(StepsBar::new(), layout[0]);
-    f.render_widget(ConfigSelector::new(), layout[1]);
 }
