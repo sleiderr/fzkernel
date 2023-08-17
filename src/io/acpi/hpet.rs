@@ -39,14 +39,14 @@ pub fn hpet_clk_init() {
 }
 
 pub struct HPETClock<'t> {
-    description_table: HPETDescriptionTable,
+    description_table: &'static mut HPETDescriptionTable,
     registers: &'t mut HPETMemRegisters,
     clk_freq: f64,
 }
 
 impl<'t> HPETClock<'t> {
     /// Creates a `HPETClock` from its ACPI description as a [`HPETDescriptionTable`].
-    pub fn from_acpi_table(desc: HPETDescriptionTable) -> Self {
+    pub fn from_acpi_table(desc: &'static mut HPETDescriptionTable) -> Self {
         let registers: &mut HPETMemRegisters =
             unsafe { mem::transmute(desc.base_addr.address as u32) };
         let clk_freq = 1_000_000_000_f64 / (registers.__counter_clk_period()) as f64;
