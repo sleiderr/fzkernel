@@ -8,8 +8,9 @@ use conquer_once::spin::OnceCell;
 use crate::{error, info};
 
 pub mod hpet;
-pub mod sdt;
+#[cfg(feature = "alloc")]
 pub mod madt;
+pub mod sdt;
 
 /// Shared [`RSDPDescriptor`] initialized during ACPI setup.
 pub static RSDP: OnceCell<RSDPDescriptor> = OnceCell::uninit();

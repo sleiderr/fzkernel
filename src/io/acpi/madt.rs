@@ -1,12 +1,8 @@
 use crate::io::acpi::sdt::ACPISDTHeader;
-use crate::println;
 use crate::sdt_getter;
-use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::any::Any;
 use core::mem;
-use core::mem::transmute;
-use core::ptr::{addr_of, read, read_unaligned, read_volatile};
+use core::ptr::read_volatile;
 
 /// `MADT` implements an abstraction for Multiple APIC Description Table
 #[repr(C, packed)]
@@ -40,6 +36,12 @@ impl MADTEntries {
     }
 }
 
+impl Default for MADTEntries {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MADT {
     sdt_getter!("APIC");
     /// From a given address, returns an [`MADTEntries`] instance combining every
@@ -48,9 +50,8 @@ impl MADT {
         let mut entries = MADTEntries::new();
         let entries_start = address + mem::size_of::<MADT>();
         let length = self.header.length - (mem::size_of::<MADT>() as u32);
-        let a = self.header.length;
         let mut i = entries_start;
-        while i < (length as usize + entries_start) as usize {
+        while i < (length as usize + entries_start) {
             let header: Header = unsafe { read_volatile(i as *const Header) };
             let entry_address = i + mem::size_of::<Header>();
             match header.entry_type {

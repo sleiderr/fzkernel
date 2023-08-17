@@ -7,7 +7,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::arch::asm;
 use core::ptr::{read_volatile, write_volatile};
-use f_macros::{field_getter, field_setter};
+use fzproc_macros::{field_getter, field_setter};
 
 /// `APIC` provides low-level utilities for local APIC management
 /// as well as useful abstractions.
@@ -25,6 +25,16 @@ pub struct APIC {
     dest_format: DestinationFormat,
 }
 
+impl Default for APIC {
+    /// Creates a default `APIC` instance by using 0xfee00000 as base address (default address)
+    fn default() -> Self {
+        Self {
+            register_base: 0xfee00000,
+            dest_format: DestinationFormat::FLAT,
+        }
+    }
+}
+
 impl APIC {
     /// Creates a new instance of `APIC` given the base address for memory-mapped
     /// registers.
@@ -32,14 +42,6 @@ impl APIC {
     pub fn new(base: usize) -> Self {
         Self {
             register_base: base,
-            dest_format: DestinationFormat::FLAT,
-        }
-    }
-
-    /// Creates a default `APIC` instance by using 0xfee00000 as base address (default address)
-    pub fn default() -> Self {
-        Self {
-            register_base: 0xfee00000,
             dest_format: DestinationFormat::FLAT,
         }
     }
@@ -66,7 +68,7 @@ impl APIC {
         info!("apic", "Initalizing APIC...");
         let base = Self::apic_base_field();
         info!("apic", "Local APIC is memory mapped at 0x{:x}", base);
-        let mut local_apic = Self::new(base as usize);
+        let local_apic = Self::new(base as usize);
         info!("apic", "Retrieving Local APIC infos...");
         let id = local_apic.physical_id();
         info!("apic", "Local APIC has physical id : {} ", id);
@@ -92,8 +94,7 @@ impl APIC {
     /// read registers that don't have any abstraction implemented in
     /// this module.
     pub fn read_reg(&self, offset: usize) -> u32 {
-        let reg = unsafe { read_volatile((self.register_base + offset) as *const u32) };
-        reg
+        unsafe { read_volatile((self.register_base + offset) as *const u32) }
     }
 
     /// Writes the given value in the APIC register at given offset.
@@ -155,8 +156,8 @@ impl APIC {
     ///```
     ///
     pub fn load_apic_msr() -> u64 {
-        let mut low = 0u32;
-        let mut high = 0u32;
+        let low: u32;
+        let high: u32;
         unsafe {
             asm!(
             "rdmsr",
@@ -169,8 +170,8 @@ impl APIC {
     }
 
     pub fn set_apic_msr(msr: u64) {
-        let mut low = msr as u32;
-        let mut high = (msr >> 32) as u32;
+        let low = msr as u32;
+        let high = (msr >> 32) as u32;
         unsafe {
             asm!(
             "wrmsr",
@@ -189,13 +190,12 @@ impl APIC {
         let high = (msr >> 32) as u32;
         let base_low = get_value_inside(low, 12, 31);
         let base_high = get_value_inside(high, 0, 3);
-        let base = ((base_high << 19) | base_low) << 12;
-        base
+        ((base_high << 19) | base_low) << 12
     }
 
     /// Relocates APIC registers by overwriting MSR
     pub fn relocate_apic_reg(address: u32) {
-        let mut msr = Self::load_apic_msr();
+        let msr = Self::load_apic_msr();
         let mut low = msr as u32;
         low = set_value_inside(low, 12, 35, address);
         let high = msr >> 32 as u32;
@@ -225,7 +225,7 @@ impl APIC {
     /// If the local APIC has been hardly disabled once, only a reset of the
     /// processor can re-enable it.
     pub fn hard_enable(&self) {
-        let mut msr = Self::load_apic_msr();
+        let msr = Self::load_apic_msr();
         let low = msr as u32;
         let high = (msr >> 32) as u32;
         let low = set_value_inside(low, 11, 11, 1);
@@ -251,7 +251,7 @@ impl APIC {
     /// ```
     ///
     pub fn hard_disable(&self) {
-        let mut msr = Self::load_apic_msr();
+        let msr = Self::load_apic_msr();
         let mut low = msr as u32;
         let high = (msr >> 32) as u32;
         low = set_value_inside(low, 11, 11, 0);
@@ -491,7 +491,7 @@ impl APIC {
         let mut ldr = self.read_reg(0xD0);
         ldr = set_value_inside(ldr, 28, 31, cluster as u32);
         self.write_reg(0xD0, ldr);
-        return Ok(());
+        Ok(())
     }
 
     /// Take the given id in the current cluster.
@@ -528,14 +528,14 @@ impl APIC {
     pub fn run_in_cluster(&mut self) -> Result<(), String> {
         self.set_destination_format(DestinationFormat::CLUSTER);
         self.set_logical_id(0);
-        return if (self.get_destination_format() == (DestinationFormat::CLUSTER as u32))
+        if (self.get_destination_format() == (DestinationFormat::CLUSTER as u32))
             && (self.logical_id() == 0)
         {
             self.dest_format = DestinationFormat::CLUSTER;
             Ok(())
         } else {
             Err("Enable to switch to cluster mode".to_string())
-        };
+        }
     }
 
     /// Tries to switch to [`DestinationFormat::FLAT`] destination format.
@@ -549,14 +549,14 @@ impl APIC {
     pub fn run_in_flat(&mut self) -> Result<(), String> {
         self.set_destination_format(DestinationFormat::FLAT);
         self.set_logical_id(0);
-        return if (self.get_destination_format() == (DestinationFormat::FLAT as u32))
+        if (self.get_destination_format() == (DestinationFormat::FLAT as u32))
             && (self.logical_id() == 0)
         {
             self.dest_format = DestinationFormat::FLAT;
             Ok(())
         } else {
             Err("Enable to switch to flat mode".to_string())
-        };
+        }
     }
 
     /// Manually sets the destination format.
@@ -849,8 +849,7 @@ impl IoAPIC {
 
         let offset = reg | (offset as u32);
         unsafe { write_volatile(ioselect as *mut u32, offset) };
-        let reg = unsafe { read_volatile(iowin as *const u32) };
-        reg
+        unsafe { read_volatile(iowin as *const u32) }
     }
 
     /// Writes the given register to the given value
@@ -1012,8 +1011,14 @@ impl RedReg {
         new_low = set_value_inside(new_low, 15, 15, self.triggermod as u32);
         new_low = set_value_inside(new_low, 16, 16, self.masked as u32);
 
-        let mut new_high = set_value_inside(high, 24, 31, self.dest as u32);
+        let new_high = set_value_inside(high, 24, 31, self.dest as u32);
         (new_low, new_high)
+    }
+}
+
+impl Default for RedReg {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1029,9 +1034,9 @@ pub struct IPI {
     vector: u8,
 }
 
-impl IPI {
+impl Default for IPI {
     /// Creates default `IPI` instance.
-    pub fn default() -> Self {
+    fn default() -> Self {
         Self {
             dest: 0,
             shorthand: Shorthand::NO,
@@ -1043,7 +1048,9 @@ impl IPI {
             vector: 0,
         }
     }
+}
 
+impl IPI {
     /// Sets destination.
     pub fn set_destination(&mut self, destination: u8) {
         self.dest = destination
@@ -1123,8 +1130,8 @@ impl IPI {
     ///
     pub fn to_cluster_and_id(&mut self, cluster: u8, id: u8) {
         let mut mda = 0;
-        mda |= (cluster << 4);
-        mda |= (id & 0b1111);
+        mda |= cluster << 4;
+        mda |= id & 0b1111;
         self.set_dest_mode(DestinationMode::LOGICAL);
         self.set_destination(mda);
     }
@@ -1281,20 +1288,18 @@ pub enum TriggerMode {
     EDGE = 0,
 }
 
-/// Utils to set a value between to bits in a u32 value.
+/// Utils to set a value between two bits in a u32 value.
 fn set_value_inside(source: u32, from_byte: u32, to_byte: u32, value: u32) -> u32 {
     let lshift = 32 - (to_byte - from_byte + 1);
     let rshift = 31 - to_byte;
     let mask = !(((2u32.pow(32) - 1) << lshift) >> rshift);
     let init = source & mask;
-    let output = (value << from_byte) | init;
-    output
+    (value << from_byte) | init
 }
 
-/// Utils to get a value between to bits in a u32 value.
+/// Utils to get a value between two bits in a u32 value.
 fn get_value_inside(source: u32, from_byte: u32, to_byte: u32) -> u32 {
     let lshift = 31 - to_byte;
     let rshift = (31 - to_byte) + from_byte;
-    let result = (source << lshift) >> rshift;
-    result
+    (source << lshift) >> rshift
 }
