@@ -136,7 +136,7 @@ fn e820_type_print(descriptor: &AddressRangeDescriptor) {
 }
 
 #[cfg(feature = "real")]
-pub fn memory_map() -> Result<(), ()> {
+pub fn memory_map() {
     use crate::rinfo;
 
     let mut entry_count: u16 = 0;
@@ -161,6 +161,4 @@ pub fn memory_map() -> Result<(), ()> {
     }
 
     unsafe { E820_MAP_LENGTH = entry_count };
-
-    Ok(())
 }
