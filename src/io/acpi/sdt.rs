@@ -50,7 +50,7 @@ pub struct ACPISDTHeader {
 #[macro_export]
 macro_rules! sdt_getter {
     ($sig: literal) => {
-        pub fn load() -> Option<Self> {
+        pub fn load() -> Option<&'static mut Self> {
             let rsdp = $crate::io::acpi::RSDP
                 .get()
                 .expect("ACPI failure: tried to load description table before the main descriptor");
@@ -97,7 +97,7 @@ macro_rules! sdt_getter {
 
             $crate::info!("acpi", "{} located at {:#010x}", $sig, address as u32);
 
-            Some(unsafe { core::ptr::read(address as *const Self) })
+            Some(unsafe { &mut *(address as *mut Self) })
         }
     };
 }
