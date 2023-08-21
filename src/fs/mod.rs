@@ -1,11 +1,53 @@
+//! File-system related code.
+//!
+//! Contains the implementations of various common file systems, such as `ext4`, `fat12`, `fat16`,
+//! `fat32` as well as common utilities when working with files or directory.
+//!
+//! [`File`] and [`Directory`] are the most general representation of a file and a directory
+//! respectively. They can be used independently of the file system of the partition we are
+//! currently working with.
+//!
+//! Most of the utilities are designed to work with a `global_allocator`, to store files metadata,
+//! but some low level primitives might not need one.
+
 use core::{fmt::Debug, slice};
 
 #[cfg(feature = "alloc")]
-use alloc::{string::String, vec::Vec};
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 pub mod partitions;
 
 pub type IOResult<T> = Result<T, ()>;
+
+/// A file-system independent file. This provides a basic set of functionalities when working with
+/// files. That should be the only file-related type useful in most situations.
+pub type File = Box<dyn FsFile>;
+
+/// A file-system independent directory. This provides a basic set of functionalities when working
+/// with directories. That should be the only directory-related type useful in most cases.
+pub type Directory = Box<dyn FsDirectory<Item = DirEntry>>;
+
+impl FsFile for Box<dyn FsFile> {
+    fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
+        self.as_mut().read(buf)
+    }
+
+    fn seek(&mut self, pos: Seek) -> usize {
+        self.as_mut().seek(pos)
+    }
+
+    fn size(&self) -> IOResult<usize> {
+        self.as_ref().size()
+    }
+
+    fn truncate(&mut self, size: usize) -> IOResult<usize> {
+        self.as_mut().truncate(size)
+    }
+
+    fn extend(&mut self, size: usize) -> IOResult<usize> {
+        self.as_mut().extend(size)
+    }
+}
 
 /// `Seek` provides a way to move the internal cursor of a file, or to retrieve the current
 /// position of the cursor using `Seek::Current`.
@@ -20,6 +62,40 @@ pub enum Seek {
     Forward(usize),
 }
 
+/// `DirEntry` are returned when iterating over a [`Directory`].
+///
+/// They can either represent a [`File`], or a [`Directory`].
+pub enum DirEntry {
+    File(File),
+    Directory(Directory),
+}
+
+/// A trait to represent a file-system independent directory.
+///
+/// This offers basic functionalities to work with directories.
+pub trait FsDirectory: Iterator + Debug {
+    /// Returns the directory's parent folder.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the directory is the file system's root directory.
+    fn parent(&self) -> IOResult<Directory>;
+
+    /// Returns `true` if the directory is the file system's root directory.
+    fn is_root_dir(&self) -> IOResult<bool>;
+
+    /// Returns the size of the file, in bytes.
+    ///
+    /// # Errors
+    ///
+    /// In case of any I/O error, a generic error will be returned. An error may mean that the file
+    /// is corrupted.
+    fn size(&self) -> IOResult<usize>;
+}
+
+/// A trait to represent a file-system independent file.
+///
+/// This offers basic functionalities when working with files.
 pub trait FsFile: Debug {
     /// Read some bytes from the file, and put them inside the specified buffer.
     /// Starts reading from the current position of the internal cursor.
@@ -85,18 +161,17 @@ pub trait FsFile: Debug {
     ///
     /// In case of any I/O error, a generic error will be returned. It may be wise to retry reading
     /// in _some_ situations (such as in a real mode context, with reads being based on int 13h).
-    unsafe fn read_file_unchecked<T: AsRef<[u8]>>(&mut self, buf: &mut T) -> IOResult<&[u8]> {
+    unsafe fn read_file_unchecked(&mut self, buf: &mut [u8]) -> IOResult<&[u8]> {
         self.reset_cursor();
-        let slice = buf.as_ref();
-        let buf_len = slice.len();
+        let buf_len = buf.len();
         let size = self.size()?;
 
         let bytes_read = self.read(core::slice::from_raw_parts_mut(
-            (slice.as_ptr() as *mut u8).wrapping_add(buf_len),
+            (buf.as_ptr() as *mut u8).wrapping_add(buf_len),
             size,
         ))?;
 
-        let extended_slice = core::slice::from_raw_parts(slice.as_ptr(), bytes_read + buf_len);
+        let extended_slice = core::slice::from_raw_parts(buf.as_ptr(), bytes_read + buf_len);
 
         Ok(extended_slice)
     }
@@ -193,8 +268,6 @@ pub trait FsFile: Debug {
     /// call, or that the portion of memory that is being used is free and will not be used
     /// anywhere else.
     unsafe fn mmap(&mut self, buf: *mut u8) -> IOResult<&[u8]> {
-        let mut slice_buf = slice::from_raw_parts(buf, 0);
-
-        self.read_file_unchecked(&mut slice_buf)
+        self.read_file_unchecked(slice::from_raw_parts_mut(buf, 0))
     }
 }
