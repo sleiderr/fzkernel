@@ -1,6 +1,33 @@
+mod virt;
+
+use alloc::collections::VecDeque; // Or we could implement our own double-ended queue with a growable ring buffer
+use alloc::vec::Vec;
+
 use crate::{
     error,
 };
+
+pub struct Packet {}
+
+pub trait NetworkDevice {
+    // Pushes up to nbr_packet packets to buffer (depends on number of packets available on card).
+    // Returns the number of received packets.
+    fn rx_batch(&mut self, queue_id: u16, buffer: &mut VecDeque<Packet>, nbr_packet: usize) -> usize;
+
+    // Takes from buffer until buffer empty or queue full.
+    // Returns the number of sent packets.
+    fn tx_batch(&mut self, queue_id: u16, buffer: &mut VecDeque<Packet>) -> usize;
+
+    // Return the network card link speed in Mbit/s
+    fn get_link_speed(&self) -> u16;
+
+    // Wait for all packets in buffer to be queued
+    fn tx_batch_wait(&mut self, queue_id: u16, buffer: &mut VecDeque<Packet>) -> () {
+        while !buffer.is_empty() {
+            self.tx_batch(queue_id, buffer);
+        }
+    }
+}
 
 // Initialize the network card at the pci address
 pub fn init_card(
