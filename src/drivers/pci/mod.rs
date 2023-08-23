@@ -592,10 +592,10 @@ impl PCIHeader {
     ///
     /// Always returns a header, even if the device is non-present, so a presence check should be
     /// performed after loading the `PCIHeader`.
-    pub fn read(bus: u8, device: u8) -> Self {
+    pub fn read(bus: u8, device: u8, function: u8) -> Self {
         let mut conf_header = [0u32; 4];
         (0..4).for_each(|i| {
-            conf_header[i] = pci_read_long(bus, device, 0, i as u8);
+            conf_header[i] = pci_read_long(bus, device, function, i as u8);
         });
 
         let common = unsafe { mem::transmute::<[u32; 4], PCICommonHeader>(conf_header) };
@@ -604,7 +604,7 @@ impl PCIHeader {
             2 => {
                 let mut var_header = [0u32; 14];
                 (0..14).for_each(|i| {
-                    var_header[i] = pci_read_long(bus, device, 0, i as u8 + 4);
+                    var_header[i] = pci_read_long(bus, device, function, i as u8 + 4);
                 });
                 PCIHeaderVar::Type2(unsafe {
                     mem::transmute::<[u32; 14], PCIHeaderType2>(var_header)
@@ -613,7 +613,7 @@ impl PCIHeader {
             1 => {
                 let mut var_header = [0u32; 12];
                 (0..12).for_each(|i| {
-                    var_header[i] = pci_read_long(bus, device, 0, i as u8 + 4);
+                    var_header[i] = pci_read_long(bus, device, function, i as u8 + 4);
                 });
                 PCIHeaderVar::Type1(unsafe {
                     mem::transmute::<[u32; 12], PCIHeaderType1>(var_header)
@@ -622,7 +622,7 @@ impl PCIHeader {
             _ => {
                 let mut var_header = [0u32; 12];
                 (0..12).for_each(|i| {
-                    var_header[i] = pci_read_long(bus, device, 0, i as u8 + 4);
+                    var_header[i] = pci_read_long(bus, device, function, i as u8 + 4);
                 });
                 PCIHeaderVar::Type0(unsafe {
                     mem::transmute::<[u32; 12], PCIHeaderType0>(var_header)
@@ -631,6 +631,89 @@ impl PCIHeader {
         };
 
         Self { common, var }
+    }
+}
+
+/// Performs a recursive PCI devices discovery.
+///
+/// Assumes that PCI bridges between buses were properly set up beforehand.
+pub fn pci_enumerate_traversal() {
+    let pci_host_0 = PCIHeader::read(0, 0, 0);
+
+    if !pci_host_0.is_multifunction() {
+        // Only one PCI host controller
+        pci_bus_scan(0);
+    } else {
+        // Multiple PCI host controller
+        for func in 1..8 {
+            let pci_aux_host = PCIHeader::read(0, 0, func);
+            if !pci_aux_host.is_present() {
+                break;
+            }
+            pci_bus_scan(func);
+        }
+    }
+}
+
+/// Checks if the function is a PCI to PCI bridge, and checks the secondary bus of the bridge.
+pub(super) fn pci_function_secbus_check(bus: u8, device: u8, function: u8) {
+    let header = PCIHeader::read(bus, device, function);
+
+    if !header.is_present() {
+        return;
+    }
+
+    if (header.common.class_code == 0x6) && (header.common.subclass == 0x4) {
+        if let PCIHeaderVar::Type1(bridge) = header.var {
+            let secondary_bus = bridge.secondary_bus;
+            pci_bus_scan(secondary_bus);
+        }
+    }
+}
+
+/// Scans every slot of one `bus` for connected devices.
+pub(super) fn pci_bus_scan(bus: u8) {
+    for device in 0..32 {
+        let header = PCIHeader::read(bus, device, 0);
+        if !header.is_present() {
+            continue;
+        }
+        pci_function_secbus_check(bus, device, 0);
+
+        if header.is_multifunction() {
+            for func in 1..8 {
+                pci_function_secbus_check(bus, device, func);
+            }
+        }
+    }
+}
+
+/// Performs a full PCI enumeration, by checking if every possible slot contains a device or not.
+///
+/// The `pci_enumerate_traversal` will be quicker if available, as it avoids checking for devices
+/// that we know cannot be there.
+pub fn pci_enumerate_all() {
+    for bus in 0..=255 {
+        for device in 0..32 {
+            pci_device_check(bus, device);
+        }
+    }
+}
+
+/// Checks if a device is present, and enumerates its functions.
+pub(super) fn pci_device_check(bus: u8, device: u8) {
+    let header = PCIHeader::read(bus, device, 0);
+    if !header.is_present() {
+        return;
+    }
+
+    if header.is_multifunction() {
+        for func in 1..8 {
+            let header = PCIHeader::read(bus, device, func);
+            if !header.is_present() {
+                continue;
+            }
+        }
     }
 }
 
