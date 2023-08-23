@@ -2,6 +2,509 @@ use core::mem;
 
 use crate::io::{inl, outl};
 
+/// Builds the [`DeviceClass`] enum containing known PCI device classes.
+macro_rules! pci_device_class_def {
+    ($( ($class: literal, $name: ident, $desc: tt)), *) => {
+        pub enum DeviceClass {
+            $(
+            #[doc = $desc]
+            $name,
+            )*
+            Unknown(u32)
+        }
+
+        impl core::fmt::Display for DeviceClass {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                let desc = match &self {
+                    $(DeviceClass::$name => $desc,)*
+                    DeviceClass::Unknown(_) => "Unknown",
+                };
+
+                core::write!(f, "{}", desc)
+            }
+        }
+
+        impl From<DeviceClass> for u32 {
+            fn from(value: DeviceClass) -> u32 {
+                match value {
+                    $(DeviceClass::$name => $class,)*
+                    DeviceClass::Unknown(val) => val,
+                }
+            }
+        }
+
+        impl From<u32> for DeviceClass {
+            fn from(value: u32) -> DeviceClass {
+                match value {
+                    $($class => Self::$name,)*
+                    val => Self::Unknown(val)
+                }
+            }
+        }
+    };
+}
+
+pci_device_class_def!(
+    (0x000100, VGACompatible, "VGA-compatible device"),
+    (
+        0x010000,
+        SCSIControllerVendor,
+        "SCSI controller - vendor-specific interface"
+    ),
+    (0x010011, SCSIStorageDevice, "SCSI storage device (PQI)"),
+    (0x010012, SCSIController, "SCSI controller"),
+    (
+        0x010013,
+        SCSIStorageDeviceAndController,
+        "SCSI storage device and SCSI controller"
+    ),
+    (
+        0x010021,
+        SCSIStorageDeviceNVME,
+        "SCSI storage device (NVME)"
+    ),
+    (0x010100, IDEController, "IDE controller"),
+    (0x010200, FloppyController, "Floppy disk controller"),
+    (0x010300, IPIBusController, "IPI bus controller"),
+    (0x010400, RAIDController, "RAID controller"),
+    (
+        0x010520,
+        ATAControllerADMASSTEP,
+        "ATA controller with ADMA interface - single stepping"
+    ),
+    (
+        0x010530,
+        ATAControllerADMACTOP,
+        "ATA controller with ADMA interface - continuous operation"
+    ),
+    (
+        0x010600,
+        SATAControllerVendor,
+        "Serial ATA controller - vendor-specific interface"
+    ),
+    (
+        0x010601,
+        SATAControllerAHCI,
+        "Serial ATA controller - AHCI interface"
+    ),
+    (0x010602, SerialStorageBuf, "Serial Storage Bus Interface"),
+    (
+        0x010700,
+        SASController,
+        "Serial Attached SCSI (SAS) controller"
+    ),
+    (
+        0x010800,
+        NVMSubsystem,
+        "NVM subsystem - vendor-specific interface"
+    ),
+    (
+        0x010801,
+        NVMSubsystemNVMHCI,
+        "NVM subsystem - NVMHCI interface"
+    ),
+    (0x010802, NVMEIOController, "NVMe I/O controller"),
+    (
+        0x010803,
+        NVMEAdminController,
+        "NVMe administrative controller"
+    ),
+    (0x010900, UFSController, "UFS controller"),
+    (
+        0x010901,
+        UFSHCI,
+        "Universal Flash Storage Host Controller Interface"
+    ),
+    (
+        0x018000,
+        UnknownMassStorageController,
+        "Mass storage controller (unknown)"
+    ),
+    (0x020000, EthernetController, "Ethernet controller"),
+    (0x020100, TokenRingController, "Token Ring controller"),
+    (0x020200, FDDIController, "FDDI controller"),
+    (0x020300, ATMController, "ATM controller"),
+    (0x020400, ISDNController, "ISDN controller"),
+    (0x020500, WorldFipController, "WorldFip controller"),
+    (0x020600, PICMGMultiComputing, "PICMG 2.14 Multi Computing"),
+    (0x020700, InfiniBandController, "InfiniBand controller"),
+    (0x020800, HostFabricController, "Host fabric controller"),
+    (
+        0x028000,
+        UnknownNetworkController,
+        "Network controller (unknown)"
+    ),
+    (
+        0x030000,
+        VGACompatibleController,
+        "VGA-compatible controller"
+    ),
+    (
+        0x030001,
+        Compatible8514Controller,
+        "8514-compatible controller"
+    ),
+    (0x030100, XGAController, "XGA controller"),
+    (0x030200, Controller3D, "3D controller"),
+    (
+        0x038000,
+        UnknownDisplayController,
+        "Display controller (unknown)"
+    ),
+    (0x040000, VideoDevice, "Video device"),
+    (0x040100, AudioDevice, "Audio device"),
+    (
+        0x040200,
+        ComputerTelephonyDevice,
+        "Computer telephony device"
+    ),
+    (
+        0x040300,
+        HDACompatible,
+        "High Definition Audio 1.0 compatible"
+    ),
+    (
+        0x040380,
+        HDACompatibleAdd,
+        "High Definition Audio 1.0 compatible with additional extensions"
+    ),
+    (
+        0x048000,
+        UnknownMultimediaDevice,
+        "Multimedia device (unknown)"
+    ),
+    (0x050000, RAM, "RAM"),
+    (0x500100, Flash, "Flash"),
+    (
+        0x508000,
+        UnknownMemoryController,
+        "Memory controller (unknown)"
+    ),
+    (0x060000, HostBridge, "Host bridge"),
+    (0x060100, ISABridge, "ISA bridge"),
+    (0x060200, EISABridge, "EISA bridge"),
+    (0x060300, MCABridge, "MCA bridge"),
+    (0x060400, PciPciBridge, "PCI-to-PCI bridge"),
+    (
+        0x060401,
+        SubDecodePciPciBridge,
+        "Subtractive Decode PCI-to-PCI bridge"
+    ),
+    (0x060500, PCMCIABridge, "PCMCIA bridge"),
+    (0x060600, NubusBridge, "NuBus bridge"),
+    (0x060700, CardBusBridge, "CardBus bridge"),
+    (0x060800, RacewayBridge, "RACEway bridge"),
+    (
+        0x060940,
+        SemiTransparentPciPciBridgePrim,
+        "Semi-transparent PCI-to-PCI bridge with the primary
+     PCI bus side facing the system host processor"
+    ),
+    (
+        0x060980,
+        SemiTransparentPciPciBridgeSec,
+        "Semi-transparent PCI-to-PCI bridge
+     with the secondary PCI bus side facing the system host processor"
+    ),
+    (
+        0x060A00,
+        InfiniBandPciHostBridge,
+        "InfiniBand-to-PCI host bridge"
+    ),
+    (
+        0x060B00,
+        AdvancedSwitchingPciBridgeCustom,
+        "Advanced Switching to PCI host bridge–Custom Interface"
+    ),
+    (
+        0x060B01,
+        AdvancedSwitchingPciBridgeASISIG,
+        "Advanced Switching to PCI host bridge– ASI-SIG Defined Portal Interface"
+    ),
+    (0x068000, UnknownBridgeDevice, "Bridge device (unknown)"),
+    (
+        0x070000,
+        GenericXTSerialController,
+        "Generic XT-compatible serial controller"
+    ),
+    (
+        0x070001,
+        Compatible16450SerialController,
+        "16450-compatible serial controller"
+    ),
+    (
+        0x070002,
+        Compatible16550SerialController,
+        "16550-compatible serial controller"
+    ),
+    (
+        0x070003,
+        Compatible16650SerialController,
+        "16650-compatible serial controller"
+    ),
+    (
+        0x070004,
+        Compatible16750SerialController,
+        "16750-compatible serial controller"
+    ),
+    (
+        0x070005,
+        Compatible16850SerialController,
+        "16850-compatible serial controller"
+    ),
+    (
+        0x070006,
+        Compatible16950SerialController,
+        "16950-compatible serial controller"
+    ),
+    (0x070100, ParallelPort, "Parallel port"),
+    (0x070101, BiParallelPort, "Bi-directional parallel port"),
+    (
+        0x070102,
+        ECPCompliantParallelPort,
+        "ECP 1.X compliant parallel port"
+    ),
+    (0x070103, IEEE1284Controller, "IEEE1284 controller"),
+    (0x0701fe, IEEE1284TargetDevice, "IEEE1284 target device"),
+    (
+        0x070200,
+        MultiportSerialController,
+        "Multiport serial controller"
+    ),
+    (0x070300, GenericModem, "Generic modem"),
+    (
+        0x070301,
+        Hayes16450Compatible,
+        "Hayes compatible modem, 16450-compatible interface"
+    ),
+    (
+        0x070302,
+        Hayes16550Compatible,
+        "Hayes compatible modem, 16550-compatible interface"
+    ),
+    (
+        0x070303,
+        Hayes16650Compatible,
+        "Hayes compatible modem, 16650-compatible interface"
+    ),
+    (
+        0x070304,
+        Hayes16750Compatible,
+        "Hayes compatible modem, 16750-compatible interface"
+    ),
+    (0x070400, GPIBController, "GPIB (IEEE 488.1/2) controller"),
+    (0x070500, SmartCard, "Smart Card"),
+    (
+        0x078000,
+        UnknownCommunicationDevice,
+        "Communication device (unkown)"
+    ),
+    (0x080000, Generic8259PIC, "Generic 8259 PIC"),
+    (0x800001, ISAPIC, "ISA PIC"),
+    (0x800002, EISAPIC, "EISA PIC"),
+    (
+        0x800010,
+        IOAPICInterruptController,
+        "I/O APIC interrupt controller"
+    ),
+    (
+        0x080020,
+        IOxAPICInterruptController,
+        "I/O(x) APIC interrupt controller"
+    ),
+    (
+        0x080100,
+        Generic8237DMAController,
+        "Generic 8237 DMA controller"
+    ),
+    (0x080101, ISADMAController, "ISA DMA controller"),
+    (0x080102, EISADMAController, "EISA DMA controller"),
+    (
+        0x080200,
+        Generic8254SystemTimer,
+        "Generic 8254 system timer"
+    ),
+    (0x080201, ISASystemTimer, "ISA system timer"),
+    (0x080202, EISASystemTimer, "EISA system timers (two timers)"),
+    (0x080203, HPETimer, "High Performance Event Timer"),
+    (0x080300, GenericRTCController, "Generic RTC controller"),
+    (0x080301, ISARTCController, "ISA RTC controller"),
+    (
+        0x080400,
+        GenericPCIHPController,
+        "Generic PCI Hot-Plug controller"
+    ),
+    (0x080500, SDHostController, "SD Host controller"),
+    (0x080600, IOMMU, "IOMMU"),
+    (
+        0x080700,
+        RootComplexEventCollector,
+        "Root Complex Event Collector"
+    ),
+    (
+        0x088000,
+        UnknownSystemPeripheral,
+        "System peripheral (unknown)"
+    ),
+    (0x090000, KeyboardController, "Keyboard controller"),
+    (0x090100, Digitizer, "Digitizer (pen)"),
+    (0x090200, MouseController, "Mouse controller"),
+    (0x090300, ScannerController, "Scanner controller"),
+    (
+        0x090400,
+        GameportControllerGeneric,
+        "Gameport controller (generic)"
+    ),
+    (0x090401, GameportController, "Gameport controller"),
+    (
+        0x098000,
+        UnknownInputController,
+        "Input controller (unknown)"
+    ),
+    (0x0A0000, GenericDockingStation, "Generic docking station"),
+    (0x0A8000, UnknownDockingStation, "Docking station (unknown)"),
+    (0x0B0000, CPU386, "CPU 386"),
+    (0x0B0100, CPU486, "CPU 486"),
+    (0x0B0200, Pentium, "Pentium"),
+    (0x0B1000, Alpha, "Alpha"),
+    (0x0B2000, PowerPC, "PowerPC"),
+    (0x0B3000, MIPS, "MIPS"),
+    (0x0B4000, Coprocessor, "Co-processor"),
+    (0x0B8000, UnknownCPU, "CPU (unknown)"),
+    (0x0C0000, IEEE1394Firewire, "IEEE 1394 (FireWire)"),
+    (
+        0x0C0010,
+        IEEE1394OpenHCI,
+        "IEEE 1394 following the 1394 OpenHCI specification"
+    ),
+    (0x0C0100, ACCESSBus, "ACCESS.bus"),
+    (0x0C0200, SSA, "SSA"),
+    (
+        0x0C0300,
+        USBUHCSpec,
+        "USB (following the Universal Host Controller Specification)"
+    ),
+    (
+        0x0C0310,
+        USBOHCSpec,
+        "USB (following the Open Host Controller Specification)"
+    ),
+    (
+        0x0C0320,
+        USB2IEHCISpec,
+        "USB 2 host controller following the Intel
+     Enhanced Host Controller Interface Specification"
+    ),
+    (
+        0x0C0330,
+        USBxHCI,
+        "USB (following the Intel eXtensible Host Controller Interface Specification)"
+    ),
+    (
+        0x0C0380,
+        USBUnspecified,
+        "USB with no specific Programming Interface"
+    ),
+    (0x0C03FE, USBDevice, "USB device"),
+    (0x0C0400, FibreChannel, "Fibre Channel"),
+    (0x0C0500, SMBus, "SMBus (System Management Bus)"),
+    (0x0C0600, InfiniBand, "InfiniBand (deprecated)"),
+    (0x0C0700, IPMISMICInterface, "IPMI SMIC Interface"),
+    (
+        0x0C0701,
+        IPMIKeyboardControllerStyleIf,
+        "IPMI Keyboard Controller Style Interface"
+    ),
+    (
+        0x0C0702,
+        IPMIBlockTransferInterface,
+        "IPMI Block Transfer Interface"
+    ),
+    (
+        0x0C0800,
+        SERCOSInterfaceStandard,
+        "SERCOS Interface Standard"
+    ),
+    (0x0C09AA, CANbus, "CANbus"),
+    (
+        0x0C0A00,
+        MIPII3CHostController,
+        "MIPI I3CSM Host Controller Interface"
+    ),
+    (
+        0x0C8000,
+        UnknownSerialBusController,
+        "Serial bus controller (unknown)"
+    ),
+    (
+        0x0D0000,
+        IRDACompatibleController,
+        "iRDA compatible controller"
+    ),
+    (0x0D0100, ConsumerIRController, "Consumer IR controller"),
+    (0x0D0110, UWBRadioController, "UWB Radio controller"),
+    (0x0D1000, RFController, "RF controller"),
+    (0x0D1100, BluetoothController, "Bluetooth"),
+    (0x0D1200, Broadband, "Broadband"),
+    (0x0D2000, Ethernet5, "Ethernet (802.11a – 5 GHz)"),
+    (0x0D2100, Ethernet2, "Ethernet (802.11b – 2.4 GHz)"),
+    (0x0D4000, CellularController, "Cellular controller/modem"),
+    (
+        0x0D4100,
+        CellularControllerAndEthernet,
+        "Cellular controller/modem plus Ethernet (802.11)"
+    ),
+    (
+        0x0D8000,
+        UnknownWirelessController,
+        "Wireless controller (unknown)"
+    ),
+    (0x0E0000, MessageFIFO040, "Message FIFO at offset 040"),
+    (0x0F0100, TV, "TV"),
+    (0x0F0200, SatelliteAudio, "Audio"),
+    (0x0F0300, SatelliteVoice, "Voice"),
+    (0x0F0400, SatelliteData, "Data"),
+    (
+        0x0F8000,
+        UnknownSatelliteController,
+        "Satellite communication controller (unknown)"
+    ),
+    (
+        0x100000,
+        NetworkComputingEncryptionController,
+        "Network and computing encryption and decryption controller"
+    ),
+    (
+        0x101000,
+        EntertainmentEncryptionController,
+        "Entertainment encryption and decryption controller"
+    ),
+    (
+        0x108000,
+        UnknownEncryptionController,
+        "Other encryption and decryption controller"
+    ),
+    (0x110000, DPIOModule, "DPIO modules"),
+    (0x110100, PerformanceCounter, "Performance counters"),
+    (
+        0x111000,
+        CommunicationSync,
+        "Communications synchronization plus time and frequency test/measurement"
+    ),
+    (0x112000, ManagementCard, "Management card"),
+    (
+        0x118000,
+        SignalProcessingController,
+        "Signal processing / data acquisition controller (unknown)"
+    ),
+    (0x120000, ProcessingAccelerator, "Processing Accelerator"),
+    (
+        0x130000,
+        NonEssentialInstrumentation,
+        "Non-Essential Instrumentation Function"
+    )
+);
+
 /// Configuration Space Header for a PCI device.
 ///
 /// The first 16 bytes of the header are common to every layout, and the last 48 bytes can vary
