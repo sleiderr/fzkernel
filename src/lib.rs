@@ -6,6 +6,7 @@
 
 pub mod video;
 pub mod bios;
+pub mod drivers;
 pub mod fs;
 pub mod fzboot;
 pub mod io;
