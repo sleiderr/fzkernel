@@ -17,7 +17,6 @@ fn main() {
     let current_dir = env::current_dir().expect("Couldn't get current directory");
     let target_dir_rel = manifest_dir.join("target");
     let target_dir = current_dir.join(target_dir_rel);
-
     let stage_1st_dir = manifest_dir.join("../src/fzboot/mbr");
     let stage_1st_triple = stage_1st_dir.join("x86_64-fbios.json");
     build_subproject(
@@ -26,15 +25,35 @@ fn main() {
         &target_dir,
         &objcopy,
         cargo,
+        None,
     );
 
     let stage_2_dir = manifest_dir.join("../src/fzboot/real");
     let stage_2_triple = stage_2_dir.join("x86_64-fbios.json");
-    build_subproject(&stage_2_dir, &stage_2_triple, &target_dir, &objcopy, cargo);
+    build_subproject(
+        &stage_2_dir,
+        &stage_2_triple,
+        &target_dir,
+        &objcopy,
+        cargo,
+        None,
+    );
+
+    let mut test_feature = None;
+    if let Ok(_test) = env::var("TEST_ENV") {
+        test_feature = Some("test");
+    }
 
     let stage_3_dir = manifest_dir.join("../src/fzboot/main");
     let stage_3_triple = stage_3_dir.join("x86_64-fbios.json");
-    build_subproject(&stage_3_dir, &stage_3_triple, &target_dir, &objcopy, cargo);
+    build_subproject(
+        &stage_3_dir,
+        &stage_3_triple,
+        &target_dir,
+        &objcopy,
+        cargo,
+        test_feature,
+    );
 }
 
 fn build_subproject(
@@ -43,10 +62,12 @@ fn build_subproject(
     root_target_dir: &Path,
     objcopy: &Path,
     cargo: &Path,
+    feature: Option<&str>,
 ) {
     println!("cargo:rerun-if-changed={}", Path::new("./").display());
     println!("cargo:rerun-if-changed={}", &target_triple.display());
     println!("cargo:rerun-if-changed={}", &subproject_dir.display());
+
     let subproject_name = subproject_dir
         .file_stem()
         .expect("Couldn't get name")
@@ -58,9 +79,14 @@ fn build_subproject(
     let target_dir = root_target_dir.join(subproject_name);
 
     let mut build_cmd = Command::new(cargo);
+
     build_cmd.current_dir(subproject_dir);
     build_cmd.arg("build").arg("--release");
     build_cmd.arg("-Zbuild-std=core,alloc");
+    if let Some(feature) = feature {
+        build_cmd.arg(format!("--features={}", feature));
+    }
+
     build_cmd.arg(format!("--target-dir={}", &target_dir.display()));
     build_cmd.arg("--target").arg(target_triple);
     let build_status = build_cmd.status().expect("Build failed");
