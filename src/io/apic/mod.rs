@@ -144,7 +144,9 @@ impl APIC {
     }
 
     /// Returns the APIC MSR.
+    ///
     /// It has the following structure :
+    ///
     /// ```plaintext
     /// 63                           36 35                   12 11  10  9  8          0
     ///  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -356,6 +358,7 @@ impl APIC {
     /// Replace the LVT entry with the provided one.
     ///
     /// # Examples
+    ///
     /// A use-case could be to disable the legacy 8259 PIC Microcontroller, usually
     /// connected to LINT0, in order to use IO/APIC and APICs.
     ///
@@ -438,6 +441,7 @@ impl APIC {
     /// Note that one `LocalApic` can join multiples [`ProcGroup`].
     ///
     /// # Errors
+    ///
     /// To prevent undefined behaviour, this function may result as an [`Err`]
     /// if the `LocalApic`is not currently running in [`DestinationFormat::FLAT`] mode.
     ///
@@ -457,6 +461,7 @@ impl APIC {
     /// Leaves the given [`ProcGroup`]
     ///
     /// # Errors
+    ///
     /// To prevent undefined behaviour, this function may result as an [`Err`]
     /// if the `LocalApic`is not currently running in [`DestinationFormat::FLAT`] mode.
     ///
@@ -474,7 +479,9 @@ impl APIC {
     }
 
     /// Joins the given cluster.
+    ///
     /// # Errors
+    ///
     /// To prevent undefined behaviour, this function may result as an [`Err`]
     /// if the `LocalApic`is not currently running in [`DestinationFormat::CLUSTER`] mode.
     ///
@@ -498,6 +505,7 @@ impl APIC {
     /// The id has to be given as power of 2. (beginning at 2^0 = 1)
     ///
     /// # Errors
+    ///
     /// Cluster can have at most 4 members. That's why an error could be raised
     /// if the given id doesn't fit this rule.
     ///
@@ -520,7 +528,9 @@ impl APIC {
     /// Tries to switch to [`DestinationFormat::CLUSTER`] destination format.
     /// This function __must__ be called before running any operation
     /// such as [`Self::join_cluster`]
+    ///
     /// # Errors
+    ///
     /// There is no reason for this function to fail but we need to ensure
     /// that the switch has been effective to prevent undefined behaviour.
     /// That's why an [`Err`] could be returned.
@@ -541,7 +551,9 @@ impl APIC {
     /// Tries to switch to [`DestinationFormat::FLAT`] destination format.
     /// This function __must__ be called before running any operation
     /// such as [`Self::join`] or [`Self::leave`]
+    ///
     /// # Errors
+    ///
     /// There is no reason for this function to fail but we need to ensure
     /// that the switch has been effective to prevent undefined behaviour.
     /// That's why an [`Err`] could be returned.
@@ -614,7 +626,9 @@ impl APIC {
 /// by calling [`APIC::set_lvt_entry`] will prevent from overwriting reserved field by matching
 /// the [`LVTEntryType`] field.
 /// To learn more about how to configure each kind of entry, refer to Intel documentation.
+///
 /// # Examples
+///
 /// ```
 /// use flib::io::apic::{APIC, LVTEntry, LVTEntryType, TimerMode};
 ///
@@ -666,6 +680,7 @@ impl LVTEntry {
     /// Sets the [`DeliveryMode`] for this entry.
     ///
     /// # Errors
+    ///
     /// Returns an [`Err`] if the entry has type [`LVTEntryType::TIMER`].
     ///
     pub fn set_delivery_mode(&mut self, mode: DeliveryMode) -> Result<(), ()> {
@@ -679,6 +694,7 @@ impl LVTEntry {
     /// Sets the [`Polarity`] for this entry.
     ///
     /// # Errors
+    ///
     /// Returns an [`Err`] if the entry is not one of the following type :
     /// - [`LVTEntryType::LINT0`].
     /// - [`LVTEntryType::LINT1`].
@@ -696,6 +712,7 @@ impl LVTEntry {
     /// Sets the [`TriggerMode`] for this entry.
     ///
     /// # Errors
+    ///
     /// Returns an [`Err`] if the entry is not one of the following type :
     /// - [`LVTEntryType::LINT0`].
     /// - [`LVTEntryType::LINT1`].
@@ -723,6 +740,7 @@ impl LVTEntry {
     /// Sets the [`TimerMode`] for this entry.
     ///
     /// # Errors
+    ///
     /// Returns an [`Err`] if the entry is not of type [`LVTEntryType::TIMER`]
     ///
     pub fn set_timer_mode(&mut self, mode: TimerMode) -> Result<(), ()> {
@@ -869,6 +887,7 @@ impl IoAPIC {
     /// redirect a random IRQ.
     ///
     /// # Errors
+    ///
     /// This could raise an [`Err`] if the table is full. In that case, you
     /// would have to use [`Self::overwrite_entry`] instead.
     pub fn add_redirect(&mut self, redirect: RedReg) -> Result<(), String> {
@@ -893,6 +912,7 @@ impl IoAPIC {
     /// This method is the most useful to redirect specific IRQ.
     ///
     /// # Examples
+    ///
     /// A common example is to overwrite second entry (ie offset 1) in order to handle
     /// keystrokes.
     /// _Note : you must first ensure you masked [`crate::io::pic::PIC`] entry before._
@@ -1106,6 +1126,7 @@ impl IPI {
     /// Set up the IPI to be sent to the given cluster and the given id.
     ///
     /// # Examples
+    ///
     /// As an example, this is how you would send an IPI to self using [`DestinationFormat::CLUSTER`]
     ///
     /// ```
@@ -1266,6 +1287,7 @@ pub enum DeliveryMode {
     /// Use it to consider this input as an external interrupt controller
     ///
     /// # Examples
+    ///
     /// This mode is usually used to let the legacy 8259 PIC use the LINT0 pin.
     /// ```
     /// use flib::io::apic::{APIC, DeliveryMode, LVTEntry, LVTEntryType};
