@@ -14,5 +14,11 @@ members = [
     "../src/fzboot/proc_macros"
 ]
 
+[dependencies]
+
 [build-dependencies]
 llvm-tools = "0.1.1"
+
+[dev-dependencies]
+external-tests = {git = "https://github.com/frozenpeach-dev/debugger", features = ["main"]}
+env_logger = "0.10.0"

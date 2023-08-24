@@ -4,11 +4,16 @@
 #![feature(const_option)]
 #![feature(proc_macro_hygiene)]
 #![feature(naked_functions)]
+#![feature(custom_inner_attributes)]
 
 extern crate alloc;
 
 use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
+
+#[cfg(feature = "test")]
+use external_tests::{test_module, test_runner};
+
 use fzboot::io::pic::PIC;
 use fzboot::x86::idt::{load_idt, GateDescriptor, GateType, IDTDescriptor, SegmentSelector, Table};
 use fzboot::{
@@ -45,12 +50,12 @@ pub extern "C" fn _start() -> ! {
 
 pub fn boot_main() -> ! {
     fzboot::mem::zero_bss();
-
     init_framebuffer();
     acpi_init();
     clock_init();
     interrupts_init();
-
+    #[cfg(feature = "test")]
+    test_runner!();
     loop {}
 }
 
@@ -81,13 +86,36 @@ pub fn interrupts_init() {
     idtr.set_offset(0x8);
     idtr.store(0x0);
     let pic = PIC::default();
+
     pic.remap(0x20, 0x28);
     fzboot::irq::generate_idt();
     load_idt(0x0);
 }
 
 #[panic_handler]
+#[no_mangle]
 fn panic(info: &PanicInfo) -> ! {
-    println!("fatal: {info}");
     loop {}
+}
+
+#[cfg(feature = "test")]
+mod test {
+    #![test_module("/tmp/fp_tests")]
+    use external_tests::test_gateway;
+    use fzboot::println;
+
+    pub fn test() {
+        println!("Goto");
+        assert_eq!(1, 1);
+    }
+
+    pub fn bobi() {
+        println!("Bobi");
+        assert_eq!(1, 1);
+    }
+
+    #[test_gateway]
+    pub fn gateway() {
+        loop {}
+    }
 }

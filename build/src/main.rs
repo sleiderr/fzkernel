@@ -46,3 +46,18 @@ fn main() {
     let disk_path: &Path = Path::new("./boot.img");
     write_to_disk(disk_path).unwrap();
 }
+
+#[cfg(test)]
+mod test {
+    use external_tests::main;
+    #[main(
+        path = "/tmp/fp_tests",
+        arch = "i386:x86-64",
+        gdb = "gdb",
+        port = "localhost:1234",
+        symfile = "target/main/x86_64-fbios/release/main",
+        bootfile = "boot.img"
+    )]
+    #[external_tests::tokio::test]
+    pub async fn main() {}
+}
