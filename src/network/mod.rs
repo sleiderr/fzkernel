@@ -1,4 +1,5 @@
 mod virt;
+mod mem;
 
 use alloc::collections::VecDeque; // Or we could implement our own double-ended queue with a growable ring buffer
 use alloc::vec::Vec;
@@ -6,8 +7,6 @@ use alloc::vec::Vec;
 use crate::{
     error,
 };
-
-pub struct Packet {}
 
 pub trait NetworkDevice {
     // Pushes up to nbr_packet packets to buffer (depends on number of packets available on card).

@@ -1,8 +1,33 @@
+use core::slice;
+
 pub struct VirtualQueue {
-    size: u16,
-    description: *mut VirtualQueueDescriptor,
-    available: RingWrapper<VirtualQueueAvailable>,
-    used: RingWrapper<VirtualQueueUsed>,
+    pub size: u16,
+    pub description: *mut VirtualQueueDescriptor,
+    pub available: RingWrapper<VirtualQueueAvailable>,
+    pub used: RingWrapper<VirtualQueueUsed>,
+    pub last_used_idx: u16,
+}
+
+impl VirtualQueue {
+
+    //unsafe fn new(size: u16, description: *mut VirtualQueueDescriptor) -> VirtualQueue {
+    //    ?
+    //    let used,
+    //    let available,
+    //    VirtualQueue {}
+    //}
+
+    pub fn mut_descriptors(&mut self) -> &mut [VirtualQueueDescriptor] {
+        unsafe {
+            slice::from_raw_parts_mut(self.description, self.size as usize)
+        }
+    }
+
+    pub fn descriptors(&self) -> &[VirtualQueueDescriptor] {
+        unsafe {
+            slice::from_raw_parts(self.description, self.size as usize)
+        }
+    }
 }
 
 #[repr(C)]
@@ -45,4 +70,28 @@ pub trait Ring {
 pub struct RingWrapper<T: Ring> {
     ring: T,
     size: u16,
+}
+
+impl Ring for VirtualQueueAvailable {
+    type Element = u16;
+
+    fn ring(&self) -> *const u16 {
+        self.ring.as_ptr()
+    }
+
+    fn mut_ring(&mut self) -> *mut u16 {
+        self.ring.as_mut_ptr()
+    }
+}
+
+impl Ring for VirtualQueueUsed {
+    type Element = VirtualQueueUsedElement;
+
+    fn ring(&self) -> *const VirtualQueueUsedElement {
+        self.ring.as_ptr()
+    }
+
+    fn mut_ring(&mut self) -> *mut VirtualQueueUsedElement {
+        self.ring.as_mut_ptr()
+    }
 }
