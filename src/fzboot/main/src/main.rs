@@ -105,12 +105,7 @@ mod test {
     use fzboot::println;
 
     pub fn test() {
-        println!("Goto");
-        assert_eq!(1, 1);
-    }
-
-    pub fn bobi() {
-        println!("Bobi");
+        println!("Basic test");
         assert_eq!(1, 1);
     }
 
