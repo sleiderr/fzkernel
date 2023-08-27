@@ -1,10 +1,17 @@
 use core::mem;
 
-use crate::io::{inl, outl};
+use crate::{
+    drivers::pci::device::PCIDevice,
+    io::{inl, outl},
+    println,
+};
+
+pub mod device;
 
 /// Builds the [`DeviceClass`] enum containing known PCI device classes.
 macro_rules! pci_device_class_def {
     ($( ($class: literal, $name: ident, $desc: tt)), *) => {
+        #[derive(Debug, Clone, Copy)]
         pub enum DeviceClass {
             $(
             #[doc = $desc]
@@ -510,12 +517,14 @@ pci_device_class_def!(
 /// The first 16 bytes of the header are common to every layout, and the last 48 bytes can vary
 /// depending on the type of the entry.
 #[repr(C)]
+#[derive(Debug)]
 pub struct PCIHeader {
     common: PCICommonHeader,
     var: PCIHeaderVar,
 }
 
 /// Various layout for the second part of the PCI Header
+#[derive(Debug)]
 pub enum PCIHeaderVar {
     /// Oh header type
     Type0(PCIHeaderType0),
@@ -529,6 +538,7 @@ pub enum PCIHeaderVar {
 
 /// Basic PCI specific header layout (00h)
 #[repr(C)]
+#[derive(Debug)]
 pub struct PCIHeaderType0 {
     /// Base address #0
     ///
@@ -537,7 +547,7 @@ pub struct PCIHeaderType0 {
     /// BAR registers that maps into I/O space are always 32-bits wide, with bit 1 reserved.
     ///
     /// BAR registers that maps into Memory space can be either 32-bits wide or 64-bits wide. If
-    /// bits `[1::2]` are 00h, the register is 32-bits wide, if they are 10h, the register is
+    /// bits `[1::2]` are 00b, the register is 32-bits wide, if they are 10b, the register is
     /// 64-bits wide.
     ///
     /// `Bit 3`: Specifies whether the data is prefetchable or not. It can be set if there are no
@@ -756,7 +766,7 @@ pub struct PCIHeaderType0 {
     /// ROM are encoded in this register.
     ///
     /// This behaves like a BAR, but the encoding of the bottom bits is different. The upper 21
-    /// bits correspond to the upper 21 bits of the expansiion ROM base address.
+    /// bits correspond to the upper 21 bits of the expansion ROM base address.
     ///
     /// The address space required can be obtained by writing 1s to the address portion of the
     /// register and then reading the value back.
@@ -795,6 +805,7 @@ pub struct PCIHeaderType0 {
 
 /// PCI-PCI bridge header layout (type 01h)
 #[repr(C)]
+#[derive(Debug)]
 pub struct PCIHeaderType1 {
     /// Base address #0
     ///
@@ -1009,6 +1020,7 @@ pub struct PCIHeaderType1 {
 
 /// CardBus bridge header (type 02h)
 #[repr(C)]
+#[derive(Debug)]
 pub struct PCIHeaderType2 {
     cardbus_sock_base_addr: u32,
     offset_cap_list: u8,
@@ -1036,6 +1048,7 @@ pub struct PCIHeaderType2 {
 
 /// Common part of the Configuration Space Header
 #[repr(C)]
+#[derive(Debug)]
 pub struct PCICommonHeader {
     /// Identifies the manufacturer of the device.
     vendor_id: u16,
@@ -1161,7 +1174,6 @@ pub fn pci_enumerate_traversal() {
 /// Checks if the function is a PCI to PCI bridge, and checks the secondary bus of the bridge.
 pub(super) fn pci_function_secbus_check(bus: u8, device: u8, function: u8) {
     let header = PCIHeader::read(bus, device, function);
-
     if !header.is_present() {
         return;
     }
@@ -1240,4 +1252,26 @@ pub fn pci_read_long(bus: u8, device: u8, func: u8, offset: u8) -> u32 {
     // `0xcfc` is the `CONFIG_DATA` I/O port, it contains the data to transfert to or from the
     // `CONFIG_DATA` register.
     inl(0xcfc)
+}
+
+/// Writes a `long` ([`u32`]) to the PCI Configuration Space.
+pub fn pci_write_long(bus: u8, device: u8, func: u8, offset: u8, data: u32) {
+    let mut config_address: u32 = 0;
+
+    config_address |= 0x80000000;
+    config_address |= (bus as u32) << 16;
+    config_address |= (device as u32) << 11;
+    config_address |= (func as u32) << 8;
+
+    // Writes must be 32-bits aligned, so we set the lowest 2 bits to zero, so that we access a
+    // multiple of 4 bytes (a `long`, or `dword`).
+    config_address |= ((offset as u32) << 2) & 0xfc;
+
+    // `0xcf8` is the `CONFIG_ADDRESS` I/O port, used to specify the configuration address required
+    // to be written.
+    outl(0xcf8, config_address);
+
+    // `0xcfc` is the `CONFIG_DATA` I/O port, it contains the data to transfert to or from the
+    // `CONFIG_DATA` register.
+    outl(0xcfc, data);
 }
