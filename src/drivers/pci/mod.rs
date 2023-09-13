@@ -1,10 +1,6 @@
 use core::mem;
 
-use crate::{
-    drivers::pci::device::PCIDevice,
-    io::{inl, outl},
-    println,
-};
+use crate::io::{inl, outl};
 
 pub mod device;
 

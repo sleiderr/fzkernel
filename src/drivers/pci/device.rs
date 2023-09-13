@@ -40,7 +40,7 @@ impl<'d> core::fmt::Display for PCIDevice<'d> {
 /// I/O controller memory-mapped address space.
 ///
 /// Implements [`Deref<Target = [u8]>`](core::ops::Deref) and [`DerefMut`](core::ops::DerefMut),
-/// and therefore all usual methods for slices can also be used with `PCIMappedMemory` : `&PCIMappedMemory`
+/// and therefore all usual methods for slices can also be used with `PCIMappedMemory`, as `&PCIMappedMemory`
 /// coerces to `&[u8]`.
 pub struct PCIMappedMemory<'d> {
     /// Memory segment mapped to the I/O controller memory.
@@ -177,7 +177,292 @@ impl<'d> MappedRegister<'d> {
     }
 }
 
+pub(super) const COMMAND_WOFFSET: u8 = 0x2;
+pub(super) const STATUS_WOFFSET: u8 = 0x2;
+
+pub(super) const IO_SPACE_COMMAND_BOFFSET: u8 = 0;
+pub(super) const MEM_SPACE_COMMAND_BOFFSET: u8 = 1;
+pub(super) const BUS_MSTR_COMMAND_BOFFSET: u8 = 2;
+pub(super) const SPEC_CYC_COMMAND_BOFFSET: u8 = 3;
+pub(super) const MEM_WR_INVAL_COMMAND_BOFFSET: u8 = 4;
+pub(super) const VGA_PAL_SNOOP_COMMAND_BOFFSET: u8 = 5;
+pub(super) const PAR_ERR_RESP_COMMAND_BOFFSET: u8 = 6;
+pub(super) const STEP_CTRL_COMMAND_BOFFSET: u8 = 7;
+pub(super) const SERR_COMMAND_BOFFSET: u8 = 8;
+pub(super) const FAST_B2B_TRANS_COMMAND_BOFFSET: u8 = 9;
+
+pub(super) const CAP_LIST_STATUS_BOFFSET: u8 = 4;
+pub(super) const MHZ66_CAP_STATUS_BOFFSET: u8 = 5;
+pub(super) const FAST_B2B_CAP_STATUS_BOFFSET: u8 = 7;
+pub(super) const MASTER_DATA_PAR_STATUS_BOFFSET: u8 = 8;
+pub(super) const DEVSEL_TIM_STATUS_BOFFSET: u8 = 9;
+pub(super) const SIG_TARGET_ABORT_STATUS_BOFFSET: u8 = 0xB;
+pub(super) const REC_TARGET_ABORT_STATUS_BOFFSET: u8 = 0xC;
+pub(super) const REC_MASTER_ABORT_STATUS_BOFFSET: u8 = 0xD;
+pub(super) const SIG_SYS_ERROR_STATUS_BOFFSET: u8 = 0xE;
+pub(super) const PAR_ERROR_STATUS_BOFFSET: u8 = 0xF;
+
+pub enum DevselTiming {
+    Fast,
+    Medium,
+    Slow,
+}
+
 impl<'d> PCIDevice<'d> {
+    /// Reads a `long` ([`u32`])  from this device PCI Configuration Space.
+    fn read_confl(&self, offset: u8) -> u32 {
+        pci_read_long(self.bus, self.device, self.function, offset)
+    }
+
+    /// Writes a `long` ([`u32`]) to this device PCI Configuration Space
+    unsafe fn write_confl(&mut self, offset: u8, data: u32) {
+        pci_write_long(self.bus, self.device, self.function, offset, data);
+    }
+
+    /// Reads the content of this device's Status register.`
+    fn read_status(&self) -> u16 {
+        ((self.read_confl(STATUS_WOFFSET) & 0xffff0000) >> 16) as u16
+    }
+
+    /// Clears a flag in this device's Status register.
+    fn clear_status_flg(&mut self, offset: u8) {
+        let curr_status = self.read_status();
+        let new_status = curr_status & !(1 << offset);
+
+        unsafe { self.write_status(new_status) }
+    }
+
+    /// Updates the content of this device's Status register.
+    unsafe fn write_status(&mut self, data: u16) {
+        let curr_statusl = self.read_confl(STATUS_WOFFSET);
+        let new_statusl = (curr_statusl & 0xffff) | (data as u32) << 16;
+
+        self.write_confl(STATUS_WOFFSET, new_statusl)
+    }
+
+    /// Reads the content of this device's Command register.
+    fn read_command(&self) -> u16 {
+        (self.read_confl(COMMAND_WOFFSET) & 0xffff) as u16
+    }
+
+    /// Updates the status of an entry in this device's Command register.
+    fn update_command(&mut self, offset: u8, new_state: bool) -> Result<(), ()> {
+        let curr_command = self.read_command();
+        let new_command = if new_state {
+            curr_command | (1 << offset)
+        } else {
+            curr_command & (!(1 << offset))
+        };
+
+        unsafe { self.write_command(new_command) };
+
+        ((self.read_command() & (1 << offset) != 0) == new_state)
+            .then_some(())
+            .ok_or(())
+    }
+
+    /// Updates the content of thus device's Command register.
+    unsafe fn write_command(&mut self, data: u16) {
+        let curr_commandl = self.read_confl(COMMAND_WOFFSET);
+        let new_commandl = (curr_commandl & 0xffff0000) | data as u32;
+
+        self.write_confl(COMMAND_WOFFSET, new_commandl);
+    }
+
+    /// Disable this PCI Device
+    ///
+    /// # Safety
+    ///
+    /// This `PCIDevice` must link to a valid and present PCI Device.
+    pub unsafe fn disable(&mut self) {
+        self.write_command(0);
+    }
+
+    /// Checks if a capability linked list is available.
+    pub fn capabilities_list_available(&self) -> bool {
+        self.read_status() & (1 << CAP_LIST_STATUS_BOFFSET) != 0
+    }
+
+    /// Checks if the device is capable of running at 66MHz.
+    pub fn device_66mhz_support(&self) -> bool {
+        self.read_status() & (1 << MHZ66_CAP_STATUS_BOFFSET) != 0
+    }
+
+    /// Checks if the target is capable of accepting fast back-to-back transactions when the
+    /// transactions are not to the same agent.
+    pub fn fast_b2b_transactions_support(&self) -> bool {
+        self.read_status() & (1 << FAST_B2B_CAP_STATUS_BOFFSET) != 0
+    }
+
+    /// Slowest time that a device will assert `DEVSEL#` for any bus command.
+    pub fn devsel_timing(&self) -> DevselTiming {
+        match (self.read_status()
+            & ((1 << DEVSEL_TIM_STATUS_BOFFSET) | (1 << (DEVSEL_TIM_STATUS_BOFFSET + 1))))
+            >> DEVSEL_TIM_STATUS_BOFFSET
+        {
+            0b00 => DevselTiming::Fast,
+            0b01 => DevselTiming::Medium,
+            _ => DevselTiming::Slow,
+        }
+    }
+
+    /// Checks if target device terminated a transaction with 'Target-Abort'
+    pub fn target_abort_terminated(&self) -> bool {
+        self.read_status() & (1 << SIG_TARGET_ABORT_STATUS_BOFFSET) != 0
+    }
+
+    /// Clears the target device `Target-Abort` transaction termination bit.
+    pub fn clear_target_abort_terminated(&mut self) {
+        self.clear_status_flg(SIG_TARGET_ABORT_STATUS_BOFFSET);
+    }
+
+    /// Checks if master device's transaction was terminated with `Target-Abort.
+    pub fn received_target_abort(&self) -> bool {
+        self.read_status() & (1 << REC_TARGET_ABORT_STATUS_BOFFSET) != 0
+    }
+
+    /// Clears the master device's `Target-Abort` transaction termination bit.
+    pub fn clear_received_target_abort(&mut self) {
+        self.clear_status_flg(REC_TARGET_ABORT_STATUS_BOFFSET);
+    }
+
+    /// Checks if master device's transaction was terminated with `Target-Abort.
+    pub fn received_master_abort(&self) -> bool {
+        self.read_status() & (1 << REC_MASTER_ABORT_STATUS_BOFFSET) != 0
+    }
+
+    /// Clears the master device's `Target-Abort` transaction termination bit.
+    pub fn clear_received_master_abort(&mut self) {
+        self.clear_status_flg(REC_MASTER_ABORT_STATUS_BOFFSET);
+    }
+
+    /// Checks if `SERR#` was asserted.
+    ///
+    /// `SERR#` reports address parity errors, data parity errors on special cycle commands, or any
+    /// other system errors that may have serious consequences.
+    pub fn signaled_system_error(&self) -> bool {
+        self.read_status() & (1 << SIG_SYS_ERROR_STATUS_BOFFSET) != 0
+    }
+
+    /// Clears the `SERR#` asserted bit.
+    pub fn clear_signaled_system_error(&mut self) {
+        self.clear_status_flg(SIG_SYS_ERROR_STATUS_BOFFSET);
+    }
+
+    /// Checks if the device detected a parity error.
+    pub fn parity_error(&self) -> bool {
+        self.read_status() & (1 << PAR_ERROR_STATUS_BOFFSET) != 0
+    }
+
+    /// Clears the parity error detection bit.
+    pub fn clear_parity_error(&mut self) {
+        self.clear_status_flg(PAR_ERROR_STATUS_BOFFSET);
+    }
+
+    /// Checks if the device responds to I/O space accesses.
+    pub fn io_space_access(&self) -> bool {
+        self.read_command() & (1 << IO_SPACE_COMMAND_BOFFSET) != 0
+    }
+
+    /// Sets if the device should respond to I/O space accesses.
+    pub fn set_io_space_access(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(IO_SPACE_COMMAND_BOFFSET, new_state)
+    }
+
+    /// Checks if the device responds to Memory Space accesses.
+    pub fn memory_space_access(&self) -> bool {
+        self.read_command() & (1 << MEM_SPACE_COMMAND_BOFFSET) != 0
+    }
+
+    /// Sets if the device should reponse to Memory Space accesses.
+    pub fn set_memory_space_access(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(MEM_SPACE_COMMAND_BOFFSET, new_state)
+    }
+
+    /// Checks if the device can act as a master on the PCI bus.
+    pub fn bus_master(&self) -> bool {
+        self.read_command() & (1 << BUS_MSTR_COMMAND_BOFFSET) != 0
+    }
+
+    /// Sets if the device can act as a master on the PCI bus.
+    pub fn set_bus_master(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(BUS_MSTR_COMMAND_BOFFSET, new_state)
+    }
+
+    /// Should the device monitor Special Cycle operations.
+    pub fn special_cycle(&self) -> bool {
+        self.read_command() & (1 << SPEC_CYC_COMMAND_BOFFSET) != 0
+    }
+
+    /// Sets if the device should monitor Special Cycle operations.
+    pub fn set_special_cycle(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(SPEC_CYC_COMMAND_BOFFSET, new_state)
+    }
+
+    /// Checks if the `Memory Write and Invalidate` command is available.
+    ///
+    /// This must be implemented for master devices that can generate the `Memory Write and
+    /// Invalidate` command.
+    pub fn mem_write_invalidate(&self) -> bool {
+        self.read_command() & (1 << MEM_WR_INVAL_COMMAND_BOFFSET) != 0
+    }
+
+    /// Enables / disables the support of the `Memory Write and Invalidate` command.
+    pub fn set_mem_write_invalidate(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(MEM_WR_INVAL_COMMAND_BOFFSET, new_state)
+    }
+
+    /// Checks if palette snooping is enabled (implemented for VGA devices)
+    pub fn vga_palette_snoop(&self) -> bool {
+        self.read_command() & (1 << VGA_PAL_SNOOP_COMMAND_BOFFSET) != 0
+    }
+
+    /// Enables / disables VGA palette snooping.
+    pub fn set_vga_palette_snoop(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(VGA_PAL_SNOOP_COMMAND_BOFFSET, new_state)
+    }
+
+    /// Should the device take its normal action on parity error.
+    pub fn parity_error_response(&self) -> bool {
+        self.read_command() & (1 << PAR_ERR_RESP_COMMAND_BOFFSET) != 0
+    }
+
+    /// Enables / disables normal action on parity error.
+    pub fn set_parity_error_response(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(PAR_ERR_RESP_COMMAND_BOFFSET, new_state)
+    }
+
+    /// Checks if device does address / data stepping.
+    pub fn stepping_control(&self) -> bool {
+        self.read_command() & (1 << STEP_CTRL_COMMAND_BOFFSET) != 0
+    }
+
+    /// Enables / disables address / data stepping.
+    pub fn set_stepping_control(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(STEP_CTRL_COMMAND_BOFFSET, new_state)
+    }
+
+    /// Checks if `SERR#` driver is enabled.
+    pub fn serr_driver(&self) -> bool {
+        self.read_command() & (1 << SERR_COMMAND_BOFFSET) != 0
+    }
+
+    /// Enables / disables `SERR#` driver.
+    pub fn set_serr_driver(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(SERR_COMMAND_BOFFSET, new_state)
+    }
+
+    /// Can master do fast back-to-back transactions to different device=;
+    pub fn fast_b2b_transactions(&self) -> bool {
+        self.read_command() & (1 << FAST_B2B_TRANS_COMMAND_BOFFSET) != 0
+    }
+
+    /// Enables / disables the capability of master to generate fast back-to-back transactions to
+    /// different agents.
+    pub fn set_fast_b2b_transactions(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(FAST_B2B_TRANS_COMMAND_BOFFSET, new_state)
+    }
+
     /// Loads a PCI device information into a `PCIDevice` structure.
     pub fn load(bus: u8, device: u8, function: u8) -> Self {
         let header = PCIHeader::read(bus, device, function);
