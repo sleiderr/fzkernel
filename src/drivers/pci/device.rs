@@ -137,11 +137,11 @@ impl<'d> MappedRegister<'d> {
                 pci_write_long(bus, device, function, entry_offset, 0xFFFFFFFF);
                 let mut bar_size = pci_read_long(bus, device, function, entry_offset);
 
-                bar_size &= !0x1111;
+                bar_size &= !0b1111;
                 let seg_size = !bar_size + 1;
                 pci_write_long(bus, device, function, entry_offset, bar);
 
-                let seg_base = bar & !0x1111;
+                let seg_base = bar & !0b1111;
 
                 let mapped_mem = unsafe {
                     PCIMappedMemory::from_raw(seg_base as *mut u8, seg_size as usize, 32)
@@ -161,10 +161,10 @@ impl<'d> MappedRegister<'d> {
                 pci_write_long(bus, device, function, entry_offset, bar);
                 pci_write_long(bus, device, function, entry_offset + 1, bar_2);
 
-                bar_size &= !0x1111;
+                bar_size &= !0b1111;
                 let seg_size = !bar_size + 1;
 
-                let seg_base = ((bar_2 as u64) << 32) + (bar & !0x1111) as u64;
+                let seg_base = ((bar_2 as u64) << 32) + (bar & !0b1111) as u64;
 
                 let mapped_mem = unsafe {
                     PCIMappedMemory::from_raw(seg_base as *mut u8, seg_size as usize, 64)
