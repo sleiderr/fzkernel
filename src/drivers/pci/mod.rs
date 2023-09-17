@@ -5,7 +5,9 @@ use conquer_once::spin::OnceCell;
 
 use crate::{
     drivers::pci::device::{PCIDevice, PCIDevices},
+    info,
     io::{inl, outl},
+    println,
 };
 
 pub mod device;
@@ -404,8 +406,7 @@ pci_device_class_def!(
     (
         0x0C0320,
         USB2IEHCISpec,
-        "USB 2 host controller following the Intel
-     Enhanced Host Controller Interface Specification"
+        "USB 2 host controller (following the Intel Enhanced Host Controller Interface Specification)"
     ),
     (
         0x0C0330,
@@ -1156,7 +1157,14 @@ impl PCIHeader {
 }
 
 pub fn pci_enumerate() {
+    info!("pci", "beginning PCI enumeration");
     PCI_DEVICES.init_once(pci_enumerate_traversal);
+
+    let devices = unsafe { PCI_DEVICES.get_unchecked() };
+
+    for device in devices.iter() {
+        info!("pci", "found {:}", device);
+    }
 }
 
 /// Performs a recursive PCI devices discovery.

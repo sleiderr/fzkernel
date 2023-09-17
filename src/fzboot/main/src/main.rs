@@ -9,8 +9,8 @@ extern crate alloc;
 
 use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
-use fzboot::io::pic::PIC;
 use fzboot::x86::idt::{load_idt, GateDescriptor, GateType, IDTDescriptor, SegmentSelector, Table};
+use fzboot::{drivers::pci::pci_enumerate, io::pic::PIC};
 use fzboot::{
     info,
     io::acpi::{acpi_init, hpet::hpet_clk_init},
@@ -50,6 +50,7 @@ pub fn boot_main() -> ! {
     acpi_init();
     clock_init();
     interrupts_init();
+    pci_enumerate();
 
     loop {}
 }
