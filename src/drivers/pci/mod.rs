@@ -1,8 +1,17 @@
 use core::mem;
 
-use crate::io::{inl, outl};
+use alloc::vec::Vec;
+use conquer_once::spin::OnceCell;
+
+use crate::{
+    drivers::pci::device::{PCIDevice, PCIDevices},
+    io::{inl, outl},
+};
 
 pub mod device;
+
+/// List of available PCI devices, after initial enumeration
+pub static PCI_DEVICES: OnceCell<PCIDevices> = OnceCell::uninit();
 
 /// Builds the [`DeviceClass`] enum containing known PCI device classes.
 macro_rules! pci_device_class_def {
@@ -1146,15 +1155,20 @@ impl PCIHeader {
     }
 }
 
+pub fn pci_enumerate() {
+    PCI_DEVICES.init_once(pci_enumerate_traversal);
+}
+
 /// Performs a recursive PCI devices discovery.
 ///
 /// Assumes that PCI bridges between buses were properly set up beforehand.
-pub fn pci_enumerate_traversal() {
+pub fn pci_enumerate_traversal() -> PCIDevices {
+    let mut list = Vec::new();
     let pci_host_0 = PCIHeader::read(0, 0, 0);
 
     if !pci_host_0.is_multifunction() {
         // Only one PCI host controller
-        pci_bus_scan(0);
+        pci_bus_scan(0, &mut list);
     } else {
         // Multiple PCI host controller
         for func in 1..8 {
@@ -1162,13 +1176,20 @@ pub fn pci_enumerate_traversal() {
             if !pci_aux_host.is_present() {
                 break;
             }
-            pci_bus_scan(func);
+            pci_bus_scan(func, &mut list);
         }
     }
+
+    PCIDevices::from_devices(list)
 }
 
 /// Checks if the function is a PCI to PCI bridge, and checks the secondary bus of the bridge.
-pub(super) fn pci_function_secbus_check(bus: u8, device: u8, function: u8) {
+pub(super) fn pci_function_secbus_check(
+    bus: u8,
+    device: u8,
+    function: u8,
+    list: &mut Vec<PCIDevice>,
+) {
     let header = PCIHeader::read(bus, device, function);
     if !header.is_present() {
         return;
@@ -1177,23 +1198,25 @@ pub(super) fn pci_function_secbus_check(bus: u8, device: u8, function: u8) {
     if (header.common.class_code == 0x6) && (header.common.subclass == 0x4) {
         if let PCIHeaderVar::Type1(bridge) = header.var {
             let secondary_bus = bridge.secondary_bus;
-            pci_bus_scan(secondary_bus);
+            pci_bus_scan(secondary_bus, list);
         }
     }
+
+    list.push(PCIDevice::load(bus, device, function));
 }
 
 /// Scans every slot of one `bus` for connected devices.
-pub(super) fn pci_bus_scan(bus: u8) {
+pub(super) fn pci_bus_scan(bus: u8, list: &mut Vec<PCIDevice>) {
     for device in 0..32 {
         let header = PCIHeader::read(bus, device, 0);
         if !header.is_present() {
             continue;
         }
-        pci_function_secbus_check(bus, device, 0);
+        pci_function_secbus_check(bus, device, 0, list);
 
         if header.is_multifunction() {
             for func in 1..8 {
-                pci_function_secbus_check(bus, device, func);
+                pci_function_secbus_check(bus, device, func, list);
             }
         }
     }
@@ -1203,20 +1226,24 @@ pub(super) fn pci_bus_scan(bus: u8) {
 ///
 /// The `pci_enumerate_traversal` will be quicker if available, as it avoids checking for devices
 /// that we know cannot be there.
-pub fn pci_enumerate_all() {
+pub fn pci_enumerate_all() -> PCIDevices {
+    let mut list = Vec::new();
     for bus in 0..=255 {
         for device in 0..32 {
-            pci_device_check(bus, device);
+            pci_device_check(bus, device, &mut list);
         }
     }
+
+    PCIDevices::from_devices(list)
 }
 
 /// Checks if a device is present, and enumerates its functions.
-pub(super) fn pci_device_check(bus: u8, device: u8) {
+pub(super) fn pci_device_check(bus: u8, device: u8, list: &mut Vec<PCIDevice<'static>>) {
     let header = PCIHeader::read(bus, device, 0);
     if !header.is_present() {
         return;
     }
+    list.push(PCIDevice::load(bus, device, 0));
 
     if header.is_multifunction() {
         for func in 1..8 {
@@ -1224,6 +1251,7 @@ pub(super) fn pci_device_check(bus: u8, device: u8) {
             if !header.is_present() {
                 continue;
             }
+            list.push(PCIDevice::load(bus, device, func));
         }
     }
 }

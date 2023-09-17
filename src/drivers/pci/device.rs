@@ -1,9 +1,58 @@
 use core::{mem, slice};
 
+use alloc::vec::Vec;
+
 use crate::drivers::pci::{pci_read_long, pci_write_long, DeviceClass, PCICommonHeader, PCIHeader};
 
 pub const BAR_32_WIDTH: u32 = 0x00;
 pub const BAR_64_WIDTH: u32 = 0x02;
+
+/// `PCIDevices` holds a vector of [`PCIDevice`].
+///
+/// This is the base component of the PCI device inventory, obtained after the initial enumeration.
+/// It offers several methods for easier device lookup (based on class for instance).
+#[derive(Debug)]
+pub struct PCIDevices {
+    devices: Vec<PCIDevice<'static>>,
+}
+
+impl core::ops::Deref for PCIDevices {
+    type Target = [PCIDevice<'static>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.devices
+    }
+}
+
+impl core::ops::DerefMut for PCIDevices {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.devices
+    }
+}
+
+impl PCIDevices {
+    pub fn from_devices(devices: Vec<PCIDevice<'static>>) -> Self {
+        Self { devices }
+    }
+
+    /// Retrieve the PCI devices corresponding to a given [`DeviceClass`].
+    ///
+    /// Returns a new `PCIDevices` containing all devices matching the provided [`DeviceClass`].
+    pub fn get_by_class(&self, class: DeviceClass) -> PCIDevices {
+        PCIDevices::from_devices(
+            self.devices
+                .iter()
+                .filter_map(|dev| {
+                    (u32::from(dev.class) == u32::from(class)).then_some(PCIDevice::load(
+                        dev.bus,
+                        dev.device,
+                        dev.function,
+                    ))
+                })
+                .collect(),
+        )
+    }
+}
 
 /// Internal representation of a PCI device.
 ///
@@ -48,6 +97,15 @@ pub struct PCIMappedMemory<'d> {
 
     /// Width of the memory addresses (32-bit or 64-bit).
     width: u8,
+}
+
+impl<'d> PCIMappedMemory<'d> {
+    pub unsafe fn copy_ref(&self) -> PCIMappedMemory<'d> {
+        PCIMappedMemory {
+            buffer: slice::from_raw_parts_mut(self.buffer.as_ptr() as *mut u8, self.buffer.len()),
+            width: self.width,
+        }
+    }
 }
 
 impl<'d> core::ops::Deref for PCIMappedMemory<'d> {
