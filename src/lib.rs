@@ -1,6 +1,7 @@
 #![feature(allow_internal_unstable)]
 #![feature(proc_macro_hygiene)]
 #![feature(naked_functions)]
+#![feature(pointer_byte_offsets)]
 #![no_std]
 #[macro_use]
 
