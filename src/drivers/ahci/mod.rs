@@ -1,7 +1,14 @@
 //! AHCI driver for `FrozenBoot`.
-use crate::drivers::pci::device::{MappedRegister, PCIDevice, PCIMappedMemory};
 
-pub const GHC_BOFFSET: u32 = 0x00;
+use crate::drivers::{
+    ahci::port::HBAPortRegister,
+    pci::device::{MappedRegister, PCIDevice, PCIMappedMemory},
+};
+
+pub(crate) mod port;
+
+pub const GHC_BOFFSET: isize = 0x00;
+pub const PORT_REG_OFFSET: isize = 0x100;
 
 /// Internal representation of an AHCI Controller (Advanced Host Controller Interface).
 ///
@@ -28,8 +35,17 @@ impl AHCIController {
 
     pub fn read_ghc(&self) -> &HBAGenericHostControl {
         unsafe {
-            &*(self.hba_mem.as_ptr().byte_offset(GHC_BOFFSET as isize)
-                as *const HBAGenericHostControl)
+            &*(self.hba_mem.as_ptr().byte_offset(GHC_BOFFSET) as *const HBAGenericHostControl)
+        }
+    }
+
+    pub fn read_port_register(&mut self, port: u8) -> &mut HBAPortRegister {
+        unsafe {
+            &mut *(self
+                .hba_mem
+                .as_ptr()
+                .byte_offset(PORT_REG_OFFSET + (port as isize) * 0x80)
+                as *mut HBAPortRegister)
         }
     }
 }
@@ -73,7 +89,8 @@ pub struct HBAGenericHostControl {
     pub bohc: u32,
 }
 
-macro_rules! hba_ghc_field {
+#[macro_export]
+macro_rules! hba_reg_field {
     ($name: tt, $offset: literal, $desc: tt, $field: tt, $getter: tt, $setter: tt) => {
         #[doc = $desc]
         pub(super) const $name: u32 = $offset;
@@ -167,7 +184,7 @@ impl HBAGenericHostControl {
     pub fn em_buf_offset(&self) -> u16 {
         ((self.em_loc & 0xff00) >> 16) as u16
     }
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_EM_STSMR,
         0,
         "Enclosure Management: Message Received",
@@ -175,7 +192,7 @@ impl HBAGenericHostControl {
         hba_em_mr,
         hba_em_mr_clear
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_EM_TM,
         8,
         "Enclosure Management: Transmit Message",
@@ -183,7 +200,7 @@ impl HBAGenericHostControl {
         hba_em_tm,
         hba_em_transmit
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_EM_RST,
         9,
         "Enclosure Management: Reset",
@@ -191,65 +208,65 @@ impl HBAGenericHostControl {
         hba_em_is_rst,
         hba_em_reset
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_EM_LED_SUPP,
         16,
         "LED Message Types support",
         em_ctl,
         hba_em_supp_led
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_EM_SAFTE_SUPP,
         17,
         "SAF-TE Enclosure Management Messages",
         em_ctl,
         hba_em_supp_safte
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_EM_SES2_SUPP,
         18,
         "SES-2 Enclosure Management Messages",
         em_ctl,
         hba_em_supp_ses2
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_EM_SGPIO_SUPP,
         19,
         "SGPIO Enclosure Management Messages",
         em_ctl,
         hba_em_supp_sgpio
     );
-    hba_ghc_field!(HBA_EM_SMB, 24, "Single Message Buffer", em_ctl, hba_em_smb);
-    hba_ghc_field!(
+    hba_reg_field!(HBA_EM_SMB, 24, "Single Message Buffer", em_ctl, hba_em_smb);
+    hba_reg_field!(
         HBA_EM_XMT,
         25,
         "Transmit Only",
         em_ctl,
         hba_em_transmit_only
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_EM_ALHD,
         26,
         "Activity LED Hardware Driven",
         em_ctl,
         hba_em_aled_hw_driven
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_EM_PM,
         27,
         "Port Multiplier Support",
         em_ctl,
         hba_em_pm_supp
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CCC_EN,
         0,
         "Command Completion Coalescing Enable",
         ccc_ctl,
         hba_ccc_enable
     );
-    hba_ghc_field!(HBA_BOHC_BOS, 0, "BIOS Owned Semaphore", bohc, hba_bohc_bos);
-    hba_ghc_field!(
+    hba_reg_field!(HBA_BOHC_BOS, 0, "BIOS Owned Semaphore", bohc, hba_bohc_bos);
+    hba_reg_field!(
         HBA_BOHC_OOS,
         1,
         "OS Owned Semaphore",
@@ -257,7 +274,7 @@ impl HBAGenericHostControl {
         hba_bohc_oos,
         hba_request_ownership
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_BOHC_SOOE,
         2,
         "SMI on OS Ownership Change Enable",
@@ -265,7 +282,7 @@ impl HBAGenericHostControl {
         hba_bohc_sooe,
         hba_enable_smi_on_ooc
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_BOHC_OOC,
         3,
         "OS Ownership Change",
@@ -273,50 +290,50 @@ impl HBAGenericHostControl {
         hba_os_ownership_change,
         hba_clear_oos_bit
     );
-    hba_ghc_field!(HBA_BOHC_BB, 4, "BIOS Busy", bohc, hba_bios_busy);
-    hba_ghc_field!(
+    hba_reg_field!(HBA_BOHC_BB, 4, "BIOS Busy", bohc, hba_bios_busy);
+    hba_reg_field!(
         HBA_CAP2_BOH,
         0,
         "BIOS/OS Handoff",
         cap2,
         hba_cap_bios_os_handoff
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP2_NVMP,
         1,
         "NVMHCI Present",
         cap2,
         hba_cap_nvmhci_present
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP2_APST,
         2,
         "Automatic Partial to Slumber Transitions",
         cap2,
         hba_cap_apst
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP2_SDS,
         3,
         "Supports Device Sleep",
         cap2,
         hba_cap_sup_device_slp
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP2_SADM,
         4,
         "Supports Aggressive Device Sleep Management",
         cap2,
         hba_cpa_sadm
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP2_DESO,
         5,
         "DevSleep Entrance from Slumber Only",
         cap2,
         hba_cap_deso
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_GCH_HR,
         0,
         "HBA Reset",
@@ -324,7 +341,7 @@ impl HBAGenericHostControl {
         hba_ghc_rst,
         perform_hba_ghc_rst
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_GHC_IE,
         1,
         "Interrupt Enable",
@@ -332,14 +349,14 @@ impl HBAGenericHostControl {
         hba_ghc_interrupt_enable,
         set_hba_ghc_interrupt_enable
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_GHC_MRSM,
         2,
         "MSI Revert to Single Message",
         ghc,
         hba_ghc_msi_revert_to_single
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_GHC_AE,
         31,
         "AHCI Enable",
@@ -347,119 +364,119 @@ impl HBAGenericHostControl {
         hba_ghc_ahci_enable,
         set_hba_ghc_ahci_enable
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_S64A,
         31,
         "Supports 64-bit Addressing",
         cap,
         hba_cap_64_addr_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SNCQ,
         30,
         "Supports Native Command Queuing",
         cap,
         hba_cap_native_cmdq_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SSNTF,
         29,
         "Supports SNotification Register",
         cap,
         hba_cap_snotif_reg_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SMPS,
         28,
         "Supports Mechanical Presence Switch",
         cap,
         hba_cap_mech_presw_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SSS,
         27,
         "Supports Staggered Spin-up",
         cap,
         hba_cap_ss_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SALP,
         26,
         "Supports Aggressive Link Power Management",
         cap,
         hba_cap_aggr_linkpow_mgmt_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SAL,
         25,
         "Supports Activity LED",
         cap,
         hba_cap_act_led_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SCLO,
         24,
         "Supports Command List Override",
         cap,
         hba_cap_cmd_list_override_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SAM,
         18,
         "Supports AHCI mode only",
         cap,
         hba_cap_ahci_only
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SPM,
         17,
         "Supports Port Multiplier",
         cap,
         hba_cap_port_mul_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_FBSS,
         16,
         "FIS-based Switching Supported",
         cap,
         hba_cap_fis_switching_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_PMD,
         15,
         "PIO Multiple DRQ Block",
         cap,
         hba_cap_pio_mul_drq_blk
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SSC,
         14,
         "Slumber State Capable",
         cap,
         hba_cap_slumber_state
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_PSC,
         13,
         "Partial State Capable",
         cap,
         hba_cap_partial_state
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_CCCS,
         7,
         "Command Completion Coalescing Supported",
         cap,
         hba_cap_cmd_compl_coalescing_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_EMS,
         6,
         "Enclosure Management Supported",
         cap,
         hba_cap_enclosure_mgmt_support
     );
-    hba_ghc_field!(
+    hba_reg_field!(
         HBA_CAP_SXS,
         5,
         "Supports External SATA",
