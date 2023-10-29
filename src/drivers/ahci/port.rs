@@ -1,7 +1,7 @@
 use crate::hba_reg_field;
 
 #[derive(Debug)]
-pub struct HBAPortRegister {
+pub struct HBAPort {
     /// Command List Base Address
     pub clb: u32,
 
@@ -22,6 +22,8 @@ pub struct HBAPortRegister {
 
     /// Command and Status
     pub cmd: u32,
+
+    pub reserved: u32,
 
     /// Task File data
     pub tfd: u32,
@@ -54,45 +56,61 @@ pub struct HBAPortRegister {
     pub devslp: u32,
 }
 
-impl HBAPortRegister {
+impl HBAPort {
     pub fn port_cmdlist_base_address(&self) -> *mut u8 {
-        (((self.clbu as u64) << 32) | (self.clb as u64)) as *mut u8
+        let clbu = unsafe { core::ptr::read_volatile(&self.clbu as *const u32) };
+        let clb = unsafe { core::ptr::read_volatile(&self.clb as *const u32) };
+        (((clbu as u64) << 32) | (clb as u64)) as *mut u8
     }
 
     pub fn port_fis_base_address(&self) -> *mut u8 {
-        (((self.fbu as u64) << 32) | (self.fb as u64)) as *mut u8
+        let fbu = unsafe { core::ptr::read_volatile(&self.fbu as *const u32) };
+        let fb = unsafe { core::ptr::read_volatile(&self.fb as *const u32) };
+        (((fbu as u64) << 32) | (fb as u64)) as *mut u8
     }
 
     pub fn port_icc_read(&self) -> AHCIInterfaceState {
-        (((self.cmd >> 28) & 0xf) as u8).into()
+        let cmd = unsafe { core::ptr::read_volatile(&self.cmd as *const u32) };
+        (((cmd >> 28) & 0xf) as u8).into()
     }
 
     pub fn port_icc_write(&mut self, cmd: AHCIInterfaceState) {
-        self.cmd = (self.cmd & !(0xf << 28)) | ((Into::<u8>::into(cmd) as u32) << 28);
+        unsafe {
+            let cmd_reg = core::ptr::read_volatile(&self.cmd as *const u32);
+            core::ptr::write_volatile(
+                &mut self.cmd as *mut u32,
+                (cmd_reg & !(0xf << 28)) | ((Into::<u8>::into(cmd) as u32) << 28),
+            );
+        }
     }
 
     pub fn port_current_command_slot(&self) -> u8 {
-        (((self.cmd) >> 7) & 0x1f) as u8
+        let cmd = unsafe { core::ptr::read_volatile(&self.cmd as *const u32) };
+        (((cmd) >> 7) & 0x1f) as u8
     }
 
     pub fn port_device_sig(&self) -> u32 {
-        self.sig
+        unsafe { core::ptr::read_volatile(&self.sig as *const u32) }
     }
 
     pub fn port_interface_state(&self) -> AHCIInterfaceState {
-        (((self.ssts >> 8) & 0xf) as u8).into()
+        let ssts = unsafe { core::ptr::read_volatile(&self.ssts as *const u32) };
+        (((ssts >> 8) & 0xf) as u8).into()
     }
 
     pub fn port_interface_speed(&self) -> AHCIInterfaceSpeed {
-        (((self.ssts >> 4) & 0xf) as u8).into()
+        let ssts = unsafe { core::ptr::read_volatile(&self.ssts as *const u32) };
+        (((ssts >> 4) & 0xf) as u8).into()
     }
 
     pub fn port_interface_device_detection(&self) -> AHCIDeviceDetection {
-        ((self.ssts & 0xf) as u8).into()
+        let ssts = unsafe { core::ptr::read_volatile(&self.ssts as *const u32) };
+        ((ssts & 0xf) as u8).into()
     }
 
     pub fn port_tag_status(&self, tag: u8) -> bool {
-        (self.sact & (1 << tag)) != 0
+        let sact = unsafe { core::ptr::read_volatile(&self.sact as *const u32) };
+        (sact & (1 << tag)) != 0
     }
 
     pub fn port_tag_set_outstanding(&mut self, tag: u8) {
@@ -104,19 +122,32 @@ impl HBAPortRegister {
     }
 
     pub fn port_command_set_issued(&mut self, tag: u8) {
-        self.ci = (self.ci & !(1 << tag)) | (1 << tag);
+        unsafe {
+            let ci = core::ptr::read_volatile(&self.ci as *const u32);
+            core::ptr::write_volatile(&mut self.ci as *mut u32, (ci & !(1 << tag)) | (1 << tag));
+        }
     }
 
     pub fn port_command_clear_issued(&mut self, tag: u8) {
-        self.ci &= !(1 << tag);
+        unsafe {
+            let ci = core::ptr::read_volatile(&self.ci as *const u32);
+            core::ptr::write_volatile(&mut self.ci as *mut u32, ci & !(1 << tag));
+        }
     }
 
     pub fn port_pm_notification_received(&self, port: u8) -> bool {
-        self.sntf & (1 << port) != 0
+        let sntf = unsafe { core::ptr::read_volatile(&self.sntf as *const u32) };
+        sntf & (1 << port) != 0
     }
 
     pub fn port_pm_notification_clear(&mut self, port: u8) {
-        self.sntf = (self.sntf & !(1 << port)) | (1 << port);
+        unsafe {
+            let sntf = core::ptr::read_volatile(&self.sntf as *const u32);
+            core::ptr::write_volatile(
+                &mut self.sntf as *mut u32,
+                (sntf & !(1 << port)) | (1 << port),
+            );
+        }
     }
 
     hba_reg_field!(

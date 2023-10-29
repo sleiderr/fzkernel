@@ -1,10 +1,13 @@
 //! AHCI driver for `FrozenBoot`.
 
 use crate::drivers::{
-    ahci::port::HBAPortRegister,
+    ahci::port::HBAPort,
     pci::device::{MappedRegister, PCIDevice, PCIMappedMemory},
 };
 
+pub mod ata_command;
+pub mod command;
+pub mod fis;
 pub(crate) mod port;
 
 pub const GHC_BOFFSET: isize = 0x00;
@@ -33,20 +36,42 @@ impl AHCIController {
         None
     }
 
-    pub fn read_ghc(&self) -> &HBAGenericHostControl {
+    pub fn read_ghc(&mut self) -> &mut HBAGenericHostControl {
         unsafe {
-            &*(self.hba_mem.as_ptr().byte_offset(GHC_BOFFSET) as *const HBAGenericHostControl)
+            &mut *(self.hba_mem.as_ptr().byte_offset(GHC_BOFFSET) as *mut HBAGenericHostControl)
         }
     }
 
-    pub fn read_port_register(&mut self, port: u8) -> &mut HBAPortRegister {
+    pub fn read_port_register(&mut self, port: u8) -> &mut HBAPort {
         unsafe {
             &mut *(self
                 .hba_mem
                 .as_ptr()
                 .byte_offset(PORT_REG_OFFSET + (port as isize) * 0x80)
-                as *mut HBAPortRegister)
+                as *mut HBAPort)
         }
+    }
+
+    /// Performs a HBA reset on the `AHCIController`.
+    ///
+    /// It performs the following actions:
+    ///
+    /// - Resets all HBA state machine variables to their reset values.
+    ///
+    /// - Resets `GHC.AE`, `GHC.IE` and the `IS` register to their reset values.
+    ///
+    /// - Clears `GHC.HR` to 0 after reset completion
+    ///
+    /// Transitions to `H:WaitForAhciEnable` state afterwards.
+    pub fn reset(&mut self) {
+        self.read_ghc().perform_hba_ghc_rst(true);
+    }
+
+    /// Enables AHCI support. Used after a controller reset.
+    ///
+    /// Transitions to `H:Idle` state afterwards.
+    pub fn enable(&mut self) {
+        self.read_ghc().set_hba_ghc_ahci_enable(true);
     }
 }
 
@@ -97,17 +122,20 @@ macro_rules! hba_reg_field {
 
         #[doc = $desc]
         pub fn $getter(&self) -> bool {
-            self.$field & (1 << Self::$name) != 0
+            unsafe {
+                core::ptr::read_volatile(&self.$field as *const u32) & (1 << Self::$name) != 0
+            }
         }
 
         #[doc = $desc]
         pub fn $setter(&mut self, new_state: bool) {
+            let field = unsafe { core::ptr::read_volatile(&self.$field as *const u32) };
             let new_field = if new_state {
-                self.$field | (1 << Self::$name)
+                field | (1 << Self::$name)
             } else {
-                self.$field & (!(1 << Self::$name))
+                field & (!(1 << Self::$name))
             };
-            self.$field = new_field;
+            unsafe { core::ptr::write_volatile(&mut self.$field as *mut u32, new_field) }
         }
     };
     ($name: tt, $offset: literal, $desc: tt, $field: tt, $getter: tt) => {
@@ -116,7 +144,9 @@ macro_rules! hba_reg_field {
 
         #[doc = $desc]
         pub fn $getter(&self) -> bool {
-            self.$field & (1 << Self::$name) != 0
+            unsafe {
+                core::ptr::read_volatile(&self.$field as *const u32) & (1 << Self::$name) != 0
+            }
         }
     };
     ($name: tt, $offset: literal, $desc: tt) => {
@@ -128,19 +158,19 @@ macro_rules! hba_reg_field {
 impl HBAGenericHostControl {
     /// Number of Ports.
     pub fn hba_number_ports(&self) -> u8 {
-        (1 + (self.cap & 0b11111)) as u8
+        (1 + (unsafe { core::ptr::read_volatile(&self.cap as *const u32) } & 0b11111)) as u8
     }
     /// Number of Command Slots
     pub fn hba_number_cmd_slots(&self) -> u8 {
-        (1 + ((self.cap >> 8) & 0b11111)) as u8
+        (1 + ((unsafe { core::ptr::read_volatile(&self.cap as *const u32) } >> 8) & 0b11111)) as u8
     }
     /// Indicates if a port within the controller has an interrupt pending.
     pub fn port_has_interrupt_pending(&self, x: u8) -> bool {
-        (self.isr & (1 << x)) != 0
+        (unsafe { core::ptr::read_volatile(&self.isr as *const u32) } & (1 << x)) != 0
     }
     /// Indicates if a port is exposed by the HBA.
     pub fn is_port_implemented(&self, x: u8) -> bool {
-        (self.pi & (1 << x)) != 0
+        (unsafe { core::ptr::read_volatile(&self.pi as *const u32) } & (1 << x)) != 0
     }
     /// Lists all ports exposed by the HBA.
     pub fn ports_implemented(&self) -> alloc::vec::Vec<u8> {
@@ -162,27 +192,27 @@ impl HBAGenericHostControl {
     }
     /// `hCccTimer` is reset to the `timeout_value` on the assertion of each CCC
     pub fn timeout_value(&self) -> u16 {
-        ((self.ccc_ctl & 0xff00) >> 16) as u16
+        ((unsafe { core::ptr::read_volatile(&self.ccc_ctl as *const u32) } & 0xff00) >> 16) as u16
     }
     /// Specifies the number of command completion that are necessary to cause a CCC interrupt.
     pub fn ccc_cmd_compl(&self) -> u8 {
-        ((self.ccc_ctl << 8) & 0xff) as u8
+        ((unsafe { core::ptr::read_volatile(&self.ccc_ctl as *const u32) } << 8) & 0xff) as u8
     }
     /// Specifies the interrupt used by the CCC feature.
     pub fn ccc_interrupt(&self) -> u8 {
-        ((self.ccc_ctl << 3) & 0b1111) as u8
+        ((unsafe { core::ptr::read_volatile(&self.ccc_ctl as *const u32) } << 3) & 0b1111) as u8
     }
     /// Indicates if a port is coalesced as part of the CCC feature.
     pub fn is_port_coalesced(&self, x: u8) -> bool {
-        (self.ccc_ports & (1 << x)) != 0
+        (unsafe { core::ptr::read_volatile(&self.ccc_ports as *const u32) } & (1 << x)) != 0
     }
     /// Specifies the size of the transmit message buffer area in DWORDs.
     pub fn em_buf_size(&self) -> u16 {
-        (self.em_loc & 0xff) as u16
+        (unsafe { core::ptr::read_volatile(&self.em_loc as *const u32) } & 0xff) as u16
     }
     /// The offset of the message buffer in DWORDs from the beginning of the `ABAR`
     pub fn em_buf_offset(&self) -> u16 {
-        ((self.em_loc & 0xff00) >> 16) as u16
+        ((unsafe { core::ptr::read_volatile(&self.em_loc as *const u32) } & 0xff00) >> 16) as u16
     }
     hba_reg_field!(
         HBA_EM_STSMR,
@@ -334,7 +364,7 @@ impl HBAGenericHostControl {
         hba_cap_deso
     );
     hba_reg_field!(
-        HBA_GCH_HR,
+        HBA_GHC_HR,
         0,
         "HBA Reset",
         ghc,
