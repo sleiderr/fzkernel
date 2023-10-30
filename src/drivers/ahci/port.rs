@@ -1,4 +1,6 @@
-use crate::hba_reg_field;
+use crate::{drivers::ahci::command::AHCICommandHeader, hba_reg_field};
+
+const HBA_PORT_TIMEOUT: u64 = 5000;
 
 #[derive(Debug)]
 pub struct HBAPort {
@@ -57,6 +59,45 @@ pub struct HBAPort {
 }
 
 impl HBAPort {
+    pub fn send_command(&mut self, cmd: AHCICommandHeader) {
+        let cmd_slot = self.find_command_slot();
+        self.update_command_list_entry(cmd_slot, cmd);
+
+        self.port_command_set_issued(cmd_slot as u8);
+    }
+
+    fn find_command_slot(&self) -> usize {
+        if let Some(slot) = (0..32)
+            .map(|i| self.get_command_list_entry(i))
+            .position(|s| s.command_fis_length() == 0)
+        {
+            return slot;
+        };
+
+        panic!("AHCI Timeout when trying to obtain a command slot");
+    }
+
+    fn command_list(&self) -> &[AHCICommandHeader; 32] {
+        unsafe { &mut *(self.port_cmdlist_base_address() as *mut [AHCICommandHeader; 32]) }
+    }
+
+    fn command_list_mut(&mut self) -> &mut [AHCICommandHeader; 32] {
+        unsafe { &mut *(self.port_cmdlist_base_address() as *mut [AHCICommandHeader; 32]) }
+    }
+
+    pub fn update_command_list_entry(&mut self, id: usize, new_entry: AHCICommandHeader) {
+        unsafe {
+            core::ptr::write_volatile(
+                &mut self.command_list_mut()[id] as *mut AHCICommandHeader,
+                new_entry,
+            )
+        }
+    }
+
+    pub fn get_command_list_entry(&self, id: usize) -> AHCICommandHeader {
+        unsafe { core::ptr::read_volatile(&self.command_list()[id] as *const AHCICommandHeader) }
+    }
+
     pub fn port_cmdlist_base_address(&self) -> *mut u8 {
         let clbu = unsafe { core::ptr::read_volatile(&self.clbu as *const u32) };
         let clb = unsafe { core::ptr::read_volatile(&self.clb as *const u32) };
