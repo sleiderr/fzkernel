@@ -2,6 +2,8 @@
 #![feature(proc_macro_hygiene)]
 #![feature(naked_functions)]
 #![feature(pointer_byte_offsets)]
+#![allow(dead_code)]
+#![allow(clippy::mut_from_ref)]
 #![no_std]
 #[macro_use]
 

@@ -1,6 +1,30 @@
+use super::fis::{DMASetupFIS, PIOSetupFIS, RegisterDeviceHostFIS, SetDeviceBitsFIS};
 use crate::{drivers::ahci::command::AHCICommandHeader, hba_reg_field};
 
 const HBA_PORT_TIMEOUT: u64 = 5000;
+
+pub const SATA_ATA_SIG: u32 = 0x101;
+pub const SATA_ATAPI_SIG: u32 = 0xEB140101;
+pub const SATA_SEMB_SIG: u32 = 0xC33C0101;
+pub const SATA_PM_SIG: u32 = 0x96690101;
+
+#[repr(packed)]
+pub struct HBAPortReceivedFIS {
+    pub dma_setup: DMASetupFIS,
+    pub padding1: u32,
+    pub pio_setup: PIOSetupFIS,
+    pub padding2: [u32; 3],
+    pub d2h_register: RegisterDeviceHostFIS,
+    pub padding3: u32,
+    pub set_device_bits: SetDeviceBitsFIS,
+    pub unknown: [u8; 64],
+}
+
+impl HBAPortReceivedFIS {
+    pub fn pio_setup_fis(&self) -> PIOSetupFIS {
+        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.pio_setup)) }
+    }
+}
 
 #[derive(Debug)]
 pub struct HBAPort {
@@ -59,7 +83,11 @@ pub struct HBAPort {
 }
 
 impl HBAPort {
-    pub fn send_command(&mut self, cmd: AHCICommandHeader) {
+    pub fn read_received_fis(&self) -> &HBAPortReceivedFIS {
+        unsafe { &*(self.port_fis_base_address() as *const HBAPortReceivedFIS) }
+    }
+
+    pub fn send_and_wait_command(&mut self, cmd: AHCICommandHeader) {
         let cmd_slot = self.find_command_slot();
         self.update_command_list_entry(cmd_slot, cmd);
 

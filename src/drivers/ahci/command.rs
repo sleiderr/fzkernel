@@ -271,6 +271,14 @@ pub struct AHCIPhysicalRegionDescriptor {
 }
 
 impl AHCIPhysicalRegionDescriptor {
+    pub fn new_empty() -> Self {
+        Self {
+            dba: 0,
+            dbau: 0,
+            reserved: 0,
+            di: 0,
+        }
+    }
     pub fn base_address(&self) -> *mut u8 {
         if self.dbau != 0 {
             (((self.dbau as u64) << 32) | (self.dba as u64)) as *mut u8

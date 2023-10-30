@@ -1,24 +1,77 @@
 //! AHCI driver for `FrozenBoot`.
 
-use crate::drivers::{
-    ahci::port::HBAPort,
-    pci::device::{MappedRegister, PCIDevice, PCIMappedMemory},
+use alloc::vec::Vec;
+use conquer_once::spin::OnceCell;
+
+use crate::{
+    drivers::{
+        ahci::{
+            device::SATADrive,
+            port::{AHCIDeviceDetection, HBAPort, SATA_ATA_SIG},
+        },
+        pci::{
+            device::{MappedRegister, PCIDevice, PCIMappedMemory},
+            DeviceClass, PCI_DEVICES,
+        },
+    },
+    info,
 };
 
 pub mod ata_command;
 pub mod command;
+pub mod device;
 pub mod fis;
 pub(crate) mod port;
 
 pub const GHC_BOFFSET: isize = 0x00;
 pub const PORT_REG_OFFSET: isize = 0x100;
 
+pub static AHCI_CONTROLLER: OnceCell<spin::Mutex<AHCIController>> = OnceCell::uninit();
+pub static SATA_DRIVES: OnceCell<Vec<spin::Mutex<SATADrive>>> = OnceCell::uninit();
+
+pub fn get_sata_drive(id: usize) -> &'static spin::Mutex<SATADrive> {
+    &SATA_DRIVES.get().unwrap()[id]
+}
+
+pub fn sata_drive_ids() -> core::ops::Range<usize> {
+    0..SATA_DRIVES.get().unwrap().len()
+}
+
+pub fn ahci_init() {
+    AHCI_CONTROLLER.init_once(|| {
+        spin::Mutex::new(unsafe {
+            AHCIController::try_from_pci_device(
+                &PCI_DEVICES
+                    .get()
+                    .unwrap()
+                    .get_by_class(DeviceClass::SATAControllerAHCI)[0],
+            )
+            .unwrap()
+        })
+    });
+    let ahci_ctrl = AHCI_CONTROLLER.get().unwrap().lock();
+    info!("ahci", "initializing AHCI controller");
+    info!(
+        "ahci",
+        "version = {}.{}    ports_count = {}    cmd_slots = {}",
+        ahci_ctrl.read_ghc().ahci_major_version(),
+        ahci_ctrl.read_ghc().ahci_minor_version(),
+        ahci_ctrl.read_ghc().hba_number_ports(),
+        ahci_ctrl.read_ghc().hba_number_cmd_slots(),
+    );
+    drop(ahci_ctrl);
+    unsafe {
+        let mut ahci_ctrl = AHCI_CONTROLLER.get_unchecked().lock();
+        AHCI_CONTROLLER.get_unchecked().force_unlock();
+        ahci_ctrl.load_sata_drives();
+    }
+}
+
 /// Internal representation of an AHCI Controller (Advanced Host Controller Interface).
 ///
 /// Follows Intel's AHCI Specifications 1.3.1
 /// The AHCI controller (or HBA, Host bus adapter) provides a standard interface to access SATA
 /// devices using PCI-related methods (memory-mapped registers).
-#[derive(Debug)]
 pub struct AHCIController {
     pub(super) hba_mem: PCIMappedMemory<'static>,
 }
@@ -36,13 +89,35 @@ impl AHCIController {
         None
     }
 
-    pub fn read_ghc(&mut self) -> &mut HBAGenericHostControl {
+    pub fn load_sata_drives(&mut self) {
+        let mut drives = alloc::vec![];
+        for port in self.read_ghc().ports_implemented() {
+            let port_reg = self.read_port_register(port);
+            if let AHCIDeviceDetection::DeviceDetectedPhysicalCom =
+                port_reg.port_interface_device_detection()
+            {
+                if port_reg.port_device_sig() == SATA_ATA_SIG {
+                    info!(
+                        "ahci",
+                        "found SATA device (id = {}    port = {})",
+                        drives.len(),
+                        port
+                    );
+                    let drive = spin::Mutex::new(SATADrive::build_from_ahci(port));
+                    drives.push(drive);
+                }
+            }
+        }
+        SATA_DRIVES.init_once(|| drives);
+    }
+
+    pub fn read_ghc(&self) -> &mut HBAGenericHostControl {
         unsafe {
             &mut *(self.hba_mem.as_ptr().byte_offset(GHC_BOFFSET) as *mut HBAGenericHostControl)
         }
     }
 
-    pub fn read_port_register(&mut self, port: u8) -> &mut HBAPort {
+    pub fn read_port_register(&self, port: u8) -> &mut HBAPort {
         unsafe {
             &mut *(self
                 .hba_mem
