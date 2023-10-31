@@ -5,21 +5,19 @@ use core::ptr::write_volatile;
 use crate::x86::int::{disable_interrupts, enable_interrupts};
 use modular_bitfield;
 use modular_bitfield::bitfield;
-use modular_bitfield::prelude::{B1, B11, B13, B2, B4, B8};
+use modular_bitfield::prelude::{B1, B13, B2, B4, B8};
 use modular_bitfield::BitfieldSpecifier;
-
-use crate::mem::gdt::SegmentDescriptor;
 
 pub enum GateType {
     TaskGate = 0b0101,
     InterruptGate16b = 0b0110,
     InterruptGate32b = 0b1110,
     TrapGate16b = 0b0111,
-    /// Most of the time you will chose a [GateType::TrapGate32b]
+    // Most of the time you will chose a `GateType::TrapGate32b`
     TrapGate32b = 0b1111,
 }
 
-/// [Table] contains entries that describes interrupts
+/// `Table` contains entries that describes interrupts
 /// It has the following structure :
 ///  ----------------------
 /// |   Address   |  Entry  |
@@ -88,7 +86,7 @@ impl Table {
 
     /// Adds a [GateDescriptor] to the [Table]
     pub fn add_gate(&mut self, gate: &GateDescriptor) {
-        self.entries.push(gate.clone());
+        self.entries.push(*gate);
     }
 }
 
@@ -150,7 +148,7 @@ impl GateDescriptor {
     pub fn set_offset(&mut self, offset: u32) {
         let bytes = offset.to_le_bytes();
         self.set_low_offset(
-            (*bytes.get(0).unwrap() as u16) + ((*bytes.get(1).unwrap() as u16) << 8),
+            (*bytes.first().unwrap() as u16) + ((*bytes.get(1).unwrap() as u16) << 8),
         );
         self.set_high_offset(
             (*bytes.get(2).unwrap() as u16) + ((*bytes.get(3).unwrap() as u16) << 8),
@@ -204,7 +202,7 @@ impl IDTDescriptor {
     /// Stores the [`IDTDescriptor`] to a given location in memory
     pub fn store(&self, offset: usize) {
         let ptr = offset as *mut IDTDescriptor;
-        unsafe { write_volatile(ptr, self.clone()) }
+        unsafe { write_volatile(ptr, *self) }
     }
 }
 
