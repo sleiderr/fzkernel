@@ -184,6 +184,7 @@ impl ops::Deref for RegisterHostDeviceFIS {
 /// Used by the device to update the contents of the host adapter's `Shadow Register Block`.
 /// This is the mechanism that devices indicate command completion status or otherwise change the
 /// contents of the host adapter's `Shadow Register Block`.
+#[derive(Debug)]
 pub struct RegisterDeviceHostFIS {
     dword1: u32,
     dword2: u32,
@@ -730,6 +731,7 @@ impl BISTActivateFIS {
 /// data transfers. For PIO data transfers, the device shall send to the host a PIO Setup - Device
 /// to Host FIS just before each and every data transfer FIS that is required to complete the data
 /// transfer.
+#[derive(Debug)]
 pub struct PIOSetupFIS {
     dword1: u32,
     dword2: u32,

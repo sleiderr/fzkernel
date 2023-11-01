@@ -9,7 +9,30 @@ pub(crate) const AHCI_CMDH_CLEAR_BUSY: u32 = 1 << 10;
 pub(crate) const AHCI_CMDH_PMP: u32 = 1 << 12;
 pub(crate) const AHCI_CMDH_PRDTL: u32 = 1 << 16;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
+pub struct AHCITransaction {
+    pub header: AHCICommandHeader,
+    byte_size: usize,
+}
+
+impl AHCITransaction {
+    pub fn new() -> Self {
+        Self {
+            header: AHCICommandHeader::new_empty(),
+            byte_size: 0,
+        }
+    }
+
+    pub fn set_byte_size(&mut self, size: usize) {
+        self.byte_size = size;
+    }
+
+    pub fn byte_size(&self) -> usize {
+        self.byte_size
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct AHCICommandHeader {
     /// Description Information
     pub di: u32,
