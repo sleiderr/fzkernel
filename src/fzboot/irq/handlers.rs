@@ -1,4 +1,5 @@
 use crate::io::pic::PIC;
+use crate::println;
 use core::arch::asm;
 use fzproc_macros::{interrupt, interrupt_default};
 
@@ -67,6 +68,11 @@ const CONTROLLER: PIC = PIC {
     slave_cmd_port: 0xA0,
     slave_data_port: 0xA1,
 };
+
+#[interrupt]
+pub fn _int0x73() {
+    crate::drivers::ahci::irq_entry();
+}
 
 #[interrupt_default]
 pub fn _int_default() {

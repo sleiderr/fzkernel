@@ -1,11 +1,12 @@
 //! AHCI driver for `FrozenBoot`.
 
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, vec::Vec};
 use conquer_once::spin::OnceCell;
 
 use crate::{
     drivers::{
         ahci::{
+            command::AHCITransaction,
             device::SATADrive,
             port::{AHCIDeviceDetection, HBAPort, SATA_ATA_SIG},
         },
@@ -14,7 +15,7 @@ use crate::{
             DeviceClass, PCI_DEVICES,
         },
     },
-    info,
+    error, info,
 };
 
 pub mod ata_command;
@@ -28,6 +29,8 @@ pub const PORT_REG_OFFSET: isize = 0x100;
 
 pub static AHCI_CONTROLLER: OnceCell<spin::Mutex<AHCIController>> = OnceCell::uninit();
 pub static SATA_DRIVES: OnceCell<Vec<spin::Mutex<SATADrive>>> = OnceCell::uninit();
+pub static SATA_COMMAND_QUEUE: spin::Mutex<BTreeMap<u8, AHCITransaction>> =
+    spin::Mutex::new(BTreeMap::new());
 
 pub fn get_sata_drive(id: usize) -> &'static spin::Mutex<SATADrive> {
     &SATA_DRIVES.get().unwrap()[id]
@@ -38,18 +41,22 @@ pub fn sata_drive_ids() -> core::ops::Range<usize> {
 }
 
 pub fn ahci_init() {
+    let pci_dev = &mut PCI_DEVICES
+        .get()
+        .unwrap()
+        .get_by_class(DeviceClass::SATAControllerAHCI)[0];
+
+    pci_dev.set_memory_space_access(true).unwrap();
+    pci_dev.set_interrupt_disable(false).unwrap();
+    pci_dev.set_bus_master(true).unwrap();
+
     AHCI_CONTROLLER.init_once(|| {
-        spin::Mutex::new(unsafe {
-            AHCIController::try_from_pci_device(
-                &PCI_DEVICES
-                    .get()
-                    .unwrap()
-                    .get_by_class(DeviceClass::SATAControllerAHCI)[0],
-            )
-            .unwrap()
-        })
+        spin::Mutex::new(unsafe { AHCIController::try_from_pci_device(pci_dev).unwrap() })
     });
-    let ahci_ctrl = AHCI_CONTROLLER.get().unwrap().lock();
+    let mut ahci_ctrl = AHCI_CONTROLLER.get().unwrap().lock();
+
+    ahci_ctrl.enable();
+    ahci_ctrl.read_ghc().set_hba_ghc_interrupt_enable(true);
     info!("ahci", "initializing AHCI controller");
     info!(
         "ahci",
@@ -65,6 +72,47 @@ pub fn ahci_init() {
         AHCI_CONTROLLER.get_unchecked().force_unlock();
         ahci_ctrl.load_sata_drives();
     }
+}
+
+pub fn irq_entry() {
+    unsafe { AHCI_CONTROLLER.get_unchecked().force_unlock() };
+    let ahci_ctrl = AHCI_CONTROLLER.get().unwrap().lock();
+
+    for i in 0..32 {
+        if ahci_ctrl.read_ghc().port_has_interrupt_pending(i) {
+            let port = ahci_ctrl.read_port_register(i);
+            unsafe {
+                SATA_COMMAND_QUEUE.force_unlock();
+            }
+            let mut commands = SATA_COMMAND_QUEUE.lock();
+            let commands_completed: Vec<u8> = commands
+                .keys()
+                .copied()
+                .filter(|&i| !port.port_command_is_issued(i))
+                .collect();
+            for command_id in &commands_completed {
+                let transaction = unsafe { commands.get(command_id).unwrap_unchecked() };
+                info!(
+                    "ahci",
+                    "task completed ({:?} bytes transferred)",
+                    transaction.byte_size()
+                );
+                commands.remove(command_id);
+            }
+
+            if port.tfd_error() != 0 {
+                error!(
+                    "ahci",
+                    "tfd error on port {i}    code = {}    cmd = {}",
+                    port.tfd_error(),
+                    port.port_current_command_slot()
+                );
+            }
+            port.clear_interrupts();
+        }
+    }
+
+    ahci_ctrl.read_ghc().reset_pending_interrupts();
 }
 
 /// Internal representation of an AHCI Controller (Advanced Host Controller Interface).
@@ -97,6 +145,10 @@ impl AHCIController {
                 port_reg.port_interface_device_detection()
             {
                 if port_reg.port_device_sig() == SATA_ATA_SIG {
+                    port_reg.hard_reset();
+                    port_reg.port_enable_fis_receive(true);
+                    port_reg.port_set_start(true);
+                    port_reg.ie = 0xffffffff;
                     info!(
                         "ahci",
                         "found SATA device (id = {}    port = {})",
@@ -242,6 +294,10 @@ impl HBAGenericHostControl {
     /// Indicates if a port within the controller has an interrupt pending.
     pub fn port_has_interrupt_pending(&self, x: u8) -> bool {
         (unsafe { core::ptr::read_volatile(&self.isr as *const u32) } & (1 << x)) != 0
+    }
+    ///
+    pub fn reset_pending_interrupts(&mut self) {
+        unsafe { core::ptr::write_volatile(&mut self.isr as *mut u32, 0) }
     }
     /// Indicates if a port is exposed by the HBA.
     pub fn is_port_implemented(&self, x: u8) -> bool {

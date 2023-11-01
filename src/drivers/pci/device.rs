@@ -2,7 +2,10 @@ use core::{mem, slice};
 
 use alloc::vec::Vec;
 
-use crate::drivers::pci::{pci_read_long, pci_write_long, DeviceClass, PCICommonHeader, PCIHeader};
+use crate::{
+    drivers::pci::{pci_read_long, pci_write_long, DeviceClass, PCICommonHeader, PCIHeader},
+    println,
+};
 
 pub const BAR_32_WIDTH: u32 = 0x00;
 pub const BAR_64_WIDTH: u32 = 0x02;
@@ -235,8 +238,9 @@ impl<'d> MappedRegister<'d> {
     }
 }
 
-pub(super) const COMMAND_WOFFSET: u8 = 0x2;
-pub(super) const STATUS_WOFFSET: u8 = 0x2;
+pub(super) const COMMAND_WOFFSET: u8 = 0x1;
+pub(super) const STATUS_WOFFSET: u8 = 0x1;
+pub(super) const INTERRUPT_WOFFSET: u8 = 0xF;
 
 pub(super) const IO_SPACE_COMMAND_BOFFSET: u8 = 0;
 pub(super) const MEM_SPACE_COMMAND_BOFFSET: u8 = 1;
@@ -248,6 +252,7 @@ pub(super) const PAR_ERR_RESP_COMMAND_BOFFSET: u8 = 6;
 pub(super) const STEP_CTRL_COMMAND_BOFFSET: u8 = 7;
 pub(super) const SERR_COMMAND_BOFFSET: u8 = 8;
 pub(super) const FAST_B2B_TRANS_COMMAND_BOFFSET: u8 = 9;
+pub(super) const INTERRUPT_DISABLE: u8 = 10;
 
 pub(super) const CAP_LIST_STATUS_BOFFSET: u8 = 4;
 pub(super) const MHZ66_CAP_STATUS_BOFFSET: u8 = 5;
@@ -334,6 +339,15 @@ impl<'d> PCIDevice<'d> {
     /// This `PCIDevice` must link to a valid and present PCI Device.
     pub unsafe fn disable(&mut self) {
         self.write_command(0);
+    }
+
+    pub fn interrupt_line(&self) -> u8 {
+        println!("l = {}", self.read_confl(INTERRUPT_WOFFSET));
+        (self.read_confl(INTERRUPT_WOFFSET) & 0xff) as u8
+    }
+
+    pub fn interrupt_pin(&self) -> u8 {
+        ((self.read_confl(INTERRUPT_WOFFSET) >> 8) & 0xff) as u8
     }
 
     /// Checks if a capability linked list is available.
@@ -519,6 +533,14 @@ impl<'d> PCIDevice<'d> {
     /// different agents.
     pub fn set_fast_b2b_transactions(&mut self, new_state: bool) -> Result<(), ()> {
         self.update_command(FAST_B2B_TRANS_COMMAND_BOFFSET, new_state)
+    }
+
+    pub fn interrupt_disable(&self) -> bool {
+        self.read_command() & (1 << INTERRUPT_DISABLE) != 0
+    }
+
+    pub fn set_interrupt_disable(&mut self, new_state: bool) -> Result<(), ()> {
+        self.update_command(INTERRUPT_DISABLE, new_state)
     }
 
     /// Loads a PCI device information into a `PCIDevice` structure.

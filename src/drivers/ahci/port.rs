@@ -1,5 +1,11 @@
 use super::fis::{DMASetupFIS, PIOSetupFIS, RegisterDeviceHostFIS, SetDeviceBitsFIS};
-use crate::{drivers::ahci::command::AHCICommandHeader, hba_reg_field};
+use crate::{
+    drivers::ahci::{
+        command::{AHCICommandHeader, AHCITransaction},
+        SATA_COMMAND_QUEUE,
+    },
+    hba_reg_field,
+};
 
 const HBA_PORT_TIMEOUT: u64 = 5000;
 
@@ -23,6 +29,10 @@ pub struct HBAPortReceivedFIS {
 impl HBAPortReceivedFIS {
     pub fn pio_setup_fis(&self) -> PIOSetupFIS {
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.pio_setup)) }
+    }
+
+    pub fn device_to_host(&self) -> RegisterDeviceHostFIS {
+        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.d2h_register)) }
     }
 }
 
@@ -87,11 +97,14 @@ impl HBAPort {
         unsafe { &*(self.port_fis_base_address() as *const HBAPortReceivedFIS) }
     }
 
-    pub fn send_and_wait_command(&mut self, cmd: AHCICommandHeader) {
+    pub fn dispatch_command(&mut self, cmd: AHCITransaction) {
         let cmd_slot = self.find_command_slot();
-        self.update_command_list_entry(cmd_slot, cmd);
+        self.update_command_list_entry(cmd_slot, &cmd.header);
+
+        while self.device_busy() || self.device_drq() {}
 
         self.port_command_set_issued(cmd_slot as u8);
+        SATA_COMMAND_QUEUE.lock().insert(cmd_slot as u8, cmd);
     }
 
     fn find_command_slot(&self) -> usize {
@@ -113,13 +126,49 @@ impl HBAPort {
         unsafe { &mut *(self.port_cmdlist_base_address() as *mut [AHCICommandHeader; 32]) }
     }
 
-    pub fn update_command_list_entry(&mut self, id: usize, new_entry: AHCICommandHeader) {
+    pub fn update_command_list_entry(&mut self, id: usize, new_entry: &AHCICommandHeader) {
         unsafe {
             core::ptr::write_volatile(
                 &mut self.command_list_mut()[id] as *mut AHCICommandHeader,
-                new_entry,
+                *new_entry,
             )
         }
+    }
+
+    pub fn hard_reset(&mut self) {
+        self.port_set_start(false);
+        while self.port_start() {}
+
+        self.sctl = 0x1;
+        let mut i = 0;
+        core::hint::spin_loop();
+        while i < 500000 {
+            i += 1;
+        }
+
+        self.sctl = 0;
+
+        self.serr = 0xffffffff;
+    }
+
+    pub fn device_busy(&self) -> bool {
+        self.tfd_error() & (1 << 7) != 0
+    }
+
+    pub fn device_drq(&self) -> bool {
+        self.tfd_error() & (1 << 3) != 0
+    }
+
+    pub fn tfd_error(&self) -> u8 {
+        let tfd = unsafe { core::ptr::read_volatile(&self.tfd as *const u32) };
+
+        ((tfd >> 8) & 0xff) as u8
+    }
+
+    pub fn tfd_status(&self) -> u8 {
+        let tfd = unsafe { core::ptr::read_volatile(&self.tfd as *const u32) };
+
+        (tfd & 0xff) as u8
     }
 
     pub fn get_command_list_entry(&self, id: usize) -> AHCICommandHeader {
@@ -155,7 +204,7 @@ impl HBAPort {
 
     pub fn port_current_command_slot(&self) -> u8 {
         let cmd = unsafe { core::ptr::read_volatile(&self.cmd as *const u32) };
-        (((cmd) >> 7) & 0x1f) as u8
+        ((cmd >> 7) & 0b11111) as u8
     }
 
     pub fn port_device_sig(&self) -> u32 {
@@ -190,6 +239,12 @@ impl HBAPort {
         self.sact &= !(1 << tag);
     }
 
+    pub fn port_command_is_issued(&mut self, tag: u8) -> bool {
+        let ci = unsafe { core::ptr::read_volatile(&self.ci as *const u32) };
+
+        ci & (1 << tag) != 0
+    }
+
     pub fn port_command_set_issued(&mut self, tag: u8) {
         unsafe {
             let ci = core::ptr::read_volatile(&self.ci as *const u32);
@@ -216,6 +271,13 @@ impl HBAPort {
                 &mut self.sntf as *mut u32,
                 (sntf & !(1 << port)) | (1 << port),
             );
+        }
+    }
+
+    pub fn clear_interrupts(&mut self) {
+        unsafe {
+            let is = core::ptr::read_volatile(&self.is as *const u32);
+            core::ptr::write_volatile(&mut self.is as *mut u32, is)
         }
     }
 

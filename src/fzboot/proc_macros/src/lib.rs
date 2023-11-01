@@ -158,6 +158,7 @@ pub fn interrupt(
             let wrapper = format!(
                 "pushad
                 call {}
+                call _pic_eoi
                 popad
                 iretd",
                 wrapped_name
@@ -251,6 +252,7 @@ pub fn interrupt_default(
             let wrapper = format!(
                 "pushad
                 call {}
+                call _pic_eoi
                 popad
                 iretd",
                 name

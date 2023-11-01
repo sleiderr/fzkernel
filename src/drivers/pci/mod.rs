@@ -4,16 +4,22 @@ use alloc::vec::Vec;
 use conquer_once::spin::OnceCell;
 
 use crate::{
-    drivers::pci::device::{PCIDevice, PCIDevices},
+    drivers::{
+        ahci::ahci_init,
+        pci::device::{PCIDevice, PCIDevices},
+    },
     info,
     io::{inl, outl},
-    println,
 };
 
 pub mod device;
 
 /// List of available PCI devices, after initial enumeration
 pub static PCI_DEVICES: OnceCell<PCIDevices> = OnceCell::uninit();
+
+pub fn pci_devices_init() {
+    ahci_init();
+}
 
 /// Builds the [`DeviceClass`] enum containing known PCI device classes.
 macro_rules! pci_device_class_def {
