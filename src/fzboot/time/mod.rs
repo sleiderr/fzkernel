@@ -12,6 +12,8 @@ use core::fmt::{self, Display};
 #[cfg(feature = "alloc")]
 use alloc::{format, string::String};
 
+use crate::x86::tsc::TSC_CLK;
+
 /// Returns the current UTC time as a [`DateTime`], that
 /// can then be further formatted.
 ///
@@ -25,8 +27,118 @@ use alloc::{format, string::String};
 /// let curr_time = time::now();
 /// println!("{curr_time}");
 /// ```
-pub fn now() -> DateTime {
+pub fn date() -> DateTime {
     rtc::rtc_read()
+}
+
+/// Returns the current time in microseconds of the TSC counter.
+///
+/// Can be used for time measurement.
+///
+/// # Examples
+///
+/// ```
+/// use fzboot::time;
+///
+/// let time_a = time::now();
+/// some_function();
+/// let time_b = time::now();
+///
+/// println!("some_func exec time = {:?}", time_b - time_a);
+/// ```
+pub fn now() -> f64 {
+    TSC_CLK.get().unwrap().tsc_time()
+}
+
+/// Waits for a given amount of milliseconds.
+///
+/// # Examples
+///
+/// ```
+/// use fzboot::time::wait;
+///
+/// println!("hi !");
+/// wait!(1_000);
+/// println!("hi from 1 second in the future!");
+/// ```
+#[macro_export]
+macro_rules! wait {
+    ($time: literal) => {
+        let init_time = $crate::time::now();
+        core::hint::spin_loop();
+        while $crate::time::now() < (init_time + 1_000_f64 * $time as f64) {}
+    };
+}
+
+/// Waits until a condition is satisfied, or a timeout is reached.
+///
+/// # Examples
+///
+/// Useful to wait until a statement becomes true for only a certain amount of time.
+///
+/// ```
+/// use fzboot::time::wait_for;
+///
+/// wait_for!(statement, 50);
+/// ```
+#[macro_export]
+macro_rules! wait_for {
+    ($cond: expr, $timeout: literal) => {
+        let init_time = $crate::time::now();
+        core::hint::spin_loop();
+        while $crate::time::now() < (init_time + 1_000_f64 * $timeout as f64) && !$cond {}
+    };
+}
+
+/// Waits until a condition is satisfied, or a timeout is reached.
+///
+/// If a timeout was reached, an special expression can be executed.
+///
+/// # Examples
+///
+/// ```
+/// use fzboot::time::wait_for_or;
+///
+/// wait_for_or!(statement, 50, println!("Timeout was reached !"));
+/// ```
+#[macro_export]
+macro_rules! wait_for_or {
+    ($cond: expr, $timeout: literal, $else: expr) => {
+        let init_time = $crate::time::now();
+        let mut cond_checked: bool = false;
+        core::hint::spin_loop();
+        while $crate::time::now() < (init_time + 1_000_f64 * $timeout as f64) {
+            if $cond {
+                cond_checked = true;
+                break;
+            }
+        }
+
+        if !cond_checked {
+            $else
+        }
+    };
+}
+
+/// While loop with a timeout.
+///
+/// # Examples
+///
+/// Can be used to avoid infinite loops.
+///
+/// ```
+/// use fzboot::time::while_timeout;
+///
+/// while_timeout!(true, 50, ());
+/// ```
+#[macro_export]
+macro_rules! while_timeout {
+    ($cond: expr, $timeout: literal, $body: expr) => {
+        let init_time = $crate::time::now();
+        while $cond || $crate::time::now() < (init_time + 1_000_f64 * $timeout as f64) {
+            $body
+        }
+    };
 }
 
 /// A week day
