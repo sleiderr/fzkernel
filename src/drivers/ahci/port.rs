@@ -4,16 +4,24 @@ use crate::{
         command::{AHCICommandHeader, AHCITransaction},
         SATA_COMMAND_QUEUE,
     },
-    hba_reg_field,
+    hba_reg_field, wait, wait_for, while_timeout,
 };
 
-const HBA_PORT_TIMEOUT: u64 = 5000;
-
+/// ATA Signature field for a `SATA` device.
 pub const SATA_ATA_SIG: u32 = 0x101;
+
+/// ATA Signature field for a `ATAPI` device.
 pub const SATA_ATAPI_SIG: u32 = 0xEB140101;
+
+/// ATA Signature field for an `Enclosure management bridge`.
 pub const SATA_SEMB_SIG: u32 = 0xC33C0101;
+
+/// ATA Signature field for a `Port multiplier`.
 pub const SATA_PM_SIG: u32 = 0x96690101;
 
+/// Contains the `Received FIS` structure.
+///
+/// HBA uses memory to communicate information on received `FISes`.
 #[repr(packed)]
 pub struct HBAPortReceivedFIS {
     pub dma_setup: DMASetupFIS,
@@ -27,15 +35,59 @@ pub struct HBAPortReceivedFIS {
 }
 
 impl HBAPortReceivedFIS {
-    pub fn pio_setup_fis(&self) -> PIOSetupFIS {
+    pub fn new() -> Self {
+        Self {
+            dma_setup: DMASetupFIS::new_empty(),
+            padding1: 0,
+            pio_setup: PIOSetupFIS::new_empty(),
+            padding2: [0u32; 3],
+            d2h_register: RegisterDeviceHostFIS::new_empty(),
+            padding3: 0,
+            set_device_bits: SetDeviceBitsFIS::new_empty(),
+            unknown: [0u8; 64],
+        }
+    }
+
+    /// Returns the [`DMASetupFIS`] contained in the `Received FIS` structure.
+    ///
+    /// It corresponds to the last [`DMASetupFIS`] received from the device.
+    pub fn dma_setup(&self) -> DMASetupFIS {
+        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.dma_setup)) }
+    }
+
+    /// Returns the [`PIOSetupFIS`] contained in the `Received FIS` structure.
+    ///
+    /// It corresponds to the last [`PIOSetupFIS`] received from the device.
+    pub fn pio_setup(&self) -> PIOSetupFIS {
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.pio_setup)) }
     }
 
+    /// Returns the [`RegisterDeviceHostFIS`] contained in the `Received FIS` structure.
+    ///
+    /// It corresponds to the last [`RegisterDeviceHostFIS`] received from the device.
     pub fn device_to_host(&self) -> RegisterDeviceHostFIS {
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.d2h_register)) }
     }
+
+    /// Returns the [`SetDeviceBitsFIS`] contained in the `Received FIS` structure.
+    ///
+    /// It corresponds to the last [`SetDeviceBitsFIS`] received from the device.
+    pub fn set_device_bits(&self) -> SetDeviceBitsFIS {
+        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(self.set_device_bits)) }
+    }
 }
 
+impl Default for HBAPortReceivedFIS {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Internal representation of an `HBA Port`.
+///
+/// Follows Intel's _AHCI Specifications 1.3.1_
+/// `HBAPort` interfaces with a matching port on the [`AHCIController`] and offers communication
+/// with an attached SATA device.
 #[derive(Debug)]
 pub struct HBAPort {
     /// Command List Base Address
@@ -93,11 +145,14 @@ pub struct HBAPort {
 }
 
 impl HBAPort {
+    /// Returns the [`HBAPortReceivedFIS`] for this port.
+    ///
+    /// It contains all `FISes` received from the device.
     pub fn read_received_fis(&self) -> &HBAPortReceivedFIS {
         unsafe { &*(self.port_fis_base_address() as *const HBAPortReceivedFIS) }
     }
 
-    pub fn dispatch_command(&mut self, cmd: AHCITransaction) {
+    pub fn dispatch_command(&mut self, cmd: AHCITransaction) -> usize {
         let cmd_slot = self.find_command_slot();
         self.update_command_list_entry(cmd_slot, &cmd.header);
 
@@ -105,15 +160,26 @@ impl HBAPort {
 
         self.port_command_set_issued(cmd_slot as u8);
         SATA_COMMAND_QUEUE.lock().insert(cmd_slot as u8, cmd);
+
+        cmd_slot
     }
 
+    /// Returns an available command slot for this port.
+    ///
+    /// # Panic
+    ///
+    /// Panics if no slot became available in 50 milliseconds.
     fn find_command_slot(&self) -> usize {
-        if let Some(slot) = (0..32)
-            .map(|i| self.get_command_list_entry(i))
-            .position(|s| s.command_fis_length() == 0)
-        {
-            return slot;
-        };
+        while_timeout!(
+            false,
+            50,
+            if let Some(slot) = (0..32)
+                .map(|i| self.get_command_list_entry(i))
+                .position(|s| s.command_fis_length() == 0)
+            {
+                return slot;
+            }
+        );
 
         panic!("AHCI Timeout when trying to obtain a command slot");
     }
@@ -126,6 +192,7 @@ impl HBAPort {
         unsafe { &mut *(self.port_cmdlist_base_address() as *mut [AHCICommandHeader; 32]) }
     }
 
+    /// Updates a `Command Header` entry in this port `Command List`.
     pub fn update_command_list_entry(&mut self, id: usize, new_entry: &AHCICommandHeader) {
         unsafe {
             core::ptr::write_volatile(
@@ -135,56 +202,142 @@ impl HBAPort {
         }
     }
 
+    /// Resets this `HBAPort`, by sending a _COMRESET_ to it.
     pub fn hard_reset(&mut self) {
         self.port_set_start(false);
-        while self.port_start() {}
+        wait_for!(!self.port_start(), 1);
 
-        self.sctl = 0x1;
-        let mut i = 0;
-        core::hint::spin_loop();
-        while i < 500000 {
-            i += 1;
-        }
-
-        self.sctl = 0;
+        self.interface_comreset();
+        wait!(0.1);
 
         self.serr = 0xffffffff;
     }
 
+    /// Returns the value of the `Err` bit of the `Status` field in the `Task file` register.
+    ///
+    /// If set, it indicates an error during the transfer.
+    pub fn device_error(&self) -> bool {
+        self.tfd_error() & 1 != 0
+    }
+
+    /// Returns the value of the `BSY` bit of the `Status` field in the `Task file` register.
+    ///
+    /// If set, it indicates that the interface is busy.
     pub fn device_busy(&self) -> bool {
         self.tfd_error() & (1 << 7) != 0
     }
 
+    /// Returns the value of the `BSY` bit of the `Status` field in the `Task file` register.
+    ///
+    /// If set, it indicates that a data transfer was requested.
     pub fn device_drq(&self) -> bool {
         self.tfd_error() & (1 << 3) != 0
     }
 
+    /// Returns the `Error` field of the `Task file` register.
+    ///
+    /// It contains the `Error` register of the last `FIS` received from the device.
     pub fn tfd_error(&self) -> u8 {
         let tfd = unsafe { core::ptr::read_volatile(&self.tfd as *const u32) };
 
         ((tfd >> 8) & 0xff) as u8
     }
 
+    /// Returns the `Status` field of the `Task file` register.
+    ///
+    /// It contains the `Status` register of the last `FIS` received from the device.
     pub fn tfd_status(&self) -> u8 {
         let tfd = unsafe { core::ptr::read_volatile(&self.tfd as *const u32) };
 
         (tfd & 0xff) as u8
     }
 
+    /// Sends a _COMRESET_ to the device attached to this port.
+    pub fn interface_comreset(&mut self) {
+        unsafe {
+            let sctl = core::ptr::read_volatile(&self.sctl as *const u32);
+            core::ptr::write_volatile(&mut self.sctl as *mut u32, (sctl & !(0b1111)) | 0x1);
+        }
+    }
+
+    /// Disables the SATA interface and puts _Phy_ in offline mode.
+    pub fn disable_sata_interface(&mut self) {
+        unsafe {
+            let sctl = core::ptr::read_volatile(&self.sctl as *const u32);
+            core::ptr::write_volatile(&mut self.sctl as *mut u32, (sctl & !(0b1111)) | 0x4);
+        }
+    }
+
+    /// Sets the highest allowable speed of the interface.
+    pub fn set_max_interface_speed(&mut self, speed: AHCIInterfaceSpeed) {
+        unsafe {
+            let sctl = core::ptr::read_volatile(&self.sctl as *const u32);
+            core::ptr::write_volatile(
+                &mut self.sctl as *mut u32,
+                (sctl & !(0b1111 << 4)) | ((Into::<u8>::into(speed) as u32) << 4),
+            );
+        }
+    }
+
+    /// Returns an a `Command Header` ([`AHCICommandHeader`]) in this port `Command List`, given
+    /// its position in the list.
     pub fn get_command_list_entry(&self, id: usize) -> AHCICommandHeader {
         unsafe { core::ptr::read_volatile(&self.command_list()[id] as *const AHCICommandHeader) }
     }
 
+    /// Returns the physical address for the `Command List` for this port.
     pub fn port_cmdlist_base_address(&self) -> *mut u8 {
         let clbu = unsafe { core::ptr::read_volatile(&self.clbu as *const u32) };
         let clb = unsafe { core::ptr::read_volatile(&self.clb as *const u32) };
         (((clbu as u64) << 32) | (clb as u64)) as *mut u8
     }
 
+    /// Sets the physical address for the `Command List` for this port.
+    ///
+    /// # Panic
+    ///
+    /// Panics if the given address is not 1K-bytes aligned.
+    pub fn port_set_cmdlist_base_address(&mut self, address: *mut u8) {
+        assert_eq!(
+            (address as usize) & ((1 << 10) - 1),
+            0,
+            "Invalid alignement for the Command List Base Address (must be 1K-bytes aligned)"
+        );
+
+        let clbu = ((address as u64 >> 32) & 0xffffffff) as u32;
+        let clb = (address as u64 & 0xffffffff) as u32;
+
+        unsafe {
+            core::ptr::write_volatile(&mut self.clbu as *mut u32, clbu);
+            core::ptr::write_volatile(&mut self.clb as *mut u32, clb);
+        }
+    }
+
+    /// Returns the physical address for the received `FISes` for this port.
     pub fn port_fis_base_address(&self) -> *mut u8 {
         let fbu = unsafe { core::ptr::read_volatile(&self.fbu as *const u32) };
         let fb = unsafe { core::ptr::read_volatile(&self.fb as *const u32) };
         (((fbu as u64) << 32) | (fb as u64)) as *mut u8
+    }
+
+    /// Sets the physical address for the received `FISes` for this port.
+    ///
+    /// # Panic
+    ///
+    /// Panics if the given address is not 256-bytes aligned.
+    pub fn port_set_fis_base_address(&mut self, address: *mut u8) {
+        assert_eq!(
+            (address as usize) & ((1 << 8) - 1),
+            0,
+            "Invalid alignement for the FIS Base Address (must be 256-bytes aligned)"
+        );
+        let fbu = ((address as u64 >> 32) & 0xffffffff) as u32;
+        let fb = (address as u64 & 0xffffffff) as u32;
+
+        unsafe {
+            core::ptr::write_volatile(&mut self.fbu as *mut u32, fbu);
+            core::ptr::write_volatile(&mut self.fb as *mut u32, fb);
+        }
     }
 
     pub fn port_icc_read(&self) -> AHCIInterfaceState {
@@ -274,6 +427,7 @@ impl HBAPort {
         }
     }
 
+    /// Clears all pending interrupts for this port.
     pub fn clear_interrupts(&mut self) {
         unsafe {
             let is = core::ptr::read_volatile(&self.is as *const u32);
@@ -742,18 +896,27 @@ impl HBAPort {
         1,
         "Spin-Up Device",
         cmd,
-        port_spin_up_device,
-        port_set_spin_up_device
+        port_status_spin_up,
+        port_spin_up_device
     );
 
     hba_reg_field!(PORT_CMD_ST, 0, "Start", cmd, port_start, port_set_start);
 }
 
+/// Indicates the interface Device detection and _Phy_ state.
 #[derive(Debug)]
 pub enum AHCIDeviceDetection {
+    /// No device detected and _Phy_ communication not established.
     NoDevice,
+
+    /// Device presence detected but _Phy_ communication not established.
     DeviceDetectedNoPhysicalCom,
+
+    /// Device presence detected and _Phy_ communication established.
     DeviceDetectedPhysicalCom,
+
+    /// _Phy_ in offline mode as a result of the interface being disabled, or running in a BIST
+    /// loopback mode.
     PhysicalOffline,
 }
 
@@ -768,18 +931,26 @@ impl From<u8> for AHCIDeviceDetection {
     }
 }
 
+/// Allowed speed for a SATA interface.
 #[derive(Debug)]
 pub enum AHCIInterfaceSpeed {
-    NotPresent,
+    /// No speed restrictions
+    None,
+
+    /// SATA I bandwith (1.5 Gb/s)
     Gen1,
+
+    /// SATA II bandwith (3.0 Gb/s)
     Gen2,
+
+    /// SATA III bandwith (6.0 Gb/s)
     Gen3,
 }
 
 impl From<AHCIInterfaceSpeed> for u8 {
     fn from(value: AHCIInterfaceSpeed) -> Self {
         match value {
-            AHCIInterfaceSpeed::NotPresent => 0,
+            AHCIInterfaceSpeed::None => 0,
             AHCIInterfaceSpeed::Gen1 => 1,
             AHCIInterfaceSpeed::Gen2 => 2,
             AHCIInterfaceSpeed::Gen3 => 3,
@@ -793,7 +964,7 @@ impl From<u8> for AHCIInterfaceSpeed {
             1 => Self::Gen1,
             2 => Self::Gen2,
             3 => Self::Gen3,
-            _ => Self::NotPresent,
+            _ => Self::None,
         }
     }
 }

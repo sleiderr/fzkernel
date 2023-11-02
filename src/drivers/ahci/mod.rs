@@ -1,50 +1,73 @@
 //! AHCI driver for `FrozenBoot`.
 
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use conquer_once::spin::OnceCell;
 
 use crate::{
     drivers::{
         ahci::{
-            command::AHCITransaction,
+            command::{AHCICommandHeader, AHCITransaction},
             device::SATADrive,
-            port::{AHCIDeviceDetection, HBAPort, SATA_ATA_SIG},
+            port::{AHCIDeviceDetection, HBAPort, HBAPortReceivedFIS, SATA_ATA_SIG},
         },
         pci::{
             device::{MappedRegister, PCIDevice, PCIMappedMemory},
             DeviceClass, PCI_DEVICES,
         },
     },
-    error, info,
+    error, info, wait_for, wait_for_or,
 };
 
-pub mod ata_command;
-pub mod command;
 pub mod device;
-pub mod fis;
-pub(crate) mod port;
 
+mod ata_command;
+mod command;
+mod fis;
+mod port;
+
+/// Offset of the `Generic Host Control` register in the HBA Memory (in bytes).
 pub const GHC_BOFFSET: isize = 0x00;
+
+/// Offset of the ports registers in the HBA Memory (in bytes).
 pub const PORT_REG_OFFSET: isize = 0x100;
 
+/// Global internal `AHCI Controller` interface, usable after PCI enumeration if such a controller is
+/// available on the system.
 pub static AHCI_CONTROLLER: OnceCell<spin::Mutex<AHCIController>> = OnceCell::uninit();
+
+/// List of available `SATA` drives on the system, usable after [`AHCIController`] initialization.
 pub static SATA_DRIVES: OnceCell<Vec<spin::Mutex<SATADrive>>> = OnceCell::uninit();
+
+/// Global `SATA` commands queue. Contains all commands sent to the [`AHCIController`] awaiting
+/// completion.
 pub static SATA_COMMAND_QUEUE: spin::Mutex<BTreeMap<u8, AHCITransaction>> =
     spin::Mutex::new(BTreeMap::new());
 
+/// Returns a locked [`SATADrive`] given its internal identifier.
 pub fn get_sata_drive(id: usize) -> &'static spin::Mutex<SATADrive> {
     &SATA_DRIVES.get().unwrap()[id]
 }
 
+/// Returns the list of [`SATADrive`] identifiers.
 pub fn sata_drive_ids() -> core::ops::Range<usize> {
     0..SATA_DRIVES.get().unwrap().len()
 }
 
+/// Initialize the [`AHCIController`] into a minimal working state.
+///
+/// Performs a firmware initialization phase, and then a system software phase.
+/// Enumerates the available SATA devices, and sets up the corresponding ports on the HBA, as well
+/// as the device itself.
 pub fn ahci_init() {
-    let pci_dev = &mut PCI_DEVICES
+    let mut pci_dev_opt = PCI_DEVICES
         .get()
         .unwrap()
-        .get_by_class(DeviceClass::SATAControllerAHCI)[0];
+        .get_by_class(DeviceClass::SATAControllerAHCI);
+
+    let pci_dev = match pci_dev_opt.get_mut(0) {
+        Some(dev) => dev,
+        None => return,
+    };
 
     pci_dev.set_memory_space_access(true).unwrap();
     pci_dev.set_interrupt_disable(false).unwrap();
@@ -53,9 +76,71 @@ pub fn ahci_init() {
     AHCI_CONTROLLER.init_once(|| {
         spin::Mutex::new(unsafe { AHCIController::try_from_pci_device(pci_dev).unwrap() })
     });
-    let mut ahci_ctrl = AHCI_CONTROLLER.get().unwrap().lock();
+    let mut ahci_ctrl = unsafe { AHCI_CONTROLLER.get().unwrap_unchecked().lock() };
 
+    // Performs BIOS/OS Handoff is available.
+    if ahci_ctrl.read_ghc().hba_cap_bios_os_handoff() {
+        ahci_ctrl.read_ghc().hba_request_ownership(true);
+        wait_for!(!ahci_ctrl.read_ghc().hba_bohc_bos(), 1);
+    }
+
+    // Performs a HBA hard reset.
+    ahci_ctrl.reset();
+    wait_for!(ahci_ctrl.read_ghc().hba_ghc_rst(), 50);
     ahci_ctrl.enable();
+
+    // Setup each implemented port.
+    ahci_ctrl
+        .read_ghc()
+        .ports_implemented()
+        .iter()
+        .map(|&i| ahci_ctrl.read_port_register(i))
+        .for_each(|port| {
+            port.port_set_start(false);
+            port.port_enable_fis_receive(false);
+            wait_for_or!(
+                !(port.port_start()
+                    || port.port_command_list_dma_engine_running()
+                    || port.port_fis_receive_dma_engine_running()),
+                50,
+                return
+            );
+            // Allocate memory for received FIS and for the command list.
+            let fis_receive = Box::new(HBAPortReceivedFIS::new());
+            port.port_set_fis_base_address(Box::into_raw(fis_receive) as *mut u8);
+
+            let command_list = Box::new([AHCICommandHeader::new_empty(); 32]);
+            port.port_set_cmdlist_base_address(Box::into_raw(command_list) as *mut u8);
+
+            port.port_enable_fis_receive(true);
+
+            if ahci_ctrl.read_ghc().hba_cap_ss_support() {
+                port.port_spin_up_device(true);
+            }
+
+            wait_for_or!(
+                matches!(
+                    port.port_interface_device_detection(),
+                    AHCIDeviceDetection::DeviceDetectedPhysicalCom,
+                ),
+                1,
+                return
+            );
+
+            port.serr = 0xffffffff;
+            wait_for_or!(!(port.device_busy() || port.device_drq()), 50, return);
+
+            // clear interrupts before enabling them.
+            port.is = 0;
+            port.ie = 0xffffffff;
+            if matches!(
+                port.port_interface_device_detection(),
+                AHCIDeviceDetection::DeviceDetectedPhysicalCom
+            ) {
+                port.port_set_start(true);
+            }
+        });
+
     ahci_ctrl.read_ghc().set_hba_ghc_interrupt_enable(true);
     info!("ahci", "initializing AHCI controller");
     info!(
@@ -66,14 +151,13 @@ pub fn ahci_init() {
         ahci_ctrl.read_ghc().hba_number_ports(),
         ahci_ctrl.read_ghc().hba_number_cmd_slots(),
     );
-    drop(ahci_ctrl);
     unsafe {
-        let mut ahci_ctrl = AHCI_CONTROLLER.get_unchecked().lock();
         AHCI_CONTROLLER.get_unchecked().force_unlock();
         ahci_ctrl.load_sata_drives();
     }
 }
 
+/// AHCI controller related IRQs entry point.
 pub fn irq_entry() {
     unsafe { AHCI_CONTROLLER.get_unchecked().force_unlock() };
     let ahci_ctrl = AHCI_CONTROLLER.get().unwrap().lock();
@@ -115,16 +199,24 @@ pub fn irq_entry() {
     ahci_ctrl.read_ghc().reset_pending_interrupts();
 }
 
-/// Internal representation of an AHCI Controller (Advanced Host Controller Interface).
+/// Internal representation of an `AHCI Controller` (_Advanced Host Controller Interface_).
 ///
-/// Follows Intel's AHCI Specifications 1.3.1
-/// The AHCI controller (or HBA, Host bus adapter) provides a standard interface to access SATA
+/// Follows Intel's _AHCI Specifications 1.3.1_
+/// The `AHCI controller` (or HBA, Host bus adapter) provides a standard interface to access SATA
 /// devices using PCI-related methods (memory-mapped registers).
 pub struct AHCIController {
-    pub(super) hba_mem: PCIMappedMemory<'static>,
+    hba_mem: PCIMappedMemory<'static>,
 }
 
 impl AHCIController {
+    /// Loads the `AHCIController` from a [`PCIDevice`] structure.
+    ///
+    /// The HBA memory is located in the `BAR` register 5.
+    ///
+    /// # Safety
+    ///
+    /// The `device` must be a valid AHCI Controller, with the `BAR` 5 being a memory-mapped
+    /// register.
     pub unsafe fn try_from_pci_device(device: &PCIDevice<'static>) -> Option<Self> {
         let hba_reg = &device.registers[5];
 
@@ -137,6 +229,9 @@ impl AHCIController {
         None
     }
 
+    /// Initializes the [`SATADrive`] that are attached to the [`AHCIController`].
+    ///
+    /// Fills the [`SATA_DRIVES`] vector of devices.
     pub fn load_sata_drives(&mut self) {
         let mut drives = alloc::vec![];
         for port in self.read_ghc().ports_implemented() {
@@ -145,10 +240,6 @@ impl AHCIController {
                 port_reg.port_interface_device_detection()
             {
                 if port_reg.port_device_sig() == SATA_ATA_SIG {
-                    port_reg.hard_reset();
-                    port_reg.port_enable_fis_receive(true);
-                    port_reg.port_set_start(true);
-                    port_reg.ie = 0xffffffff;
                     info!(
                         "ahci",
                         "found SATA device (id = {}    port = {})",
@@ -163,13 +254,23 @@ impl AHCIController {
         SATA_DRIVES.init_once(|| drives);
     }
 
+    /// Returns a `mutable reference` to the `Generic Host Control` section of the HBA
+    /// controller memory.
+    ///
+    /// Loads the [`HBAGenericHostControl`] structure directly from the HBA memory-mapped registers, and thus
+    /// should be considered as `MMIO`.
     pub fn read_ghc(&self) -> &mut HBAGenericHostControl {
         unsafe {
             &mut *(self.hba_mem.as_ptr().byte_offset(GHC_BOFFSET) as *mut HBAGenericHostControl)
         }
     }
 
+    /// Returns a `mutable reference` to a [`HBAPort`], given its port id.
+    ///
+    /// Loads the [`HBAPort`] structure directly from the HBA memory-mapped registers, and thus
+    /// should be considered as `MMIO`.
     pub fn read_port_register(&self, port: u8) -> &mut HBAPort {
+        assert!(port < 32);
         unsafe {
             &mut *(self
                 .hba_mem
@@ -295,7 +396,7 @@ impl HBAGenericHostControl {
     pub fn port_has_interrupt_pending(&self, x: u8) -> bool {
         (unsafe { core::ptr::read_volatile(&self.isr as *const u32) } & (1 << x)) != 0
     }
-    ///
+    /// Reset the interrupt status of every port.
     pub fn reset_pending_interrupts(&mut self) {
         unsafe { core::ptr::write_volatile(&mut self.isr as *mut u32, 0) }
     }
