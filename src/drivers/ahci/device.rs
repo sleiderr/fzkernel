@@ -1,15 +1,40 @@
+//! SATA-related utilities
+
 use alloc::{string::String, vec::Vec};
 
-use crate::drivers::ahci::{
-    ata_command::*,
-    command::{AHCIPhysicalRegionDescriptor, AHCITransaction},
-    fis::RegisterHostDeviceFIS,
-    port::HBAPort,
-    AHCI_CONTROLLER,
+use crate::{
+    drivers::ahci::{
+        ata_command::*,
+        command::{AHCIPhysicalRegionDescriptor, AHCITransaction},
+        fis::RegisterHostDeviceFIS,
+        port::HBAPort,
+        AHCI_CONTROLLER, SATA_COMMAND_QUEUE,
+    },
+    wait_for_or,
 };
 
+/// `SATADrive` is an interface to a physical drive attached to an [`AHCIController`].
+///
+/// It offers a convenient way to interact with the device, and other components that want to
+/// interact with SATA drives should use this.
+///
+/// # Examples
+///
+/// After checking that a drive was available on a given AHCI port (let's use port 0), a
+/// `SATADrive` can be derived from that port number.
+///
+/// ```
+/// let drive = SATADrive::build_from_ahci(0);
+/// ```
+///
+/// You can then use that interface to read sectors from the disk.
+///
+/// ```
+/// let mut buffer = [0u8; 1024];
+/// drive.read(0, 2, &mut buffer);
+/// ```
 pub struct SATADrive {
-    pub device_info: [u16; 256],
+    device_info: [u16; 256],
     ahci_data: AHCIDriveInfo,
 }
 
@@ -118,6 +143,10 @@ impl SATADrive {
         max_lba as usize
     }
 
+    /// Returns the current `media serial number`.
+    ///
+    /// `Media serial number` is a 60-bytes string, the first 40 bytes indicate the media serial
+    /// number, and the last 20 indicate the media manufacturer.
     pub fn media_serial_number(&self) -> String {
         let serial_words = &self.device_info[176..206];
         let mut serial_bytes: Vec<u8> = alloc::vec![];
@@ -131,6 +160,9 @@ impl SATADrive {
         unsafe { String::from_utf8_unchecked(serial_bytes) }
     }
 
+    /// Returns the device's `Model Number`.
+    ///
+    /// It is a 40-bytes ATA string.
     pub fn model_number(&self) -> String {
         let model_words = &self.device_info[27..47];
         let mut model_bytes: Vec<u8> = alloc::vec![];
@@ -144,6 +176,7 @@ impl SATADrive {
         unsafe { String::from_utf8_unchecked(model_bytes) }
     }
 
+    /// Returns the device's `Serial Number`.
     pub fn serial_number(&self) -> String {
         let serial_words = &self.device_info[10..20];
         let mut serial_bytes: Vec<u8> = alloc::vec![];
@@ -157,6 +190,7 @@ impl SATADrive {
         unsafe { String::from_utf8_unchecked(serial_bytes) }
     }
 
+    /// Returns the device's `Firmware Revision`
     pub fn firmware_revision(&self) -> String {
         let fw_words = &self.device_info[23..27];
         let mut fw_bytes: Vec<u8> = alloc::vec![];
@@ -170,6 +204,10 @@ impl SATADrive {
         unsafe { String::from_utf8_unchecked(fw_bytes) }
     }
 
+    /// Sends a `IDENTIFY DEVICE` command to the corresponding device.
+    ///
+    /// The device shall respond with a 512-bytes data block containing various information
+    /// concerning itself.
     pub fn load_identification(&mut self) {
         self.device_info = self.dispach_ata_identify(
             AHCI_CONTROLLER
@@ -180,8 +218,122 @@ impl SATADrive {
         );
     }
 
-    pub unsafe fn read_dma(&mut self, start_lba: u64, sectors_count: u16, buffer: *mut u8) {
+    /// Reads `sectors_count` sectors from this drive, starting at `start_lba`, into `buffer`.
+    ///
+    /// - Length of `buffer` must be larger than `sectors_count * sector_size`.
+    ///
+    /// - `start_lba` must be less than the `maximum_addressable_lba` for this drive.
+    ///
+    /// # Examples
+    ///
+    /// Read 2 sectors from a SATA drive into a buffer.
+    ///
+    /// ```
+    /// let mut buffer = [0u8; 2096];
+    /// get_sata_drive(0).lock().read(0, 4, &mut buffer);
+    /// ```
+    pub fn read(
+        &mut self,
+        start_lba: u64,
+        sectors_count: u16,
+        buffer: &mut [u8],
+    ) -> Result<(), ()> {
+        (sectors_count as usize * self.logical_sector_size() as usize <= buffer.len())
+            .then_some(())
+            .ok_or(())?;
+        (start_lba as usize + sectors_count as usize <= self.maximum_addressable_lba())
+            .then_some(())
+            .ok_or(())?;
+
+        let slot = unsafe { self.read_dma(start_lba, sectors_count, buffer.as_mut_ptr()) };
+
+        wait_for_or!(
+            !SATA_COMMAND_QUEUE.lock().contains_key(&(slot as u8)),
+            10_000,
+            return Err(())
+        );
+
+        Ok(())
+    }
+
+    /// Writes `sectors_count` sectors from the buffer to the drive, starting at `start_lba`.
+    ///
+    /// - Length of `buffer` must be larger than `sectors_count * sector_size`.
+    ///
+    /// - `start_lba` must be less than the `maximum_addressable_lba` for this drive
+    ///
+    /// # Examples
+    ///
+    /// Write 2 sectors from a buffer into a `SATA` drive.
+    ///
+    /// ```
+    /// let buffer = [1u8; 2096];
+    /// get_sata_drive(0).lock().write(0, 4, &buffer);
+    /// ```
+    pub fn write(&mut self, start_lba: u64, sectors_count: u16, buffer: &[u8]) -> Result<(), ()> {
+        (start_lba as usize + sectors_count as usize <= self.maximum_addressable_lba())
+            .then_some(())
+            .ok_or(())?;
+
+        let slot = unsafe { self.write_dma(start_lba, sectors_count, buffer.as_ptr()) };
+
+        wait_for_or!(
+            !SATA_COMMAND_QUEUE.lock().contains_key(&(slot as u8)),
+            10_000,
+            return Err(())
+        );
+
+        Ok(())
+    }
+
+    unsafe fn write_dma(&mut self, start_lba: u64, sectors_count: u16, buffer: *const u8) -> usize {
+        let mut write_fis = RegisterHostDeviceFIS::new_empty();
+        let sector_size = self.logical_sector_size();
+        write_fis.set_command(ATA_WRITE_DMA);
+        write_fis.set_device(1 << 6);
+        write_fis.set_lba(start_lba);
+        write_fis.set_count(sectors_count);
+        write_fis.set_command_update_bit(true);
+
+        let mut ahci_transaction = AHCITransaction::new();
+        ahci_transaction
+            .set_byte_size((sectors_count as u32 * self.logical_sector_size()) as usize);
+
+        let mut prdtl = alloc::vec![];
+        let prdt_count = (((sectors_count - 1) >> 4) + 1) as isize;
+
+        for i in 0..prdt_count - 1 {
+            let mut prdt = AHCIPhysicalRegionDescriptor::new_empty();
+
+            prdt.set_base_address(buffer.offset(i * 16 * sector_size as isize) as *mut u8);
+            prdt.set_data_bytes_count(16 * sector_size);
+            prdt.set_interrupt_on_completion(true);
+
+            prdtl.push(prdt);
+        }
+
+        let mut last_prdt = AHCIPhysicalRegionDescriptor::new_empty();
+        last_prdt.set_base_address(
+            buffer.offset((prdt_count - 1) * 16 * sector_size as isize) as *mut u8
+        );
+        last_prdt.set_data_bytes_count(
+            (sectors_count as u32 * sector_size) - ((prdt_count - 1) as u32 * 16 * sector_size),
+        );
+        prdtl.push(last_prdt);
+
+        ahci_transaction
+            .header
+            .build_command_table(&write_fis, &[0u8; 0], prdtl);
+
+        let ahci = AHCI_CONTROLLER.get().unwrap().lock();
+        let port = ahci.read_port_register(self.ahci_data.port);
+
+        port.dispatch_command(ahci_transaction)
+    }
+
+    unsafe fn read_dma(&mut self, start_lba: u64, sectors_count: u16, buffer: *mut u8) -> usize {
         let mut read_fis = RegisterHostDeviceFIS::new_empty();
+        let sector_size = self.logical_sector_size();
         read_fis.set_command(ATA_READ_DMA);
         read_fis.set_device(1 << 6);
         read_fis.set_lba(start_lba);
@@ -193,29 +345,36 @@ impl SATADrive {
             .set_byte_size((sectors_count as u32 * self.logical_sector_size()) as usize);
 
         let mut prdtl = alloc::vec![];
-        let prdt_count = (sectors_count >> 4) + 1;
+        let prdt_count = (((sectors_count - 1) >> 4) + 1) as isize;
 
-        for i in 0..prdt_count {
+        for i in 0..prdt_count - 1 {
             let mut prdt = AHCIPhysicalRegionDescriptor::new_empty();
 
-            prdt.set_base_address(buffer.offset((i * 16 * 512) as isize));
-            prdt.set_data_bytes_count(16 * 512);
+            prdt.set_base_address(buffer.offset(i * 16 * sector_size as isize));
+            prdt.set_data_bytes_count(16 * sector_size);
             prdt.set_interrupt_on_completion(true);
 
             prdtl.push(prdt);
         }
+
+        let mut last_prdt = AHCIPhysicalRegionDescriptor::new_empty();
+        last_prdt.set_base_address(buffer.offset((prdt_count - 1) * 16 * sector_size as isize));
+        last_prdt.set_data_bytes_count(
+            (sectors_count as u32 * sector_size) - ((prdt_count - 1) as u32 * 16 * sector_size),
+        );
+        prdtl.push(last_prdt);
 
         ahci_transaction
             .header
             .build_command_table(&read_fis, &[0u8; 0], prdtl);
 
         let ahci = AHCI_CONTROLLER.get().unwrap().lock();
-        let port = ahci.read_port_register(0);
+        let port = ahci.read_port_register(self.ahci_data.port);
 
-        port.dispatch_command(ahci_transaction);
+        port.dispatch_command(ahci_transaction)
     }
 
-    pub fn internal_device_diagnostic(&mut self) {
+    fn internal_device_diagnostic(&mut self) {
         let mut diag_fis = RegisterHostDeviceFIS::new_empty();
         diag_fis.set_command(ATA_EXECUTE_DEVICE_DIAGNOSTIC);
         diag_fis.set_device(0);
@@ -254,7 +413,7 @@ impl SATADrive {
         port.dispatch_command(ahci_transaction);
 
         assert_eq!(
-            port.read_received_fis().pio_setup_fis().transfer_count(),
+            port.read_received_fis().pio_setup().transfer_count(),
             0x200,
             "Invalid response from SATA device when issuing ATA IDENTIFY command"
         );

@@ -157,6 +157,7 @@ pub fn interrupt(
             // Define wrapper assembly
             let wrapper = format!(
                 "pushad
+                call _int_entry
                 call {}
                 call _pic_eoi
                 popad
@@ -251,6 +252,7 @@ pub fn interrupt_default(
             let naked_ident = Ident::new(naked_name.as_str(), Span::mixed_site());
             let wrapper = format!(
                 "pushad
+                call _int_entry
                 call {}
                 call _pic_eoi
                 popad
