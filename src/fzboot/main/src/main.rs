@@ -66,7 +66,7 @@ pub fn clock_init() {
     hpet_clk_init();
     TSCClock::init();
 
-    let curr_time = time::now();
+    let curr_time = time::date();
 
     info!("rtc_clock", "Standard UTC time {curr_time}");
     info!(
