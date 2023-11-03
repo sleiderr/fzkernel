@@ -6,6 +6,7 @@
 
 pub mod video;
 pub mod bios;
+#[cfg(feature = "alloc")]
 pub mod fs;
 pub mod fzboot;
 pub mod io;
