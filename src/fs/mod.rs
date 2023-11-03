@@ -12,7 +12,6 @@
 
 use core::{fmt::Debug, slice};
 
-#[cfg(feature = "alloc")]
 use alloc::{boxed::Box, string::String, vec::Vec};
 
 pub mod partitions;
