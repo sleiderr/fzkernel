@@ -72,6 +72,11 @@ const CONTROLLER: PIC = PIC {
     slave_data_port: 0xA1,
 };
 
+#[interrupt]
+pub fn _int0x73() {
+    crate::drivers::ahci::irq_entry();
+}
+
 #[interrupt_default]
 pub fn _int_default() {
     CONTROLLER.acknowledge_master();
