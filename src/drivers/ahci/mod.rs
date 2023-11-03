@@ -246,12 +246,18 @@ impl AHCIController {
                         drives.len(),
                         port
                     );
-                    let drive = spin::Mutex::new(SATADrive::build_from_ahci(port));
+                    let drive = spin::Mutex::new(SATADrive::build_from_ahci(port, drives.len()));
                     drives.push(drive);
                 }
             }
         }
         SATA_DRIVES.init_once(|| drives);
+
+        let drives = SATA_DRIVES.get().unwrap();
+
+        for drive in drives {
+            drive.lock().load_partition_table();
+        }
     }
 
     /// Returns a `mutable reference` to the `Generic Host Control` section of the HBA

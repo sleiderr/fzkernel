@@ -10,6 +10,10 @@ use crate::{
         port::HBAPort,
         AHCI_CONTROLLER, SATA_COMMAND_QUEUE,
     },
+    fs::partitions::{
+        mbr::{load_drive_mbr, PartitionType},
+        Partition, PartitionMetadata, PartitionTable,
+    },
     wait_for_or,
 };
 
@@ -33,26 +37,68 @@ use crate::{
 /// let mut buffer = [0u8; 1024];
 /// drive.read(0, 2, &mut buffer);
 /// ```
+#[derive(Debug)]
 pub struct SATADrive {
+    id: usize,
     device_info: [u16; 256],
     ahci_data: AHCIDriveInfo,
+    partition_table: PartitionTable,
+    partitions: Vec<Partition>,
 }
 
+#[derive(Debug)]
 struct AHCIDriveInfo {
     port: u8,
 }
 
 impl SATADrive {
-    pub fn build_from_ahci(port: u8) -> Self {
+    pub fn build_from_ahci(port: u8, id: usize) -> Self {
         let ahci_data = AHCIDriveInfo { port };
         let mut drive = Self {
+            id,
             device_info: [0u16; 256],
             ahci_data,
+            partition_table: PartitionTable::Unknown,
+            partitions: alloc::vec![],
         };
 
         drive.load_identification();
 
         drive
+    }
+
+    /// Loads the partitions contained on this device, whether the partition scheme is _MBR_ or
+    /// _GPT_.
+    pub fn load_partition_table(&mut self) {
+        let mbr = load_drive_mbr(self, 0);
+        self.partitions = mbr.get_partitions();
+
+        for partition in self.partitions.clone().iter() {
+            if let PartitionMetadata::MBR(mut meta) = partition.metadata() {
+                // if this device uses _EPBR_, we traverse the linked list to find all partitions.
+                if matches!(meta.partition_type(), PartitionType::Extended)
+                    || matches!(meta.partition_type(), PartitionType::ExtendedLBA)
+                {
+                    while load_drive_mbr(self, meta.start_lba() as u64).get_partition_metadata()[1]
+                        .is_used()
+                        || load_drive_mbr(self, meta.start_lba() as u64).get_partition_metadata()[0]
+                            .is_used()
+                    {
+                        let partitions =
+                            load_drive_mbr(self, meta.start_lba() as u64).get_partition_metadata();
+
+                        let mut ext_part = partitions[0];
+
+                        ext_part.set_start_lba(ext_part.start_lba() + meta.start_lba());
+
+                        self.partitions.push(Partition::from_mbr_metadata(ext_part));
+                        meta = partitions[1];
+                    }
+                }
+            }
+        }
+
+        self.partition_table = PartitionTable::MBR(mbr);
     }
 
     /// Returns the `maximum queue depth` supported by the device.
