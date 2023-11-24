@@ -7,7 +7,10 @@
 
 use alloc::vec::Vec;
 
-use crate::{drivers::ahci::device::SATADrive, fs::partitions::Partition};
+use crate::{
+    drivers::ahci::device::SATADrive,
+    fs::partitions::{Partition, PartitionMetadata},
+};
 
 /// Offset of the `Parition table` in the `Master Boot Record`.
 const MBR_PART_OFFSET: isize = 0x1BE;
@@ -44,12 +47,29 @@ impl MBRPartitionTable {
 
         for partition_metadata in self.partitions {
             if partition_metadata.is_used() {
-                let partition = Partition::from_mbr_metadata(partition_metadata);
+                let partition =
+                    Partition::from_metadata(PartitionMetadata::MBR(partition_metadata));
                 partitions.push(partition);
             }
         }
 
         partitions
+    }
+
+    /// Checks if this `MBR` corresponds to a protected `MBR`.
+    pub fn is_pmbr(&self) -> bool {
+        let partitions = self.get_partitions();
+        if partitions.len() == 1 {
+            let p_part = partitions[0];
+
+            if let PartitionMetadata::MBR(meta) = p_part.metadata() {
+                if matches!(meta.partition_type(), PartitionType::GPT) {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 }
 

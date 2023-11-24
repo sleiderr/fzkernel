@@ -2,8 +2,12 @@
 //!
 //! Contains the implementation of the two standards partition scheme, _GPT_ and _MBR_.
 
-use crate::fs::partitions::mbr::{MBRPartitionEntry, MBRPartitionTable};
+use crate::fs::partitions::{
+    gpt::{GPTPartitionEntry, GUIDPartitionTable},
+    mbr::{MBRPartitionEntry, MBRPartitionTable},
+};
 
+pub mod gpt;
 pub mod mbr;
 
 /// A partition structure, that does not depend on the partition format (_GPT_ or _MBR_).
@@ -16,16 +20,15 @@ pub struct Partition {
 
 impl Partition {
     /// Loads a `Partition` from a _MBR_ partition table entry.
-    pub fn from_mbr_metadata(metadata: MBRPartitionEntry) -> Self {
-        Self {
-            metadata: PartitionMetadata::MBR(metadata),
-        }
+    pub fn from_metadata(metadata: PartitionMetadata) -> Self {
+        Self { metadata }
     }
 
     /// Returns this partition's starting LBA.
     pub fn start_lba(&self) -> u64 {
         match self.metadata {
             PartitionMetadata::MBR(meta) => meta.start_lba() as u64,
+            PartitionMetadata::GPT(meta) => meta.start_lba(),
         }
     }
 
@@ -48,11 +51,12 @@ impl Partition {
 #[derive(Debug, Clone, Copy)]
 pub enum PartitionMetadata {
     MBR(MBRPartitionEntry),
+    GPT(GPTPartitionEntry),
 }
 
 #[derive(Debug)]
 pub enum PartitionTable {
     MBR(MBRPartitionTable),
-    GPT,
+    GPT(GUIDPartitionTable),
     Unknown,
 }

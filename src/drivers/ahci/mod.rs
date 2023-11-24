@@ -176,11 +176,6 @@ pub fn irq_entry() {
                 .collect();
             for command_id in &commands_completed {
                 let transaction = unsafe { commands.get(command_id).unwrap_unchecked() };
-                info!(
-                    "ahci",
-                    "task completed ({:?} bytes transferred)",
-                    transaction.byte_size()
-                );
                 commands.remove(command_id);
             }
 

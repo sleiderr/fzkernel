@@ -11,6 +11,7 @@ use crate::{
         AHCI_CONTROLLER, SATA_COMMAND_QUEUE,
     },
     fs::partitions::{
+        gpt::load_drive_gpt,
         mbr::{load_drive_mbr, PartitionType},
         Partition, PartitionMetadata, PartitionTable,
     },
@@ -71,6 +72,17 @@ impl SATADrive {
     /// _GPT_.
     pub fn load_partition_table(&mut self) {
         let mbr = load_drive_mbr(self, 0);
+
+        if mbr.is_pmbr() {
+            let gpt = load_drive_gpt(self);
+
+            if let Some(gpt) = gpt {
+                self.partitions = gpt.get_partitions();
+                self.partition_table = PartitionTable::GPT(gpt);
+                return;
+            }
+        }
+
         self.partitions = mbr.get_partitions();
 
         for partition in self.partitions.clone().iter() {
@@ -91,7 +103,8 @@ impl SATADrive {
 
                         ext_part.set_start_lba(ext_part.start_lba() + meta.start_lba());
 
-                        self.partitions.push(Partition::from_mbr_metadata(ext_part));
+                        self.partitions
+                            .push(Partition::from_metadata(PartitionMetadata::MBR(ext_part)));
                         meta = partitions[1];
                     }
                 }
@@ -134,7 +147,11 @@ impl SATADrive {
     }
 
     /// Returns the size of a physical sector in number of logical sectors.
-    fn logical_sectors_per_physical_sector(&self) -> u8 {
+    pub fn logical_sectors_per_physical_sector(&self) -> u8 {
+        if !self.logical_physical_relationship_supported() {
+            return 1;
+        }
+
         1 << ((self.device_info[106] & (0b1111)) as u8)
     }
 
