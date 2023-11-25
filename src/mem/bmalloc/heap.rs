@@ -21,7 +21,7 @@ const MIN_HEAP_ALIGN: usize = 4096;
 /// It uses a spinlock-based Mutex to ensure interior
 /// mutability.
 pub struct LockedBuddyAllocator<const N: usize> {
-    alloc: spin::Mutex<BuddyAllocator<N>>,
+    pub alloc: spin::Mutex<BuddyAllocator<N>>,
 }
 
 impl<const N: usize> LockedBuddyAllocator<N> {
@@ -77,7 +77,7 @@ impl FreeBlock {
 ///
 /// The parameter `N` defines the number of block sizes
 /// available for use.
-pub(crate) struct BuddyAllocator<const N: usize> {
+pub struct BuddyAllocator<const N: usize> {
     /// Base memory address of the underlying physical
     /// memory that the allocator can use.
     base_addr: NullLock<*mut u8>,
@@ -104,12 +104,12 @@ pub(crate) struct BuddyAllocator<const N: usize> {
 }
 
 impl<const N: usize> BuddyAllocator<N> {
-    // Creates a new `BuddyAllocator` from a base
-    // physical address and a size.
-    //
-    // The number of blocks `N` and the heap size must
-    // be sufficient so that the smallest possible blocks
-    // can still contain the `FreeBlock` header.
+    /// Creates a new `BuddyAllocator` from a base
+    /// physical address and a size.
+    ///
+    /// The number of blocks `N` and the heap size must
+    /// be sufficient so that the smallest possible blocks
+    /// can still contain the `FreeBlock` header.
     pub const fn new(base_addr: NonNull<u8>, max_blk_size: usize) -> Self {
         // We can compute the min block size using the
         // given max block size and levels count.
@@ -126,6 +126,35 @@ impl<const N: usize> BuddyAllocator<N> {
         assert!(max_blk_size & (MIN_HEAP_ALIGN - 1) == 0);
 
         unsafe { Self::from_base_unchecked(base_addr, max_blk_size) }
+    }
+
+    /// Resizes or translates the heap.
+    ///
+    /// Can be used to dynamically set up the heap depending on available physical memory.
+    pub fn resize(&mut self, base_addr: NonNull<u8>, max_blk_size: usize) {
+        let min_blk_size = max_blk_size >> (N - 1);
+
+        assert!(min_blk_size >= core::mem::size_of::<FreeBlock>());
+
+        assert!(max_blk_size & (MIN_HEAP_ALIGN - 1) == 0);
+
+        let base_addr_ptr = base_addr.as_ptr();
+        let base_addr = NullLock::new(base_addr_ptr);
+
+        self.base_addr = base_addr;
+        self.max_blk_size = max_blk_size;
+        self.min_blk_size = min_blk_size;
+
+        // Initialize the linked lists with null head.
+        let mut free_lists = [NullLock::new(ptr::null_mut()); N];
+
+        // Except for the last one, which initially contains
+        // the entire heap.
+        free_lists[N - 1] = NullLock::new(base_addr_ptr as *mut FreeBlock);
+        self.free_lists = free_lists;
+
+        let log2_min_blk_size = log2(min_blk_size);
+        self.log2_min_blk_size = log2_min_blk_size;
     }
 
     const unsafe fn from_base_unchecked(base_addr: NonNull<u8>, max_blk_size: usize) -> Self {
