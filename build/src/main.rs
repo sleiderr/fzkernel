@@ -24,6 +24,7 @@ use crate::{
 
 pub mod cli;
 pub mod errors;
+pub mod components;
 pub mod ui;
 
 pub static BOOTLOADER_BUILD: OnceCell<Arc<Mutex<BootloaderBuild>>> = OnceCell::uninit();
