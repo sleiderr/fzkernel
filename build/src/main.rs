@@ -1,3 +1,9 @@
+#![feature(async_fn_in_trait)]
+#![feature(exit_status_error)]
+
+pub mod components;
+pub mod errors;
+
 use std::error::Error;
 use std::fs;
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
