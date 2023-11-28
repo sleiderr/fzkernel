@@ -1,7 +1,9 @@
-use core::fmt::Debug;
+use core::{fmt::Debug, str::Utf8Error};
 
 #[cfg(feature = "alloc")]
 use alloc::boxed::Box;
+#[cfg(feature = "alloc")]
+use alloc::collections::TryReserveError;
 
 /// `BaseError` is a common trait implemented by every error type defined in FrozenBoot.
 ///
@@ -54,11 +56,17 @@ pub enum VideoError {
     Exception,
 }
 
+impl BaseError for VideoError {}
+
 /// `IOError` defines several error types useful when communicating with input/output devices or
 /// components.
+#[derive(Debug)]
 pub enum IOError {
     /// Operation resulted in a timeout.
     IOTimeout,
+
+    /// Invalid I/O command
+    InvalidCommand,
 
     #[cfg(feature = "alloc")]
     /// Generic error.
@@ -67,10 +75,15 @@ pub enum IOError {
     #[cfg(not(feature = "alloc"))]
     /// Generic error.
     Exception,
+
+    Unknown,
 }
+
+impl BaseError for IOError {}
 
 /// `ClockError` defines several error types useful when dealing with clock related components
 /// (such as HPET, TSC or RTC).
+#[derive(Debug)]
 pub enum ClockError {
     /// The clock is not present / available on the system, or an error was raised when checking
     /// for its availability.
@@ -87,3 +100,21 @@ pub enum ClockError {
     /// Generic error.
     Exception,
 }
+
+#[derive(Debug)]
+pub struct E820Error {}
+impl E820Error {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl BaseError for E820Error {}
+
+impl BaseError for ClockError {}
+
+#[cfg(feature = "alloc")]
+impl BaseError for TryReserveError {}
+
+#[cfg(feature = "alloc")]
+impl BaseError for Utf8Error {}

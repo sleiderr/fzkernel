@@ -14,9 +14,11 @@ use core::{fmt::Debug, slice};
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 
+use crate::errors::IOError;
+
 pub mod partitions;
 
-pub type IOResult<T> = Result<T, ()>;
+pub type IOResult<T> = Result<T, IOError>;
 
 /// A file-system independent file. This provides a basic set of functionalities when working with
 /// files. That should be the only file-related type useful in most situations.
@@ -186,7 +188,8 @@ pub trait FsFile: Debug {
         let size = self.size()?;
         let buf_len = buf.len();
 
-        buf.try_reserve(size).map_err(|_| ())?;
+        buf.try_reserve(size)
+            .map_err(|e| IOError::Exception(Box::new(e)))?;
         unsafe {
             let extended_buf = self.read_file_unchecked(buf)?;
             buf.set_len(extended_buf.len());
@@ -225,7 +228,10 @@ pub trait FsFile: Debug {
 
         let bytes_read = self.read_file(&mut contents)?;
 
-        buf.push_str(core::str::from_utf8(contents.as_slice()).map_err(|_| ())?);
+        buf.push_str(
+            core::str::from_utf8(contents.as_slice())
+                .map_err(|e| IOError::Exception(Box::new(e)))?,
+        );
 
         Ok(bytes_read)
     }
