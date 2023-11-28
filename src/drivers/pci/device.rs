@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use crate::{
     drivers::pci::{pci_read_long, pci_write_long, DeviceClass, PCICommonHeader, PCIHeader},
+    errors::{CanFail, IOError},
     println,
 };
 
@@ -309,7 +310,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Updates the status of an entry in this device's Command register.
-    fn update_command(&mut self, offset: u8, new_state: bool) -> Result<(), ()> {
+    fn update_command(&mut self, offset: u8, new_state: bool) -> CanFail<IOError> {
         let curr_command = self.read_command();
         let new_command = if new_state {
             curr_command | (1 << offset)
@@ -321,7 +322,7 @@ impl<'d> PCIDevice<'d> {
 
         ((self.read_command() & (1 << offset) != 0) == new_state)
             .then_some(())
-            .ok_or(())
+            .ok_or(IOError::Unknown)
     }
 
     /// Updates the content of thus device's Command register.
@@ -437,7 +438,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Sets if the device should respond to I/O space accesses.
-    pub fn set_io_space_access(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_io_space_access(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(IO_SPACE_COMMAND_BOFFSET, new_state)
     }
 
@@ -447,7 +448,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Sets if the device should reponse to Memory Space accesses.
-    pub fn set_memory_space_access(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_memory_space_access(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(MEM_SPACE_COMMAND_BOFFSET, new_state)
     }
 
@@ -457,7 +458,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Sets if the device can act as a master on the PCI bus.
-    pub fn set_bus_master(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_bus_master(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(BUS_MSTR_COMMAND_BOFFSET, new_state)
     }
 
@@ -467,7 +468,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Sets if the device should monitor Special Cycle operations.
-    pub fn set_special_cycle(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_special_cycle(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(SPEC_CYC_COMMAND_BOFFSET, new_state)
     }
 
@@ -480,7 +481,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Enables / disables the support of the `Memory Write and Invalidate` command.
-    pub fn set_mem_write_invalidate(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_mem_write_invalidate(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(MEM_WR_INVAL_COMMAND_BOFFSET, new_state)
     }
 
@@ -490,7 +491,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Enables / disables VGA palette snooping.
-    pub fn set_vga_palette_snoop(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_vga_palette_snoop(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(VGA_PAL_SNOOP_COMMAND_BOFFSET, new_state)
     }
 
@@ -500,7 +501,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Enables / disables normal action on parity error.
-    pub fn set_parity_error_response(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_parity_error_response(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(PAR_ERR_RESP_COMMAND_BOFFSET, new_state)
     }
 
@@ -510,7 +511,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Enables / disables address / data stepping.
-    pub fn set_stepping_control(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_stepping_control(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(STEP_CTRL_COMMAND_BOFFSET, new_state)
     }
 
@@ -520,7 +521,7 @@ impl<'d> PCIDevice<'d> {
     }
 
     /// Enables / disables `SERR#` driver.
-    pub fn set_serr_driver(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_serr_driver(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(SERR_COMMAND_BOFFSET, new_state)
     }
 
@@ -531,7 +532,7 @@ impl<'d> PCIDevice<'d> {
 
     /// Enables / disables the capability of master to generate fast back-to-back transactions to
     /// different agents.
-    pub fn set_fast_b2b_transactions(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_fast_b2b_transactions(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(FAST_B2B_TRANS_COMMAND_BOFFSET, new_state)
     }
 
@@ -539,7 +540,7 @@ impl<'d> PCIDevice<'d> {
         self.read_command() & (1 << INTERRUPT_DISABLE) != 0
     }
 
-    pub fn set_interrupt_disable(&mut self, new_state: bool) -> Result<(), ()> {
+    pub fn set_interrupt_disable(&mut self, new_state: bool) -> CanFail<IOError> {
         self.update_command(INTERRUPT_DISABLE, new_state)
     }
 
