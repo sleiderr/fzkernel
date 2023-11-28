@@ -173,10 +173,7 @@ impl HBAPort {
         while_timeout!(
             false,
             50,
-            if let Some(slot) = (0..32)
-                .map(|i| self.get_command_list_entry(i))
-                .position(|s| s.command_fis_length() == 0)
-            {
+            if let Some(slot) = (0..32).position(|i| !self.port_command_is_issued(i)) {
                 return slot;
             }
         );
@@ -392,7 +389,7 @@ impl HBAPort {
         self.sact &= !(1 << tag);
     }
 
-    pub fn port_command_is_issued(&mut self, tag: u8) -> bool {
+    pub fn port_command_is_issued(&self, tag: u8) -> bool {
         let ci = unsafe { core::ptr::read_volatile(&self.ci as *const u32) };
 
         ci & (1 << tag) != 0
