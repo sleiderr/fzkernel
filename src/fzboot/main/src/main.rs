@@ -9,8 +9,11 @@ extern crate alloc;
 
 use core::{arch::global_asm, ptr};
 use core::{panic::PanicInfo, ptr::NonNull};
-use fzboot::io::pic::PIC;
-use fzboot::x86::idt::{load_idt, GateDescriptor, GateType, IDTDescriptor, SegmentSelector, Table};
+use fzboot::{
+    drivers::pci::pci_devices_init,
+    x86::idt::{load_idt, IDTDescriptor},
+};
+use fzboot::{drivers::pci::pci_enumerate, io::pic::PIC};
 use fzboot::{
     info,
     io::acpi::{acpi_init, hpet::hpet_clk_init},
@@ -50,6 +53,8 @@ pub fn boot_main() -> ! {
     acpi_init();
     clock_init();
     interrupts_init();
+    pci_enumerate();
+    pci_devices_init();
 
     loop {}
 }
@@ -65,7 +70,7 @@ pub fn clock_init() {
     hpet_clk_init();
     TSCClock::init();
 
-    let curr_time = time::now();
+    let curr_time = time::date();
 
     info!("rtc_clock", "Standard UTC time {curr_time}");
     info!(
@@ -88,6 +93,9 @@ pub fn interrupts_init() {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    unsafe {
+        TEXT_BUFFER.get().unwrap().buffer.force_unlock();
+    }
     println!("fatal: {info}");
     loop {}
 }

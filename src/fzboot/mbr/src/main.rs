@@ -5,7 +5,6 @@ use core::panic::PanicInfo;
 
 use fzboot::io::disk::bios::{edd_ext_check, AddressPacket};
 use fzboot::video::io::clear_screen;
-use fzboot::x86::int::disable_interrupts;
 
 #[no_mangle]
 #[link_section = ".startup"]
@@ -25,6 +24,8 @@ pub fn _start() -> ! {
     let stage2 = AddressPacket::new(127, 0x0, 0x7e00, 0x1);
     stage2.disk_read(0x80);
     let stage2 = AddressPacket::new(127, 0x17c0, 0x00, 128);
+    stage2.disk_read(0x80);
+    let stage2 = AddressPacket::new(127, 0x27a0, 0x00, 255);
     stage2.disk_read(0x80);
     loader();
 }
