@@ -1,5 +1,6 @@
 use core::arch::asm;
 
+use crate::errors::{CanFail, IOError};
 use crate::io::{inb, outb};
 
 pub fn send_data(data: u8) {
@@ -14,7 +15,7 @@ pub fn send_ps2(cmd: u8) {
     outb(0x64, cmd);
 }
 
-pub fn input_wait(mut loops: u16) -> Result<(), ()> {
+pub fn input_wait(mut loops: u16) -> CanFail<IOError> {
     while loops > 0 {
         let status_reg: u8;
 
@@ -32,10 +33,10 @@ pub fn input_wait(mut loops: u16) -> Result<(), ()> {
         loops -= 1;
     }
 
-    Err(())
+    Err(IOError::IOTimeout)
 }
 
-pub fn output_wait(mut loops: u16) -> Result<(), ()> {
+pub fn output_wait(mut loops: u16) -> CanFail<IOError> {
     while loops > 0 {
         let status_reg: u8;
 
@@ -53,5 +54,5 @@ pub fn output_wait(mut loops: u16) -> Result<(), ()> {
         loops -= 1;
     }
 
-    Err(())
+    Err(IOError::IOTimeout)
 }

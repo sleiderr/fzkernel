@@ -10,7 +10,9 @@ use crate::{
         port::HBAPort,
         AHCI_CONTROLLER, SATA_COMMAND_QUEUE,
     },
+    errors::{CanFail, IOError},
     fs::partitions::{
+        gpt::load_drive_gpt,
         mbr::{load_drive_mbr, PartitionType},
         Partition, PartitionMetadata, PartitionTable,
     },
@@ -71,6 +73,17 @@ impl SATADrive {
     /// _GPT_.
     pub fn load_partition_table(&mut self) {
         let mbr = load_drive_mbr(self, 0);
+
+        if mbr.is_pmbr() {
+            let gpt = load_drive_gpt(self);
+
+            if let Some(gpt) = gpt {
+                self.partitions = gpt.get_partitions();
+                self.partition_table = PartitionTable::GPT(gpt);
+                return;
+            }
+        }
+
         self.partitions = mbr.get_partitions();
 
         for partition in self.partitions.clone().iter() {
@@ -91,7 +104,8 @@ impl SATADrive {
 
                         ext_part.set_start_lba(ext_part.start_lba() + meta.start_lba());
 
-                        self.partitions.push(Partition::from_mbr_metadata(ext_part));
+                        self.partitions
+                            .push(Partition::from_metadata(PartitionMetadata::MBR(ext_part)));
                         meta = partitions[1];
                     }
                 }
@@ -134,7 +148,11 @@ impl SATADrive {
     }
 
     /// Returns the size of a physical sector in number of logical sectors.
-    fn logical_sectors_per_physical_sector(&self) -> u8 {
+    pub fn logical_sectors_per_physical_sector(&self) -> u8 {
+        if !self.logical_physical_relationship_supported() {
+            return 1;
+        }
+
         1 << ((self.device_info[106] & (0b1111)) as u8)
     }
 
@@ -283,20 +301,20 @@ impl SATADrive {
         start_lba: u64,
         sectors_count: u16,
         buffer: &mut [u8],
-    ) -> Result<(), ()> {
+    ) -> CanFail<IOError> {
         (sectors_count as usize * self.logical_sector_size() as usize <= buffer.len())
             .then_some(())
-            .ok_or(())?;
+            .ok_or(IOError::InvalidCommand)?;
         (start_lba as usize + sectors_count as usize <= self.maximum_addressable_lba())
             .then_some(())
-            .ok_or(())?;
+            .ok_or(IOError::InvalidCommand)?;
 
         let slot = unsafe { self.read_dma(start_lba, sectors_count, buffer.as_mut_ptr()) };
 
         wait_for_or!(
             !SATA_COMMAND_QUEUE.lock().contains_key(&(slot as u8)),
             10_000,
-            return Err(())
+            return Err(IOError::IOTimeout)
         );
 
         Ok(())
@@ -316,17 +334,17 @@ impl SATADrive {
     /// let buffer = [1u8; 2096];
     /// get_sata_drive(0).lock().write(0, 4, &buffer);
     /// ```
-    pub fn write(&mut self, start_lba: u64, sectors_count: u16, buffer: &[u8]) -> Result<(), ()> {
+    pub fn write(&mut self, start_lba: u64, sectors_count: u16, buffer: &[u8]) -> CanFail<IOError> {
         (start_lba as usize + sectors_count as usize <= self.maximum_addressable_lba())
             .then_some(())
-            .ok_or(())?;
+            .ok_or(IOError::InvalidCommand)?;
 
         let slot = unsafe { self.write_dma(start_lba, sectors_count, buffer.as_ptr()) };
 
         wait_for_or!(
             !SATA_COMMAND_QUEUE.lock().contains_key(&(slot as u8)),
             10_000,
-            return Err(())
+            return Err(IOError::IOTimeout)
         );
 
         Ok(())

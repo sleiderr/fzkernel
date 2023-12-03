@@ -2,7 +2,7 @@ use core::{arch::asm, ptr};
 
 use bitfield::bitfield;
 
-use crate::{hex_print, video::io::cprint_info};
+use crate::{errors::E820Error, hex_print, video::io::cprint_info};
 
 pub const E820_MAP_ADDR: u16 = 0x4002;
 pub static mut E820_MAP_LENGTH: u16 = 0;
@@ -108,7 +108,7 @@ bitfield! {
     non_volatile, _: 1, 1;
 }
 
-fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, ()> {
+fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, E820Error> {
     let cf: u32;
 
     unsafe {
@@ -140,7 +140,7 @@ fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, ()> {
     }
 
     if cf == 1 || ebx == 0 {
-        return Err(());
+        return Err(E820Error::new());
     }
 
     Ok(ebx)
@@ -176,7 +176,7 @@ fn e820_type_print(descriptor: &AddressRangeDescriptor) {
 }
 
 #[cfg(feature = "real")]
-pub fn memory_map() -> Result<(), ()> {
+pub fn memory_map() {
     use crate::rinfo;
 
     let mut entry_count: u16 = 0;
