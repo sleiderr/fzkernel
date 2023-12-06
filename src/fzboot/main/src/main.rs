@@ -14,7 +14,10 @@ use core::{
 use core::{panic::PanicInfo, ptr::NonNull};
 use fzboot::{
     drivers::pci::pci_devices_init,
-    mem::e820::{AddressRangeDescriptor, E820MemType, E820MemoryMap},
+    mem::{
+        e820::{AddressRangeDescriptor, E820MemType, E820MemoryMap},
+        MemoryStructure, MEM_STRUCTURE,
+    },
     x86::idt::{load_idt, IDTDescriptor},
 };
 use fzboot::{drivers::pci::pci_enumerate, io::pic::PIC};
@@ -63,13 +66,20 @@ pub extern "C" fn _start() -> ! {
 
 pub fn boot_main() -> ! {
     fzboot::mem::zero_bss();
-    heap_init();
     init_framebuffer();
+    heap_init();
     acpi_init();
     clock_init();
     interrupts_init();
     pci_enumerate();
     pci_devices_init();
+
+    info!(
+        "mem",
+        "relocated heap (addr = {:#x}    size = {:#x})",
+        MEM_STRUCTURE.get().unwrap().heap_addr,
+        MEM_STRUCTURE.get().unwrap().heap_size
+    );
 
     loop {}
 }
@@ -130,9 +140,17 @@ pub fn heap_init() {
     } else {
         STACK_SIZE
     };
-    let stack_addr = unsafe { best_entry.base_addr().add(best_entry.length() as usize) } as usize;
+    let heap_addr = best_entry.base_addr();
+    let stack_addr = unsafe { heap_addr.add(best_entry.length() as usize) } as usize;
 
     let heap_size = (best_entry.length() as usize) - stack_size;
+
+    let mem_struct = MemoryStructure {
+        heap_addr: heap_addr as usize,
+        heap_size,
+    };
+
+    MEM_STRUCTURE.init_once(|| mem_struct);
 
     unsafe {
         BUDDY_ALLOCATOR.alloc.lock().resize(
@@ -140,6 +158,7 @@ pub fn heap_init() {
             heap_size as usize,
         )
     };
+
     unsafe {
         asm!("mov esp, eax", in("eax") stack_addr);
     }

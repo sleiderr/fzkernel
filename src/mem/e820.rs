@@ -201,6 +201,4 @@ pub fn memory_map() {
     }
 
     unsafe { ptr::write((E820_MAP_ADDR - 0x2) as *mut u16, entry_count) }
-
-    Ok(())
 }
