@@ -9,7 +9,7 @@ use fzboot::{
 
 const GDT_START: u32 = 0x5da0;
 
-pub fn load_gdt() -> Result<(), ()> {
+pub fn load_gdt() {
     let mut __boot_ds = SegmentDescriptor::new();
     __boot_ds.set_base(0);
     __boot_ds.set_limit(0xfffff);
@@ -39,6 +39,4 @@ pub fn load_gdt() -> Result<(), ()> {
 
     rinfo!("GDT initialized at ");
     hex_print!(GDT_START, u32);
-
-    Ok(())
 }

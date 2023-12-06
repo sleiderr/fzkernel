@@ -4,7 +4,10 @@ use core::{arch::asm, ptr};
 
 use core::mem;
 
-use crate::vbe_const;
+use crate::{
+    errors::{CanFail, VideoError},
+    vbe_const,
+};
 
 /// In-memory location of the [`VbeInfoBlock`] header
 pub const VESA_VBE_BUFFER: u16 = 0x4f00;
@@ -65,7 +68,7 @@ pub struct VbeInfoBlock {
 /// Can only be used while in real mode, or through a vm86
 /// monitor.
 #[cfg(feature = "real")]
-pub fn real_set_vesa_mode(mode: u16) -> Result<(), ()> {
+pub fn real_set_vesa_mode(mode: u16) -> CanFail<VideoError> {
     use crate::rerror;
 
     let result: u16;
@@ -91,7 +94,7 @@ pub fn real_set_vesa_mode(mode: u16) -> Result<(), ()> {
 
     if result != VBE_SUCCESS {
         rerror!("Failed to set VESA mode");
-        return Err(());
+        return Err(VideoError::VesaError);
     }
 
     Ok(())

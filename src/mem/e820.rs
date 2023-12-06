@@ -1,11 +1,18 @@
-use core::{arch::asm, mem, ptr};
+use core::{arch::asm, ptr};
 
 use bitfield::bitfield;
 
-use crate::{hex_print, video::io::cprint_info};
+use crate::{errors::E820Error, hex_print, video::io::cprint_info};
 
-pub const E820_MAP_ADDR: u16 = 0x4000;
+pub const E820_MAP_ADDR: u16 = 0x4002;
 pub static mut E820_MAP_LENGTH: u16 = 0;
+
+#[cfg(feature = "alloc")]
+/// Returns the list of memory entries returned by BIOS 0xE820 function.
+pub fn e820_entries() -> alloc::vec::Vec<AddressRangeDescriptor> {
+    let map = E820MemoryMap::new();
+    map.into_iter().collect()
+}
 
 pub struct E820MemoryMap {
     cursor: u16,
@@ -17,15 +24,20 @@ impl E820MemoryMap {
     }
 }
 
+impl Default for E820MemoryMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Iterator for E820MemoryMap {
     type Item = AddressRangeDescriptor;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if unsafe { E820_MAP_LENGTH == 0 } {
-            panic!();
-        }
+        let map_len = unsafe { ptr::read((E820_MAP_ADDR - 0x2) as *mut u16) };
+        assert_ne!(map_len, 0);
 
-        if unsafe { E820_MAP_LENGTH <= self.cursor } {
+        if map_len <= self.cursor {
             self.cursor = 0;
             return None;
         }
@@ -39,6 +51,7 @@ impl Iterator for E820MemoryMap {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct AddressRangeDescriptor {
     pub base_addr_low: u32,
     pub base_addr_high: u32,
@@ -48,6 +61,32 @@ pub struct AddressRangeDescriptor {
     pub extended_attributes: ExtendedAttributesARDS,
 }
 
+impl AddressRangeDescriptor {
+    /// Returns the length of this `AddressRangeDescriptor`, in bytes.
+    pub fn length(&self) -> u64 {
+        (self.length_high as u64) << 32 | (self.length_low as u64)
+    }
+
+    /// Returns a pointer to the base memory address of this `AddressRangeDescriptor`.
+    pub fn base_addr(&self) -> *mut u8 {
+        ((self.base_addr_high as u64) << 32 | (self.base_addr_low as u64)) as *mut u8
+    }
+}
+
+impl Default for AddressRangeDescriptor {
+    fn default() -> Self {
+        Self {
+            base_addr_low: 0,
+            base_addr_high: 0,
+            length_low: 0,
+            length_high: 0,
+            addr_type: E820MemType::RAM,
+            extended_attributes: ExtendedAttributesARDS(0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum E820MemType {
     RAM = 1,
@@ -61,6 +100,7 @@ pub enum E820MemType {
 }
 
 bitfield! {
+    #[derive(Debug, Clone, Copy)]
     #[repr(packed)]
     pub struct ExtendedAttributesARDS(u8);
     u32;
@@ -68,7 +108,7 @@ bitfield! {
     non_volatile, _: 1, 1;
 }
 
-fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, ()> {
+fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, E820Error> {
     let cf: u32;
 
     unsafe {
@@ -100,7 +140,7 @@ fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, ()> {
     }
 
     if cf == 1 || ebx == 0 {
-        return Err(());
+        return Err(E820Error::new());
     }
 
     Ok(ebx)
@@ -136,7 +176,7 @@ fn e820_type_print(descriptor: &AddressRangeDescriptor) {
 }
 
 #[cfg(feature = "real")]
-pub fn memory_map() -> Result<(), ()> {
+pub fn memory_map() {
     use crate::rinfo;
 
     let mut entry_count: u16 = 0;
@@ -147,7 +187,7 @@ pub fn memory_map() -> Result<(), ()> {
         entry_count += 1;
 
         let ard = (E820_MAP_ADDR + (entry_count - 1) * 24) as *mut AddressRangeDescriptor;
-        let descriptor: &AddressRangeDescriptor = unsafe { mem::transmute(ard) };
+        let descriptor: &AddressRangeDescriptor = unsafe { &*ard };
 
         let base_addr = (descriptor.base_addr_high << 16) + descriptor.base_addr_low;
         let length = (descriptor.length_high << 16) + descriptor.length_low;
@@ -160,7 +200,5 @@ pub fn memory_map() -> Result<(), ()> {
         e820_type_print(descriptor);
     }
 
-    unsafe { E820_MAP_LENGTH = entry_count };
-
-    Ok(())
+    unsafe { ptr::write((E820_MAP_ADDR - 0x2) as *mut u16, entry_count) }
 }
