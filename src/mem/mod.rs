@@ -2,9 +2,18 @@
 
 use core::ptr;
 
+use conquer_once::spin::OnceCell;
+
 pub mod bmalloc;
 pub mod e820;
 pub mod gdt;
+
+pub static MEM_STRUCTURE: OnceCell<MemoryStructure> = OnceCell::uninit();
+
+pub struct MemoryStructure {
+    pub heap_addr: usize,
+    pub heap_size: usize,
+}
 
 /// Zeroise the .bss segment when entering the program.
 ///
