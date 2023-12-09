@@ -1,7 +1,13 @@
-use core::mem::transmute;
-use core::ptr::read_volatile;
+use core::{mem, ptr};
 
-use crate::io::disk::bios::AddressPacket;
+use alloc::{string::String, vec::Vec};
+
+use crate::{drivers::ahci::get_sata_drive, error, info};
+use crate::{errors::MountError, fs::partitions::gpt::crc32_calc};
+
+pub const EXT4_SIGNATURE: u16 = 0xEF53;
+
+pub const EXT4_CHKSUM_TYPE_CRC32: u8 = 0x1;
 
 /// Compression feature flag (not implemented)
 pub const EXT4_FEATURE_INCOMPAT_COMPRESSION: u32 = 0x0001;
@@ -152,14 +158,74 @@ pub const EXT4_FEATURE_INCOMPAT_ENCRYPT: u32 = 0x10000;
 /// casefold (+F) flag enabled.
 pub const EXT4_FEATURE_INCOMPAT_CASEFOLD: u32 = 0x20000;
 
+pub struct Ext4FS {
+    drive_id: usize,
+    partition_id: usize,
+    superblock: Ext4Superblock,
+}
+
+impl Ext4FS {
+    pub fn mount(drive_id: usize, partition_id: usize) -> Result<Self, MountError> {
+        let mut drive = get_sata_drive(drive_id).lock();
+        let partition_data = drive.partitions.get(partition_id).unwrap();
+
+        let sb_start_lba = (1024 / drive.logical_sector_size() as u64) + partition_data.start_lba();
+        let sb_size_in_lba = mem::size_of::<Ext4Superblock>() as u32 / drive.logical_sector_size();
+
+        let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
+        drive
+            .read(sb_start_lba as u64, sb_size_in_lba as u16, &mut raw_sb)
+            .map_err(|_| MountError::IOError)?;
+
+        let sb = unsafe { ptr::read(raw_sb.as_ptr() as *mut Ext4Superblock) };
+
+        if sb.s_checksum_type == EXT4_CHKSUM_TYPE_CRC32 {
+            let sb_chcksum = crc32_calc(&raw_sb[..mem::size_of::<Ext4Superblock>() - 4]);
+
+            if sb_chcksum != sb.s_checksum {
+                error!(
+                    "ext4-fs",
+                    "found ext4 filesystem with invalid superblock checksum"
+                );
+                return Err(MountError::BadSuperblock);
+            }
+        }
+
+        if sb.s_magic != EXT4_SIGNATURE {
+            return Err(MountError::BadSuperblock);
+        }
+
+        info!(
+            "ext4-fs",
+            "mounted ext4 filesystem on drive {drive_id} partition {partition_id}"
+        );
+
+        info!(
+            "ext4-fs",
+            "label = {}    inodes_count = {}    mmp = {}    opts = {}",
+            sb.label(),
+            sb.inode_count(),
+            sb.mmp_enabled(),
+            sb.mount_opts()
+        );
+
+        Ok(Self {
+            drive_id,
+            partition_id,
+            superblock: sb,
+        })
+    }
+}
+
 /// The ext4 `Superblock` hold useful information about the filesystem's characteristics and
 /// attributes (block count, sizes, required features, ...).
 ///
 /// A copy of the partition's `Superblock` is kept in all groups, except if the `sparse_super`
 /// feature is enabled, in which case it is only kept in groups whose group number is either 0 or a
 /// power of 3, 5, 7.
+#[derive(Debug)]
 #[repr(C, packed)]
-pub struct Superblock {
+pub struct Ext4Superblock {
     /// Inodes count
     pub s_inodes_count: u32,
 
@@ -295,7 +361,6 @@ pub struct Superblock {
     /// Default hash version to use
     pub s_def_hash_version: u8,
 
-    ///
     pub s_jnl_backup_type: u8,
     pub s_desc_size: u16,
 
@@ -471,7 +536,85 @@ pub struct Superblock {
     s_checksum: u32,
 }
 
-impl Superblock {
+impl Ext4Superblock {
+    /// Checks if this `ext4` filesystem uses 64 bit features.
+    pub fn feat_64bit_support(&self) -> bool {
+        self.s_feature_incompat & EXT4_FEATURE_INCOMPAT_64BIT != 0
+    }
+
+    /// Returns a C-style string describing this filesystem's mount options.
+    pub fn mount_opts(&self) -> String {
+        let opts_bytes: Vec<u8> = self
+            .s_mount_opts
+            .into_iter()
+            .take_while(|&ch| ch != 0 && ch.is_ascii())
+            .collect();
+
+        String::from_utf8(opts_bytes).unwrap_or_else(|_| String::from(""))
+    }
+
+    /// Returns the number of blocks per block group.
+    pub fn blocks_per_group(&self) -> u32 {
+        self.s_blocks_per_group
+    }
+
+    /// Returns the number of inodes per block group.
+    pub fn inodes_per_group(&self) -> u32 {
+        self.s_inodes_per_group
+    }
+
+    /// Returns the total count of inodes.
+    pub fn inode_count(&self) -> u32 {
+        self.s_inodes_count
+    }
+
+    /// Returns the number of free inodes.
+    pub fn free_inodes_count(&self) -> u32 {
+        self.s_free_inodes_count
+    }
+
+    /// Returns the number of free blocks.
+    pub fn free_blk_count(&self) -> u64 {
+        if self.feat_64bit_support() {
+            (self.s_free_blocks_count as u64) | ((self.s_free_blocks_count_hi as u64) << 32)
+        } else {
+            self.s_free_blocks_count as u64
+        }
+    }
+
+    /// Returns the total count of blocks.
+    pub fn blk_count(&self) -> u64 {
+        if self.feat_64bit_support() {
+            (self.s_blocks_count as u64) | ((self.s_blocks_count_hi as u64) << 32)
+        } else {
+            self.s_blocks_count as u64
+        }
+    }
+
+    /// Returns the size of a block, in bytes.
+    pub fn blk_size(&self) -> u64 {
+        1024 << self.s_log_block_size
+    }
+
+    /// Checks if this `ext4` filesystem uses the _Multi Mount Protection_ (`MMP`) feature.
+    pub fn mmp_enabled(&self) -> bool {
+        self.s_feature_incompat & EXT4_FEATURE_INCOMPAT_MMP != 0
+    }
+
+    /// Returns this filesystem's label.
+    pub fn label(&self) -> String {
+        let label_bytes: Vec<u8> = self
+            .s_volume_name
+            .into_iter()
+            .take_while(|&ch| ch != 0 && ch.is_ascii())
+            .collect();
+
+        String::from_utf8(label_bytes).unwrap_or_else(|_| {
+            error!("ext4-fs", "invalid volume label");
+            String::from("")
+        })
+    }
+    /*
     pub fn list_root(&self) {}
 
     pub fn load_block(&self, n: u32, partition: &Ext4Partition, buffer: u32) -> Result<(), ()> {
@@ -508,12 +651,12 @@ impl Superblock {
         inode = unsafe { transmute(inode_addr) };
 
         inode
-    }
+    }*/
 }
 
 /// Each block group on the file system has a `GroupDescriptor` associated with it.
 ///
-/// A `block group` is a logical grouping of contigous block.
+/// A `block group` is a logical grouping of contiguous block.
 pub enum GroupDescriptor {
     Size32(GroupDescriptor32),
     Size64(GroupDescriptor64),
@@ -955,6 +1098,7 @@ struct ExtentIdx {
 }
 
 impl Inode {
+    /*
     // Returns true is this inode uses an extent tree
     pub fn uses_extent_tree(&self) -> bool {
         return self.i_flags == 0x80000;
@@ -1266,26 +1410,8 @@ impl Inode {
             return (path, depth as u8);
         }
     }
-}
 
-pub struct Ext4Partition {
-    pub offset: u32,
-    pub drive: u8,
-}
-
-impl Ext4Partition {
-    #[inline(never)]
-    pub fn read(&self, offset: u32, length: u32, buffer: u32) -> Result<(), ()> {
-        let offset = (offset / 512 + self.offset) as u64;
-        let address = AddressPacket::new(
-            (length / 512) as u16,
-            (buffer >> 16) as u16,
-            (buffer & 0xffff) as u16,
-            offset,
-        );
-        address.disk_read(self.drive);
-        Ok(())
-    }
+    */
 }
 
 #[repr(C, packed)]

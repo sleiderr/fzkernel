@@ -44,8 +44,8 @@ pub struct SATADrive {
     id: usize,
     device_info: [u16; 256],
     ahci_data: AHCIDriveInfo,
-    partition_table: PartitionTable,
-    partitions: Vec<Partition>,
+    pub partition_table: PartitionTable,
+    pub partitions: Vec<Partition>,
 }
 
 #[derive(Debug)]
