@@ -2,7 +2,12 @@ use core::{mem, ptr};
 
 use alloc::{string::String, vec::Vec};
 
-use crate::{drivers::ahci::get_sata_drive, error, info};
+use crate::{
+    drivers::ahci::get_sata_drive,
+    error,
+    errors::{CanFail, IOError},
+    info, println,
+};
 use crate::{errors::MountError, fs::partitions::gpt::crc32_calc};
 
 pub const EXT4_SIGNATURE: u16 = 0xEF53;
@@ -162,6 +167,7 @@ pub struct Ext4FS {
     drive_id: usize,
     partition_id: usize,
     superblock: Ext4Superblock,
+    group_descriptors: Vec<GroupDescriptor>,
 }
 
 impl Ext4FS {
@@ -202,19 +208,97 @@ impl Ext4FS {
 
         info!(
             "ext4-fs",
-            "label = {}    inodes_count = {}    mmp = {}    opts = {}",
+            "label = {}    inodes_count = {}    blk_count = {}    mmp = {}    opts = {}",
             sb.label(),
             sb.inode_count(),
+            sb.blk_count(),
             sb.mmp_enabled(),
             sb.mount_opts()
         );
 
-        Ok(Self {
+        let mut fs = Self {
             drive_id,
             partition_id,
             superblock: sb,
-        })
+            group_descriptors: alloc::vec![],
+        };
+        drop(drive);
+
+        fs.load_group_descriptors()
+            .map_err(|_| MountError::IOError)?;
+
+        Ok(fs)
     }
+
+    pub fn load_group_descriptors(&mut self) -> CanFail<IOError> {
+        self.group_descriptors.clear();
+
+        for i in 0..self.superblock.bg_count() {
+            let gd = self.__read_bg_descriptor(i)?;
+            self.group_descriptors.push(gd);
+        }
+
+        Ok(())
+    }
+
+    fn __read_blk(&self, blk_id: u64, buffer: &mut [u8]) -> CanFail<IOError> {
+        if blk_id > self.superblock.blk_count() {
+            return Err(IOError::InvalidCommand);
+        }
+        let mut drive = get_sata_drive(self.drive_id).lock();
+        let partition_data = drive.partitions.get(self.partition_id).unwrap();
+
+        let sectors_count = self.superblock.blk_size() / drive.logical_sector_size() as u64;
+        let start_lba = partition_data.start_lba()
+            + (blk_id * self.superblock.blk_size()) / drive.logical_sector_size() as u64;
+
+        drive.read(start_lba, sectors_count as u16, buffer)
+    }
+
+    pub fn __read_bg_descriptor(&self, bg_id: u64) -> Result<GroupDescriptor, IOError> {
+        assert!(bg_id < self.superblock.bg_count());
+
+        let descriptor_size = if self.superblock.feat_64bit_support() {
+            64
+        } else {
+            32
+        };
+
+        let initial_blk_offset =
+            if self.superblock.blk_size() == mem::size_of::<Ext4Superblock>() as u64 {
+                2
+            } else {
+                1
+            };
+
+        let descriptor_per_block = self.superblock.blk_size() / descriptor_size;
+        let desc_blk_id =
+            initial_blk_offset + (bg_id * descriptor_size) / self.superblock.blk_size();
+        let desc_idx_in_blk = bg_id % descriptor_per_block;
+
+        let mut blk = alloc::vec![0; self.superblock.blk_size() as usize];
+        self.__read_blk(desc_blk_id, &mut blk)?;
+
+        let raw_bg_descriptor = &blk[((desc_idx_in_blk * descriptor_size) as usize)
+            ..(((desc_idx_in_blk + 1) * descriptor_size) as usize)];
+
+        if self.superblock.feat_64bit_support() {
+            Ok(GroupDescriptor::Size64(unsafe {
+                ptr::read(raw_bg_descriptor.as_ptr() as *const GroupDescriptor64)
+            }))
+        } else {
+            Ok(GroupDescriptor::Size32(unsafe {
+                ptr::read(raw_bg_descriptor.as_ptr() as *const GroupDescriptor32)
+            }))
+        }
+    }
+
+    fn __read_inode(&self, inode_id: u64) {
+        let inode_blk_group = (inode_id - 1) / self.superblock.inodes_per_group() as u64;
+        let inode_bg_idx = (inode_id - 1) % self.superblock.inodes_per_group() as u64;
+    }
+
+    fn __bg_read_inode_entry(&self, bg_id: u64, idx: u64) {}
 }
 
 /// The ext4 `Superblock` hold useful information about the filesystem's characteristics and
@@ -342,6 +426,8 @@ pub struct Ext4Superblock {
 
     /// Number of block to preallocate for directories
     pub s_prealloc_dir_block: u8,
+
+    pub s_reserved_gdt_blocks: u16,
 
     /// UUID of journal Superblock
     pub s_journal_uuid: [u8; 16],
@@ -527,10 +613,7 @@ pub struct Ext4Superblock {
     /// Filename charset encoding flags
     s_encoding_flags: u16,
 
-    /// Inode for tracking orphan inodes
-    s_orphan_file_inum: u32,
-
-    s_reserved: [u32; 94],
+    s_reserved: [u32; 95],
 
     /// Checksum of the superblock: `crc32c(superblock)`
     s_checksum: u32,
@@ -540,6 +623,11 @@ impl Ext4Superblock {
     /// Checks if this `ext4` filesystem uses 64 bit features.
     pub fn feat_64bit_support(&self) -> bool {
         self.s_feature_incompat & EXT4_FEATURE_INCOMPAT_64BIT != 0
+    }
+
+    /// Returns the number of Block Groups for this filesystem.
+    pub fn bg_count(&self) -> u64 {
+        1 + self.blk_count() / self.blocks_per_group() as u64
     }
 
     /// Returns a C-style string describing this filesystem's mount options.
@@ -657,6 +745,7 @@ impl Ext4Superblock {
 /// Each block group on the file system has a `GroupDescriptor` associated with it.
 ///
 /// A `block group` is a logical grouping of contiguous block.
+#[derive(Debug)]
 pub enum GroupDescriptor {
     Size32(GroupDescriptor32),
     Size64(GroupDescriptor64),
@@ -666,6 +755,7 @@ pub enum GroupDescriptor {
 ///
 /// Used if [`EXT4_FEATURE_INCOMPAT_64BIT`] is clear.
 #[repr(C, packed)]
+#[derive(Debug)]
 pub struct GroupDescriptor32 {
     /// 32-bit location of block bitmap
     bg_block_bitmap: u32,
@@ -708,6 +798,7 @@ pub struct GroupDescriptor32 {
 ///
 /// Used if [`EXT4_FEATURE_INCOMPAT_64BIT`] is set.
 #[repr(C, packed)]
+#[derive(Debug)]
 pub struct GroupDescriptor64 {
     /// Lower 32-bit of location of block bitmap
     bg_block_bitmap_lo: u32,
@@ -775,6 +866,40 @@ pub struct GroupDescriptor64 {
     /// High 16_bits of the inode bitmap checksum
     bg_inode_bitmap_csum_hi: u16,
     reserved: u32,
+}
+
+impl GroupDescriptor64 {
+    pub fn block_bitmap_blk_addr(&self) -> u64 {
+        self.bg_block_bitmap_lo as u64 | ((self.bg_block_bitmap_hi as u64) << 32)
+    }
+
+    pub fn inode_bitmap_blk_addr(&self) -> u64 {
+        self.bg_inode_bitmap_lo as u64 | ((self.bg_inode_bitmap_hi as u64) << 32)
+    }
+
+    pub fn inode_table_blk_addr(&self) -> u64 {
+        self.bg_inode_table_lo as u64 | ((self.bg_inode_table_hi as u64) << 32)
+    }
+
+    pub fn snapshot_excl_bitmap_blk_addr(&self) -> u64 {
+        self.bg_exclude_bitmap_lo as u64 | ((self.bg_exclude_bitmap_hi as u64) << 32)
+    }
+
+    pub fn free_blk_count(&self) -> u32 {
+        self.bg_free_blocks_count_lo as u32 | ((self.bg_free_blocks_count_hi as u32) << 16)
+    }
+
+    pub fn free_inode_count(&self) -> u32 {
+        self.bg_free_inodes_count_lo as u32 | ((self.bg_free_inodes_count_hi as u32) << 16)
+    }
+
+    pub fn directory_count(&self) -> u32 {
+        self.bg_used_dirs_count_lo as u32 | ((self.bg_used_dirs_count_hi as u32) << 16)
+    }
+
+    pub fn unused_inodes_count(&self) -> u32 {
+        self.bg_itable_unused_lo as u32 | ((self.bg_itable_unused_hi as u32) << 16)
+    }
 }
 
 /// Block group flag: Inode table and bitmap are not initialized
