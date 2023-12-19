@@ -27,6 +27,7 @@ static NET_HEADER: virtio_net_hdr = virtio_net_hdr {
 };
 
 const HEADER_SIZE: usize = core::mem::size_of::<virtio_net_hdr>();
+const VIRTQ_DESC_F_WRITE: u16 = 2;
 
 pub struct VirtualIODevice {
 
@@ -58,7 +59,9 @@ impl NetworkDevice for VirtualIODevice {
             self.rx_queue.last_used_idx += 1;
 
             // Descriptor
-
+            let descriptor = &mut self.rx_queue.mut_descriptors()[used.id as usize];
+            assert_eq!(descriptor.flags, VIRTQ_DESC_F_WRITE, "unsupported flags {:x}", descriptor.flags);
+            descriptor.addr = 0;
 
             let mut buf = self.rx_packets_inflight.pop_front().unwrap();
             buf.len = used.len as usize - HEADER_SIZE;
@@ -69,7 +72,7 @@ impl NetworkDevice for VirtualIODevice {
         }
         let mut queued = 0;
         for i in 0..self.rx_queue.size {
-            let desc
+
         }
     }
 

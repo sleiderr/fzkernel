@@ -1,5 +1,8 @@
 use alloc::rc::Rc;
 use alloc::vec::Vec;
+use alloc::boxed::Box;
+
+use core::error::Error;
 use core::cell::RefCell;
 use core::slice;
 
@@ -60,6 +63,17 @@ impl Packet {
         unsafe {
             slice::from_raw_parts_mut(self.virtual_address.sub(len), len)
         }
+    }
+}
+
+impl MemoryPool {
+
+    pub fn allocate(entries: usize, size: usize) -> Result<Rc<MemoryPool>, Box<dyn Error>> {
+        let entry_size = match size {
+            0 => 2048,
+            _ => size,
+        };
+
     }
 
 }
