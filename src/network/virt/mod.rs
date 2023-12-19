@@ -3,7 +3,7 @@ mod queue;
 use alloc::rc::Rc;
 use alloc::collections::VecDeque;
 use queue::VirtualQueue;
-use crate::network::{NetworkDevice, Packet};
+use crate::network::{NetworkDevice};
 use crate::network::mem::{MemoryPool, Packet};
 
 #[repr(C)]
@@ -18,7 +18,7 @@ pub struct virtio_net_hdr {
 
 static NET_HEADER: virtio_net_hdr = virtio_net_hdr {
     flags: 0,
-    gso_type: VIRTIO_NET_HDR_GSO_NONE,
+    gso_type: 0,
     hdr_len: 14 + 20 + 8,
     // ignored fields
     csum_offset: 0,
