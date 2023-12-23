@@ -6,9 +6,9 @@ use crate::{
     drivers::ahci::get_sata_drive,
     error,
     errors::{CanFail, IOError},
-    info, println,
+    info,
 };
-use crate::{errors::MountError, fs::partitions::gpt::crc32_calc};
+use crate::{errors::MountError, fs::FsFile};
 
 pub const EXT4_SIGNATURE: u16 = 0xEF53;
 
@@ -173,7 +173,10 @@ pub struct Ext4FS {
 impl Ext4FS {
     pub fn mount(drive_id: usize, partition_id: usize) -> Result<Self, MountError> {
         let mut drive = get_sata_drive(drive_id).lock();
-        let partition_data = drive.partitions.get(partition_id).unwrap();
+        let partition_data = drive
+            .partitions
+            .get(partition_id)
+            .ok_or(MountError::Unknown)?;
 
         let sb_start_lba = (1024 / drive.logical_sector_size() as u64) + partition_data.start_lba();
         let sb_size_in_lba = mem::size_of::<Ext4Superblock>() as u32 / drive.logical_sector_size();
@@ -186,12 +189,14 @@ impl Ext4FS {
         let sb = unsafe { ptr::read(raw_sb.as_ptr() as *mut Ext4Superblock) };
 
         if sb.s_checksum_type == EXT4_CHKSUM_TYPE_CRC32 {
-            let sb_chcksum = crc32_calc(&raw_sb[..mem::size_of::<Ext4Superblock>() - 4]);
+            let sb_chcksum = crc32c_calc(&raw_sb[..mem::size_of::<Ext4Superblock>() - 4]);
 
             if sb_chcksum != sb.s_checksum {
                 error!(
                     "ext4-fs",
-                    "found ext4 filesystem with invalid superblock checksum"
+                    "found ext4 filesystem with invalid superblock checksum (got {:#010x} expected {:#010x})",
+                    sb_chcksum,
+                    unsafe { ptr::read_unaligned(ptr::addr_of!(sb.s_checksum)) }
                 );
                 return Err(MountError::BadSuperblock);
             }
@@ -246,7 +251,10 @@ impl Ext4FS {
             return Err(IOError::InvalidCommand);
         }
         let mut drive = get_sata_drive(self.drive_id).lock();
-        let partition_data = drive.partitions.get(self.partition_id).unwrap();
+        let partition_data = drive
+            .partitions
+            .get(self.partition_id)
+            .ok_or(IOError::Unknown)?;
 
         let sectors_count = self.superblock.blk_size() / drive.logical_sector_size() as u64;
         let start_lba = partition_data.start_lba()
@@ -293,12 +301,37 @@ impl Ext4FS {
         }
     }
 
-    fn __read_inode(&self, inode_id: u64) {
+    fn __read_inode(&self, inode_id: u64) -> Result<Inode, IOError> {
         let inode_blk_group = (inode_id - 1) / self.superblock.inodes_per_group() as u64;
         let inode_bg_idx = (inode_id - 1) % self.superblock.inodes_per_group() as u64;
-    }
+        let inode_byte_idx = inode_bg_idx * self.superblock.s_inode_size as u64;
 
-    fn __bg_read_inode_entry(&self, bg_id: u64, idx: u64) {}
+        let inode_blk_offset = inode_byte_idx / self.superblock.blk_size();
+        let inode_bytes_idx_in_blk = inode_byte_idx % self.superblock.blk_size();
+
+        let descriptor = self
+            .group_descriptors
+            .get(inode_blk_group as usize)
+            .ok_or(IOError::Unknown)?;
+
+        let mut raw_inode_blk = alloc::vec![0; self.superblock.blk_size() as usize];
+
+        match descriptor {
+            GroupDescriptor::Size32(desc) => self.__read_blk(
+                inode_blk_offset + desc.inode_table_blk_addr() as u64,
+                &mut raw_inode_blk,
+            ),
+            GroupDescriptor::Size64(desc) => self.__read_blk(
+                inode_blk_offset + desc.inode_table_blk_addr(),
+                &mut raw_inode_blk,
+            ),
+        }?;
+
+        let raw_inode = &raw_inode_blk[(inode_bytes_idx_in_blk as usize)
+            ..(inode_bytes_idx_in_blk + mem::size_of::<Inode>() as u64) as usize];
+
+        unsafe { Ok(ptr::read(raw_inode.as_ptr() as *const Inode)) }
+    }
 }
 
 /// The ext4 `Superblock` hold useful information about the filesystem's characteristics and
@@ -625,6 +658,11 @@ impl Ext4Superblock {
         self.s_feature_incompat & EXT4_FEATURE_INCOMPAT_64BIT != 0
     }
 
+    /// Checks is a feature part of the incompatible set is available for this `Ext4FS`.
+    pub fn incompat_contains(&self, flag: u32) -> bool {
+        self.s_feature_incompat & flag != 0
+    }
+
     /// Returns the number of Block Groups for this filesystem.
     pub fn bg_count(&self) -> u64 {
         1 + self.blk_count() / self.blocks_per_group() as u64
@@ -702,44 +740,6 @@ impl Ext4Superblock {
             String::from("")
         })
     }
-    /*
-    pub fn list_root(&self) {}
-
-    pub fn load_block(&self, n: u32, partition: &Ext4Partition, buffer: u32) -> Result<(), ()> {
-        let block_size_bytes = 2u32.pow((10 + self.s_log_block_size)) as u32;
-
-        partition.read(n * block_size_bytes, block_size_bytes, buffer)
-    }
-
-    // Returns a reference to an Inode given its number (assuming default inode record size is 256 bytes)
-    pub fn get_inode(&mut self, inode_nb: u32, partition: &Ext4Partition) -> &Inode {
-        let block_group = (inode_nb - 1) / self.s_inodes_per_group;
-        let index = (inode_nb - 1) % self.s_inodes_per_group;
-        let block_size = 2u32.pow((10 + self.s_log_block_size)) as u32;
-        let grp_descriptor_addr = block_size + 64 * block_group;
-
-        partition.read(grp_descriptor_addr, 4096, 0x1500);
-
-        let grp_descriptor_addr = (0x1500 + grp_descriptor_addr % 512) as *mut GroupDescriptor;
-        let grp_desc: &GroupDescriptor32;
-        grp_desc = unsafe { transmute(grp_descriptor_addr) };
-
-        if self.s_inode_size == 0 {
-            self.s_inode_size = 256
-        }
-
-        let inode_table_address = grp_desc.bg_inode_table * block_size;
-        let inode_address = inode_table_address + (self.s_inode_size as u32) * index;
-
-        partition.read(inode_address, 512, 0x1500);
-
-        let inode: &Inode;
-        let inode_addr = (0x1500 + inode_address % 512) as *mut Inode;
-
-        inode = unsafe { transmute(inode_addr) };
-
-        inode
-    }*/
 }
 
 /// Each block group on the file system has a `GroupDescriptor` associated with it.
@@ -792,6 +792,12 @@ pub struct GroupDescriptor32 {
 
     /// Group descriptor checksum
     bg_checksum: u16,
+}
+
+impl GroupDescriptor32 {
+    pub fn inode_table_blk_addr(&self) -> u32 {
+        self.bg_inode_table
+    }
 }
 
 /// 64-bit version of the [`GroupDescriptor`]
@@ -912,6 +918,7 @@ pub const EXT4_BG_BLOCK_UNINIT: u16 = 0x0002;
 pub const EXT4_BG_INODE_ZEROED: u16 = 0x0004;
 
 #[repr(C, packed)]
+#[derive(Debug)]
 pub struct Inode {
     /// File mode
     pub i_mode: u16,
@@ -954,7 +961,7 @@ pub struct Inode {
     i_version: u32,
 
     /// Block map or extent tree
-    pub i_block: [u32; 15],
+    pub i_block: [u8; 60],
 
     /// File version
     i_generation: u32,
@@ -1165,8 +1172,106 @@ pub mod inode_flags {
     pub const EXT4_RESERVED_FL: u32 = 0x80000000;
 }
 
+impl Inode {
+    pub fn mode_contains(&self, flag: u16) -> bool {
+        self.i_mode & flag != 0
+    }
+}
+
+pub struct BlockMap {
+    i_entries: [u32; 15],
+}
+
+impl BlockMap {
+    pub fn load_blk_map(inode: &Inode) -> Option<Self> {
+        let mut i_entries = [0u32; 15];
+
+        for (i, entry) in i_entries.iter_mut().enumerate() {
+            *entry = u32::from_le_bytes(inode.i_block[i..i + 4].try_into().ok()?);
+        }
+
+        Some(Self { i_entries })
+    }
+
+    pub fn read_file_blk(&self, blk_id: u32) -> u32 {
+        if blk_id < 11 {
+            return self.i_entries[blk_id as usize];
+        }
+
+        0
+    }
+}
+
+pub const EXT4_EXTENTH_MAGIC: u16 = 0xF30A;
+
+pub struct ExtentTree {
+    extents: Vec<Extent>,
+}
+
+fn traverse_extent_layer(fs: &Ext4FS, ext_data: &[u8], extents: &mut Vec<Extent>) -> Option<()> {
+    let header = unsafe { ExtentHeader::load(ext_data.as_ptr() as *const ExtentHeader) }?;
+
+    // this extent points directly to data blocks
+    if header.eh_depth == 0 {
+        for entry in 0..header.eh_entries {
+            let raw_entry = &ext_data[(mem::size_of::<ExtentHeader>()
+                + (entry as usize) * mem::size_of::<Extent>())
+                ..mem::size_of::<ExtentHeader>() + (1 + entry as usize) * mem::size_of::<Extent>()];
+
+            let extent = Extent {
+                ee_block: u32::from_le_bytes(raw_entry[0..4].try_into().ok()?),
+                ee_len: u16::from_le_bytes(raw_entry[4..6].try_into().ok()?),
+                ee_start_hi: u16::from_le_bytes(raw_entry[6..8].try_into().ok()?),
+                ee_start_lo: u32::from_le_bytes(raw_entry[8..12].try_into().ok()?),
+            };
+
+            extents.push(extent);
+        }
+
+        return Some(());
+    }
+
+    for entry in 0..header.eh_entries {
+        let raw_entry = &ext_data[(mem::size_of::<ExtentHeader>()
+            + (entry as usize) * mem::size_of::<ExtentIdx>())
+            ..mem::size_of::<ExtentHeader>() + (1 + entry as usize) * mem::size_of::<ExtentIdx>()];
+
+        let extent_idx = ExtentIdx {
+            ei_block: u32::from_le_bytes(raw_entry[0..4].try_into().ok()?),
+            ei_leaf_lo: u32::from_le_bytes(raw_entry[4..8].try_into().ok()?),
+            ei_leaf_hi: u16::from_le_bytes(raw_entry[8..10].try_into().ok()?),
+            ei_unused: u16::from_le_bytes(raw_entry[10..12].try_into().ok()?),
+        };
+
+        let mut data = alloc::vec![0u8; fs.superblock.blk_size() as usize];
+
+        fs.__read_blk(extent_idx.leaf(), &mut data).ok()?;
+        traverse_extent_layer(fs, &data, extents);
+    }
+
+    Some(())
+}
+
+impl ExtentTree {
+    pub fn load_extent_tree(fs: &Ext4FS, inode: &Inode) -> Option<Self> {
+        if !fs
+            .superblock
+            .incompat_contains(EXT4_FEATURE_INCOMPAT_EXTENTS)
+            | !inode.contains_flag(inode_flags::EXT4_EXTENTS_FL)
+        {
+            return None;
+        };
+        let mut extents: Vec<Extent> = alloc::vec![];
+
+        traverse_extent_layer(fs, &inode.i_block, &mut extents);
+
+        Some(Self { extents })
+    }
+}
+
 /// Header contained in each node of the `ext4` extent tree.
-#[repr(C, packed)]
+#[derive(Debug)]
+#[repr(C)]
 struct ExtentHeader {
     /// Magic number (should be `0xf30a`)
     eh_magic: u16,
@@ -1186,8 +1291,20 @@ struct ExtentHeader {
     eh_generation: u32,
 }
 
+impl ExtentHeader {
+    pub unsafe fn load(exth_ref: *const ExtentHeader) -> Option<Self> {
+        let header = ptr::read_unaligned(exth_ref);
+        if header.eh_magic != EXT4_EXTENTH_MAGIC {
+            None
+        } else {
+            Some(header)
+        }
+    }
+}
+
 /// Represents a leaf node of the extent tree.
-#[repr(C, packed)]
+#[derive(Debug)]
+#[repr(C)]
 struct Extent {
     /// First file block number that this extent covers
     ee_block: u32,
@@ -1208,7 +1325,7 @@ struct Extent {
 /// Represents an internal node of the extent tree (an index node)
 #[repr(C, packed)]
 struct ExtentIdx {
-    /// This index node covers file blocks froù `block` onward.
+    /// This index node covers file blocks from `block` onward.
     ei_block: u32,
 
     /// Low 32-bits of the block number of the extent node that is the next level lower in the
@@ -1222,13 +1339,26 @@ struct ExtentIdx {
     ei_unused: u16,
 }
 
+impl ExtentIdx {
+    fn leaf(&self) -> u64 {
+        (self.ei_leaf_lo as u64) | ((self.ei_leaf_hi as u64) << 32)
+    }
+}
+
 impl Inode {
-    /*
-    // Returns true is this inode uses an extent tree
-    pub fn uses_extent_tree(&self) -> bool {
-        return self.i_flags == 0x80000;
+    pub fn contains_flag(&self, flag: u32) -> bool {
+        self.i_flags & flag != 0
     }
 
+    pub fn uses_extent_tree(&self) -> bool {
+        self.contains_flag(inode_flags::EXT4_EXTENTS_FL)
+    }
+
+    pub fn size(&self) -> u64 {
+        self.i_size as u64 | ((self.i_dir_acl as u64) << 32)
+    }
+
+    /*
     // Get block number of the nth data block.
     pub fn get_nth_data_block(&self, block_size: u32, n: u32, partition: &Ext4Partition) -> u64 {
         let q = self.i_size as i32 / block_size as i32;
@@ -1546,4 +1676,105 @@ struct LinkedDirectoryEntry {
     name_len: u8,
     file_type: u8,
     name: u32,
+}
+
+#[derive(Debug)]
+pub struct Ext4File {
+    inode: Inode,
+}
+
+impl Ext4File {
+    pub fn from_inode(inode: Inode) -> Result<Self, IOError> {
+        if !inode.mode_contains(inode_mode::S_IFREG) {
+            return Err(IOError::Unknown);
+        }
+        Ok(Self { inode })
+    }
+}
+
+impl FsFile for Ext4File {
+    fn read(&mut self, buf: &mut [u8]) -> super::IOResult<usize> {
+        todo!()
+    }
+
+    fn seek(&mut self, pos: super::Seek) -> usize {
+        todo!()
+    }
+
+    fn size(&self) -> super::IOResult<usize> {
+        Ok(self.inode.size() as usize)
+    }
+
+    fn truncate(&mut self, size: usize) -> super::IOResult<usize> {
+        todo!()
+    }
+
+    fn extend(&mut self, size: usize) -> super::IOResult<usize> {
+        todo!()
+    }
+}
+
+/*****************************************************************/
+/*                                                               */
+/* CRC LOOKUP TABLE                                              */
+/* ================                                              */
+/* The following CRC lookup table was generated automagically    */
+/* by the Rocksoft^tm Model CRC Algorithm Table Generation       */
+/* Program V1.0 using the following model parameters:            */
+/*                                                               */
+/*    Width   : 4 bytes.                                         */
+/*    Poly    : 0x1EDC6F41L                                      */
+/*    Reverse : TRUE.                                            */
+/*                                                               */
+/* For more information on the Rocksoft^tm Model CRC Algorithm,  */
+/* see the document titled "A Painless Guide to CRC Error        */
+/* Detection Algorithms" by Ross Williams                        */
+/* (ross@guest.adelaide.edu.au.). This document is likely to be  */
+/* in the FTP archive "ftp.adelaide.edu.au/pub/rocksoft".        */
+/*                                                               */
+/*****************************************************************/
+
+const CRC32C_LO_TABLE: [u32; 256] = [
+    0x00000000, 0xF26B8303, 0xE13B70F7, 0x1350F3F4, 0xC79A971F, 0x35F1141C, 0x26A1E7E8, 0xD4CA64EB,
+    0x8AD958CF, 0x78B2DBCC, 0x6BE22838, 0x9989AB3B, 0x4D43CFD0, 0xBF284CD3, 0xAC78BF27, 0x5E133C24,
+    0x105EC76F, 0xE235446C, 0xF165B798, 0x030E349B, 0xD7C45070, 0x25AFD373, 0x36FF2087, 0xC494A384,
+    0x9A879FA0, 0x68EC1CA3, 0x7BBCEF57, 0x89D76C54, 0x5D1D08BF, 0xAF768BBC, 0xBC267848, 0x4E4DFB4B,
+    0x20BD8EDE, 0xD2D60DDD, 0xC186FE29, 0x33ED7D2A, 0xE72719C1, 0x154C9AC2, 0x061C6936, 0xF477EA35,
+    0xAA64D611, 0x580F5512, 0x4B5FA6E6, 0xB93425E5, 0x6DFE410E, 0x9F95C20D, 0x8CC531F9, 0x7EAEB2FA,
+    0x30E349B1, 0xC288CAB2, 0xD1D83946, 0x23B3BA45, 0xF779DEAE, 0x05125DAD, 0x1642AE59, 0xE4292D5A,
+    0xBA3A117E, 0x4851927D, 0x5B016189, 0xA96AE28A, 0x7DA08661, 0x8FCB0562, 0x9C9BF696, 0x6EF07595,
+    0x417B1DBC, 0xB3109EBF, 0xA0406D4B, 0x522BEE48, 0x86E18AA3, 0x748A09A0, 0x67DAFA54, 0x95B17957,
+    0xCBA24573, 0x39C9C670, 0x2A993584, 0xD8F2B687, 0x0C38D26C, 0xFE53516F, 0xED03A29B, 0x1F682198,
+    0x5125DAD3, 0xA34E59D0, 0xB01EAA24, 0x42752927, 0x96BF4DCC, 0x64D4CECF, 0x77843D3B, 0x85EFBE38,
+    0xDBFC821C, 0x2997011F, 0x3AC7F2EB, 0xC8AC71E8, 0x1C661503, 0xEE0D9600, 0xFD5D65F4, 0x0F36E6F7,
+    0x61C69362, 0x93AD1061, 0x80FDE395, 0x72966096, 0xA65C047D, 0x5437877E, 0x4767748A, 0xB50CF789,
+    0xEB1FCBAD, 0x197448AE, 0x0A24BB5A, 0xF84F3859, 0x2C855CB2, 0xDEEEDFB1, 0xCDBE2C45, 0x3FD5AF46,
+    0x7198540D, 0x83F3D70E, 0x90A324FA, 0x62C8A7F9, 0xB602C312, 0x44694011, 0x5739B3E5, 0xA55230E6,
+    0xFB410CC2, 0x092A8FC1, 0x1A7A7C35, 0xE811FF36, 0x3CDB9BDD, 0xCEB018DE, 0xDDE0EB2A, 0x2F8B6829,
+    0x82F63B78, 0x709DB87B, 0x63CD4B8F, 0x91A6C88C, 0x456CAC67, 0xB7072F64, 0xA457DC90, 0x563C5F93,
+    0x082F63B7, 0xFA44E0B4, 0xE9141340, 0x1B7F9043, 0xCFB5F4A8, 0x3DDE77AB, 0x2E8E845F, 0xDCE5075C,
+    0x92A8FC17, 0x60C37F14, 0x73938CE0, 0x81F80FE3, 0x55326B08, 0xA759E80B, 0xB4091BFF, 0x466298FC,
+    0x1871A4D8, 0xEA1A27DB, 0xF94AD42F, 0x0B21572C, 0xDFEB33C7, 0x2D80B0C4, 0x3ED04330, 0xCCBBC033,
+    0xA24BB5A6, 0x502036A5, 0x4370C551, 0xB11B4652, 0x65D122B9, 0x97BAA1BA, 0x84EA524E, 0x7681D14D,
+    0x2892ED69, 0xDAF96E6A, 0xC9A99D9E, 0x3BC21E9D, 0xEF087A76, 0x1D63F975, 0x0E330A81, 0xFC588982,
+    0xB21572C9, 0x407EF1CA, 0x532E023E, 0xA145813D, 0x758FE5D6, 0x87E466D5, 0x94B49521, 0x66DF1622,
+    0x38CC2A06, 0xCAA7A905, 0xD9F75AF1, 0x2B9CD9F2, 0xFF56BD19, 0x0D3D3E1A, 0x1E6DCDEE, 0xEC064EED,
+    0xC38D26C4, 0x31E6A5C7, 0x22B65633, 0xD0DDD530, 0x0417B1DB, 0xF67C32D8, 0xE52CC12C, 0x1747422F,
+    0x49547E0B, 0xBB3FFD08, 0xA86F0EFC, 0x5A048DFF, 0x8ECEE914, 0x7CA56A17, 0x6FF599E3, 0x9D9E1AE0,
+    0xD3D3E1AB, 0x21B862A8, 0x32E8915C, 0xC083125F, 0x144976B4, 0xE622F5B7, 0xF5720643, 0x07198540,
+    0x590AB964, 0xAB613A67, 0xB831C993, 0x4A5A4A90, 0x9E902E7B, 0x6CFBAD78, 0x7FAB5E8C, 0x8DC0DD8F,
+    0xE330A81A, 0x115B2B19, 0x020BD8ED, 0xF0605BEE, 0x24AA3F05, 0xD6C1BC06, 0xC5914FF2, 0x37FACCF1,
+    0x69E9F0D5, 0x9B8273D6, 0x88D28022, 0x7AB90321, 0xAE7367CA, 0x5C18E4C9, 0x4F48173D, 0xBD23943E,
+    0xF36E6F75, 0x0105EC76, 0x12551F82, 0xE03E9C81, 0x34F4F86A, 0xC69F7B69, 0xD5CF889D, 0x27A40B9E,
+    0x79B737BA, 0x8BDCB4B9, 0x988C474D, 0x6AE7C44E, 0xBE2DA0A5, 0x4C4623A6, 0x5F16D052, 0xAD7D5351,
+];
+
+fn crc32c_calc(buf: &[u8]) -> u32 {
+    let mut crc = 0xFFFFFFFF;
+
+    for &b in buf {
+        crc = CRC32C_LO_TABLE[((crc ^ b as u32) & 0xff) as usize] ^ (crc >> 8);
+    }
+
+    crc
 }
