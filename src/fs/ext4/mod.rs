@@ -6,10 +6,15 @@ use crate::{
     drivers::ahci::{get_sata_drive, SATA_DRIVES},
     error,
     errors::{CanFail, IOError},
-    fs::{IOResult, PartFS},
-    info,
+    fs::{
+        ext4::dir::{Ext4Directory, Ext4InodeNumber},
+        IOResult, PartFS,
+    },
+    info, println,
 };
 use crate::{errors::MountError, fs::FsFile};
+
+pub mod dir;
 
 pub const EXT4_SIGNATURE: u16 = 0xEF53;
 
@@ -173,6 +178,18 @@ pub struct Ext4FS {
 }
 
 impl Ext4FS {
+    pub fn root_dir(&self) -> Ext4Directory {
+        let root_inode = self.__read_inode(2).unwrap();
+
+        Ext4Directory::from_inode(
+            self.drive_id,
+            self.partition_id,
+            root_inode,
+            Ext4InodeNumber::ROOT_DIR,
+        )
+        .unwrap()
+    }
+
     pub fn identify(drive_id: usize, partition_data: u64) -> Result<bool, IOError> {
         let mut drive = get_sata_drive(drive_id).lock();
 
@@ -1458,6 +1475,28 @@ impl core::fmt::Debug for Ext4File {
 }
 
 impl Ext4File {
+    pub fn from_inode_id(drive_id: usize, part_id: usize, inode_id: usize) -> IOResult<Self> {
+        let drive = SATA_DRIVES
+            .get()
+            .ok_or(IOError::InvalidDevice)?
+            .get(drive_id)
+            .ok_or(IOError::InvalidDevice)?
+            .lock();
+        let part = drive
+            .partitions
+            .get(part_id)
+            .ok_or(IOError::InvalidDevice)?;
+        let fs = &part.fs.clone();
+
+        if let PartFS::Ext4(fs) = fs {
+            drop(drive);
+            let inode = fs.__read_inode(inode_id as u64)?;
+
+            return Self::from_inode(drive_id, part_id, inode, inode_id);
+        }
+
+        Err(IOError::Unknown)
+    }
     pub fn from_inode(
         drive_id: usize,
         part_id: usize,

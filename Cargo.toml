@@ -12,6 +12,7 @@ workspace = "build/"
 
 [dependencies]
 bitfield = "0.14"
+bytemuck = { version = "1.14", features = ["derive"] }
 numtoa = "0.2"
 rlibc = "1"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
