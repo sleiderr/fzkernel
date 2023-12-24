@@ -1,11 +1,12 @@
-use core::{mem, ptr};
+use core::{mem, ptr, slice};
 
 use alloc::{string::String, vec::Vec};
 
 use crate::{
-    drivers::ahci::get_sata_drive,
+    drivers::ahci::{get_sata_drive, SATA_DRIVES},
     error,
     errors::{CanFail, IOError},
+    fs::{IOResult, PartFS},
     info,
 };
 use crate::{errors::MountError, fs::FsFile};
@@ -346,7 +347,7 @@ impl Ext4FS {
         self.__read_bg_descriptor_preinit(bg_id, part_offset)
     }
 
-    fn __read_inode(&self, inode_id: u64) -> Result<Inode, IOError> {
+    pub fn __read_inode(&self, inode_id: u64) -> Result<Inode, IOError> {
         let inode_blk_group = (inode_id - 1) / self.superblock.inodes_per_group() as u64;
         let inode_bg_idx = (inode_id - 1) % self.superblock.inodes_per_group() as u64;
         let inode_byte_idx = inode_bg_idx * self.superblock.s_inode_size as u64;
@@ -1253,6 +1254,21 @@ pub struct ExtentTree {
     extents: Vec<Extent>,
 }
 
+impl core::fmt::Debug for ExtentTree {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for extent in &self.extents {
+            f.write_fmt(format_args!(
+                "({}-{}) -> {:#x} \n",
+                extent.ee_block,
+                extent.ee_block + extent.ee_len as u32,
+                extent.start_blk()
+            ))?;
+        }
+
+        Ok(())
+    }
+}
+
 fn traverse_extent_layer(fs: &Ext4FS, ext_data: &[u8], extents: &mut Vec<Extent>) -> Option<()> {
     let header = unsafe { ExtentHeader::load(ext_data.as_ptr() as *const ExtentHeader) }?;
 
@@ -1367,6 +1383,12 @@ struct Extent {
     ee_start_lo: u32,
 }
 
+impl Extent {
+    pub fn start_blk(&self) -> u64 {
+        self.ee_start_lo as u64 | ((self.ee_start_hi as u64) << 32)
+    }
+}
+
 /// Represents an internal node of the extent tree (an index node)
 #[repr(C, packed)]
 struct ExtentIdx {
@@ -1413,43 +1435,159 @@ struct LinkedDirectoryEntry {
     name: u32,
 }
 
-pub struct Ext4File<'fs> {
+pub struct Ext4File {
+    drive_id: usize,
+    part_id: usize,
     inode: Inode,
-    cursor: usize,
-    fs: &'fs Ext4FS,
+    inode_id: usize,
+    pub cursor: usize,
+    extent_tree: Option<ExtentTree>,
 }
 
-impl<'fs> core::fmt::Debug for Ext4File<'fs> {
+impl core::fmt::Debug for Ext4File {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Ext4File")
-            .field("inode", &self.inode)
-            .field("cursor", &self.cursor)
-            .finish()
+        f.write_fmt(format_args!(
+            "ext4 file | inode = {}    flags = {:#x}    size = {}    mode = {:#x} \n    Extents: \n{:?}",
+            self.inode_id,
+            unsafe { ptr::read_unaligned(ptr::addr_of!(self.inode.i_flags)) },
+            unsafe { ptr::read_unaligned(ptr::addr_of!(self.inode.i_size)) },
+            unsafe { ptr::read_unaligned(ptr::addr_of!(self.inode.i_mode)) },
+            self.extent_tree.as_ref().unwrap_or(&ExtentTree { extents: alloc::vec![] })
+        ))
     }
 }
 
-impl<'fs> Ext4File<'fs> {
-    pub fn from_inode(fs: &'fs Ext4FS, inode: Inode) -> Result<Self, IOError> {
+impl Ext4File {
+    pub fn from_inode(
+        drive_id: usize,
+        part_id: usize,
+        inode: Inode,
+        inode_id: usize,
+    ) -> IOResult<Self> {
         if !inode.mode_contains(inode_mode::S_IFREG) {
-            return Err(IOError::Unknown);
+            return Err(IOError::InvalidCommand);
         }
-        Ok(Self {
-            inode,
-            cursor: 0,
-            fs,
-        })
+
+        let drive = SATA_DRIVES
+            .get()
+            .ok_or(IOError::InvalidDevice)?
+            .get(drive_id)
+            .ok_or(IOError::InvalidDevice)?
+            .lock();
+        let part = drive
+            .partitions
+            .get(part_id)
+            .ok_or(IOError::InvalidDevice)?;
+        let fs = &part.fs;
+
+        if let PartFS::Ext4(fs) = fs {
+            let extent_tree = ExtentTree::load_extent_tree(fs, &inode);
+            Ok(Self {
+                drive_id,
+                part_id,
+                inode,
+                inode_id,
+                cursor: 0,
+                extent_tree,
+            })
+        } else {
+            Err(IOError::Unknown)
+        }
     }
 
-    unsafe fn __read_bytes(&self, count: usize, buf: &mut [u8]) {}
+    fn __lock_fs(&self) -> IOResult<alloc::boxed::Box<Ext4FS>> {
+        let drive = SATA_DRIVES
+            .get()
+            .ok_or(IOError::InvalidDevice)?
+            .get(self.drive_id)
+            .ok_or(IOError::InvalidDevice)?
+            .lock();
+        let part = drive
+            .partitions
+            .get(self.part_id)
+            .ok_or(IOError::InvalidDevice)?;
+        let fs = &part.fs;
+
+        if let PartFS::Ext4(fs) = fs {
+            Ok(fs.clone())
+        } else {
+            Err(IOError::InvalidCommand)
+        }
+    }
+
+    unsafe fn __read_bytes(&self, offset: usize, count: usize, buf: &mut [u8]) -> CanFail<IOError> {
+        let fs = self.__lock_fs()?;
+
+        let blk_offset_from_file_start = offset / fs.superblock.blk_size() as usize;
+        let last_blk = (offset + count) / fs.superblock.blk_size() as usize;
+        let last_blk_count = count % fs.superblock.blk_size() as usize;
+
+        if let Some(ext_tree) = &self.extent_tree {
+            let mut useful_extents = ext_tree.extents.iter().filter(|ext| {
+                (ext.ee_block..ext.ee_block + (ext.ee_len as u32))
+                    .contains(&(blk_offset_from_file_start as u32))
+            });
+            let mut curr_extent = useful_extents.next().unwrap();
+
+            for i in blk_offset_from_file_start..usize::min(0, last_blk - 1) {
+                if (curr_extent.ee_block + curr_extent.ee_len as u32) < i as u32 {
+                    curr_extent = useful_extents.next().unwrap();
+                }
+                fs.__read_blk(
+                    curr_extent.start_blk() + i as u64,
+                    slice::from_raw_parts_mut(
+                        buf.as_mut_ptr()
+                            .offset((i as u64 * fs.superblock.blk_size()) as isize),
+                        fs.superblock.blk_size() as usize,
+                    ),
+                )?;
+            }
+
+            if (curr_extent.ee_block + curr_extent.ee_len as u32) < last_blk as u32 {
+                curr_extent = useful_extents.next().unwrap();
+            }
+
+            let mut temp_buf = alloc::vec![0u8; fs.superblock.blk_size() as usize];
+            fs.__read_blk(curr_extent.start_blk() + last_blk as u64, &mut temp_buf)?;
+
+            slice::from_raw_parts_mut(
+                buf.as_mut_ptr()
+                    .offset(((last_blk as u64) * fs.superblock.blk_size()) as isize),
+                last_blk_count,
+            )
+            .copy_from_slice(&temp_buf[..last_blk_count]);
+        }
+
+        Ok(())
+    }
 }
 
-impl<'fs> FsFile for Ext4File<'fs> {
+impl FsFile for Ext4File {
     fn read(&mut self, buf: &mut [u8]) -> super::IOResult<usize> {
-        todo!()
+        let bytes_count = usize::min(buf.len(), self.size()? - self.cursor);
+
+        unsafe { self.__read_bytes(self.cursor, bytes_count, buf)? };
+        self.seek(super::Seek::Forward(bytes_count));
+
+        Ok(bytes_count)
     }
 
     fn seek(&mut self, pos: super::Seek) -> usize {
-        todo!()
+        match pos {
+            super::Seek::Backward(count) => {
+                self.cursor = if let Some(sub) = self.cursor.checked_sub(count) {
+                    sub
+                } else {
+                    0
+                }
+            }
+            super::Seek::Current => (),
+            super::Seek::Forward(count) => {
+                self.cursor = usize::min(self.cursor + count, self.size().unwrap());
+            }
+        }
+
+        self.cursor
     }
 
     fn size(&self) -> super::IOResult<usize> {

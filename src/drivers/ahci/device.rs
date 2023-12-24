@@ -41,7 +41,7 @@ use crate::{
 /// ```
 #[derive(Debug)]
 pub struct SATADrive {
-    id: usize,
+    pub id: usize,
     device_info: [u16; 256],
     ahci_data: AHCIDriveInfo,
     pub partition_table: PartitionTable,

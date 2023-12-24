@@ -27,6 +27,8 @@ pub fn _start() -> ! {
     stage2.disk_read(0x80);
     let stage2 = AddressPacket::new(127, 0x27a0, 0x00, 255);
     stage2.disk_read(0x80);
+    let stage2 = AddressPacket::new(127, 0x3780, 0x00, 382);
+    stage2.disk_read(0x80);
     loader();
 }
 

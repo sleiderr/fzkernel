@@ -68,6 +68,9 @@ pub enum IOError {
     /// Invalid I/O command
     InvalidCommand,
 
+    /// Invalid device identifier supplied
+    InvalidDevice,
+
     #[cfg(feature = "alloc")]
     /// Generic error.
     Exception(Box<dyn BaseError>),
