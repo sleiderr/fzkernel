@@ -104,8 +104,10 @@ impl SATADrive {
 
                         ext_part.set_start_lba(ext_part.start_lba() + meta.start_lba());
 
-                        self.partitions
-                            .push(Partition::from_metadata(PartitionMetadata::MBR(ext_part)));
+                        self.partitions.push(
+                            Partition::from_metadata(0, self.id, PartitionMetadata::MBR(ext_part))
+                                .unwrap(),
+                        );
                         meta = partitions[1];
                     }
                 }

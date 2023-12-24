@@ -20,8 +20,15 @@ pub fn load_drive_mbr(drive: &mut SATADrive, sectors_offset: u64) -> MBRPartitio
     let mut first_sector = [0u8; 512];
     drive.read(sectors_offset, 1, &mut first_sector).unwrap();
 
-    unsafe {
-        core::ptr::read(first_sector.as_ptr().offset(MBR_PART_OFFSET) as *const MBRPartitionTable)
+    let entries = unsafe {
+        core::ptr::read(
+            first_sector.as_ptr().offset(MBR_PART_OFFSET) as *const [MBRPartitionEntry; 4]
+        )
+    };
+
+    MBRPartitionTable {
+        drive_id: drive.id,
+        partitions: entries,
     }
 }
 
@@ -32,6 +39,7 @@ pub fn load_drive_mbr(drive: &mut SATADrive, sectors_offset: u64) -> MBRPartitio
 #[repr(packed)]
 #[derive(Debug)]
 pub struct MBRPartitionTable {
+    drive_id: usize,
     partitions: [MBRPartitionEntry; 4],
 }
 
@@ -45,10 +53,14 @@ impl MBRPartitionTable {
     pub fn get_partitions(&self) -> Vec<Partition> {
         let mut partitions = alloc::vec![];
 
-        for partition_metadata in self.partitions {
+        for (i, partition_metadata) in self.partitions.iter().enumerate() {
             if partition_metadata.is_used() {
-                let partition =
-                    Partition::from_metadata(PartitionMetadata::MBR(partition_metadata));
+                let partition = Partition::from_metadata(
+                    i,
+                    self.drive_id,
+                    PartitionMetadata::MBR(*partition_metadata),
+                )
+                .unwrap();
                 partitions.push(partition);
             }
         }
@@ -60,7 +72,7 @@ impl MBRPartitionTable {
     pub fn is_pmbr(&self) -> bool {
         let partitions = self.get_partitions();
         if partitions.len() == 1 {
-            let p_part = partitions[0];
+            let p_part = &partitions[0];
 
             if let PartitionMetadata::MBR(meta) = p_part.metadata() {
                 if matches!(meta.partition_type(), PartitionType::GPT) {

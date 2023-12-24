@@ -251,7 +251,11 @@ impl AHCIController {
         let drives = SATA_DRIVES.get().unwrap();
 
         for drive in drives {
-            drive.lock().load_partition_table();
+            let mut ldrive = drive.lock();
+
+            unsafe { drive.force_unlock() }
+
+            ldrive.load_partition_table();
         }
     }
 

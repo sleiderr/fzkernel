@@ -163,6 +163,7 @@ pub const EXT4_FEATURE_INCOMPAT_ENCRYPT: u32 = 0x10000;
 /// casefold (+F) flag enabled.
 pub const EXT4_FEATURE_INCOMPAT_CASEFOLD: u32 = 0x20000;
 
+#[derive(Clone, Debug)]
 pub struct Ext4FS {
     drive_id: usize,
     partition_id: usize,
@@ -171,14 +172,28 @@ pub struct Ext4FS {
 }
 
 impl Ext4FS {
-    pub fn mount(drive_id: usize, partition_id: usize) -> Result<Self, MountError> {
+    pub fn identify(drive_id: usize, partition_data: u64) -> Result<bool, IOError> {
         let mut drive = get_sata_drive(drive_id).lock();
-        let partition_data = drive
-            .partitions
-            .get(partition_id)
-            .ok_or(MountError::Unknown)?;
 
-        let sb_start_lba = (1024 / drive.logical_sector_size() as u64) + partition_data.start_lba();
+        let sb_start_lba = (1024 / drive.logical_sector_size() as u64) + partition_data;
+        let sb_size_in_lba = mem::size_of::<Ext4Superblock>() as u32 / drive.logical_sector_size();
+
+        let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
+        drive.read(sb_start_lba as u64, sb_size_in_lba as u16, &mut raw_sb)?;
+
+        let sb = unsafe { ptr::read(raw_sb.as_ptr() as *mut Ext4Superblock) };
+
+        Ok(sb.s_magic == EXT4_SIGNATURE)
+    }
+
+    pub fn mount(
+        drive_id: usize,
+        partition_id: usize,
+        partition_data: u64,
+    ) -> Result<Self, MountError> {
+        let mut drive = get_sata_drive(drive_id).lock();
+
+        let sb_start_lba = (1024 / drive.logical_sector_size() as u64) + partition_data;
         let sb_size_in_lba = mem::size_of::<Ext4Superblock>() as u32 / drive.logical_sector_size();
 
         let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
@@ -229,41 +244,59 @@ impl Ext4FS {
         };
         drop(drive);
 
-        fs.load_group_descriptors()
+        fs.init_group_descriptors(partition_data)
             .map_err(|_| MountError::IOError)?;
 
         Ok(fs)
     }
 
-    pub fn load_group_descriptors(&mut self) -> CanFail<IOError> {
+    pub fn init_group_descriptors(&mut self, part_offset: u64) -> CanFail<IOError> {
         self.group_descriptors.clear();
 
         for i in 0..self.superblock.bg_count() {
-            let gd = self.__read_bg_descriptor(i)?;
+            let gd = self.__read_bg_descriptor_preinit(i, part_offset)?;
             self.group_descriptors.push(gd);
         }
 
         Ok(())
     }
 
-    fn __read_blk(&self, blk_id: u64, buffer: &mut [u8]) -> CanFail<IOError> {
+    fn __read_blk_preinit(
+        &self,
+        blk_id: u64,
+        part_offset: u64,
+        buffer: &mut [u8],
+    ) -> CanFail<IOError> {
         if blk_id > self.superblock.blk_count() {
             return Err(IOError::InvalidCommand);
         }
         let mut drive = get_sata_drive(self.drive_id).lock();
-        let partition_data = drive
-            .partitions
-            .get(self.partition_id)
-            .ok_or(IOError::Unknown)?;
 
         let sectors_count = self.superblock.blk_size() / drive.logical_sector_size() as u64;
-        let start_lba = partition_data.start_lba()
+        let start_lba = part_offset
             + (blk_id * self.superblock.blk_size()) / drive.logical_sector_size() as u64;
 
         drive.read(start_lba, sectors_count as u16, buffer)
     }
 
-    pub fn __read_bg_descriptor(&self, bg_id: u64) -> Result<GroupDescriptor, IOError> {
+    fn __read_blk(&self, blk_id: u64, buffer: &mut [u8]) -> CanFail<IOError> {
+        let drive = get_sata_drive(self.drive_id).lock();
+        let partition_data = drive
+            .partitions
+            .get(self.partition_id)
+            .ok_or(IOError::Unknown)?
+            .start_lba();
+
+        drop(drive);
+
+        self.__read_blk_preinit(blk_id, partition_data, buffer)
+    }
+
+    fn __read_bg_descriptor_preinit(
+        &self,
+        bg_id: u64,
+        part_offset: u64,
+    ) -> Result<GroupDescriptor, IOError> {
         assert!(bg_id < self.superblock.bg_count());
 
         let descriptor_size = if self.superblock.feat_64bit_support() {
@@ -285,7 +318,7 @@ impl Ext4FS {
         let desc_idx_in_blk = bg_id % descriptor_per_block;
 
         let mut blk = alloc::vec![0; self.superblock.blk_size() as usize];
-        self.__read_blk(desc_blk_id, &mut blk)?;
+        self.__read_blk_preinit(desc_blk_id, part_offset, &mut blk)?;
 
         let raw_bg_descriptor = &blk[((desc_idx_in_blk * descriptor_size) as usize)
             ..(((desc_idx_in_blk + 1) * descriptor_size) as usize)];
@@ -299,6 +332,18 @@ impl Ext4FS {
                 ptr::read(raw_bg_descriptor.as_ptr() as *const GroupDescriptor32)
             }))
         }
+    }
+
+    fn __read_bg_descriptor(&self, bg_id: u64) -> Result<GroupDescriptor, IOError> {
+        let drive = get_sata_drive(self.drive_id).lock();
+        let part_offset = drive
+            .partitions
+            .get(self.partition_id)
+            .ok_or(IOError::Unknown)?
+            .start_lba();
+        drop(drive);
+
+        self.__read_bg_descriptor_preinit(bg_id, part_offset)
     }
 
     fn __read_inode(&self, inode_id: u64) -> Result<Inode, IOError> {
@@ -340,7 +385,7 @@ impl Ext4FS {
 /// A copy of the partition's `Superblock` is kept in all groups, except if the `sparse_super`
 /// feature is enabled, in which case it is only kept in groups whose group number is either 0 or a
 /// power of 3, 5, 7.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C, packed)]
 pub struct Ext4Superblock {
     /// Inodes count
@@ -745,7 +790,7 @@ impl Ext4Superblock {
 /// Each block group on the file system has a `GroupDescriptor` associated with it.
 ///
 /// A `block group` is a logical grouping of contiguous block.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum GroupDescriptor {
     Size32(GroupDescriptor32),
     Size64(GroupDescriptor64),
@@ -755,7 +800,7 @@ pub enum GroupDescriptor {
 ///
 /// Used if [`EXT4_FEATURE_INCOMPAT_64BIT`] is clear.
 #[repr(C, packed)]
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct GroupDescriptor32 {
     /// 32-bit location of block bitmap
     bg_block_bitmap: u32,
@@ -804,7 +849,7 @@ impl GroupDescriptor32 {
 ///
 /// Used if [`EXT4_FEATURE_INCOMPAT_64BIT`] is set.
 #[repr(C, packed)]
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct GroupDescriptor64 {
     /// Lower 32-bit of location of block bitmap
     bg_block_bitmap_lo: u32,
@@ -1357,316 +1402,6 @@ impl Inode {
     pub fn size(&self) -> u64 {
         self.i_size as u64 | ((self.i_dir_acl as u64) << 32)
     }
-
-    /*
-    // Get block number of the nth data block.
-    pub fn get_nth_data_block(&self, block_size: u32, n: u32, partition: &Ext4Partition) -> u64 {
-        let q = self.i_size as i32 / block_size as i32;
-        let r = self.i_size as i32 % block_size as i32;
-        if !((n <= q as u32) | ((n == (q as u32 + 1)) & (r > 0))) {
-            return 0;
-        }
-        if self.uses_extent_tree() {
-            return self.get_nth_data_block_extent(block_size, n, partition);
-        } else {
-            return 0;
-        }
-    }
-
-    // Get block number of the nth data block, considering this inode uses an extent tree structure
-    pub fn get_nth_data_block_extent(
-        &self,
-        block_size: u32,
-        n: u32,
-        partition: &Ext4Partition,
-    ) -> u64 {
-        let mem_offset = self as *const Inode as u32 + 0x28;
-        self.explore_next_layer(mem_offset, n, block_size, partition)
-    }
-
-    // Explore next layer, used by get_nth_data_block_extent
-    pub fn explore_next_layer(
-        &self,
-        mem_offset: u32,
-        n: u32,
-        block_size: u32,
-        partition: &Ext4Partition,
-    ) -> u64 {
-        let header_address = mem_offset as *const ExtentHeader;
-        let header: &ExtentHeader;
-        header = unsafe { transmute(header_address) };
-        let leaf_number = header.eh_entries;
-        // Handle leaves
-        if header.eh_depth == 0 {
-            for i in 0..leaf_number {
-                let extent_addr = (mem_offset + 12 * (i + 1) as u32) as *const Extent;
-                let extent: &Extent;
-                extent = unsafe { transmute(extent_addr) };
-                let len = {
-                    if extent.ee_len <= 32768 {
-                        extent.ee_len
-                    } else {
-                        extent.ee_len - 32768
-                    }
-                };
-                if extent.ee_block + len as u32 >= n {
-                    // Return address of n-th block
-                    return (extent.ee_start_lo as u64 + ((extent.ee_start_hi as u64) << 32))
-                        + (n - extent.ee_block) as u64;
-                }
-            }
-            return 0;
-        } else {
-            // Offset + block_size in memory and iterate over entries recursively
-            for i in 0..leaf_number {
-                let extent_idx: &ExtentIdx;
-                let extent_idx_addr = (mem_offset + 12 * (i + 1) as u32) as *const ExtentIdx;
-                extent_idx = unsafe { transmute(extent_idx_addr) };
-                let next_block_address =
-                    extent_idx.ei_leaf_lo as u64 + (extent_idx.ei_leaf_hi as u64) << 2;
-                // let a = AddressPacket::new((block_size / 512) as u16, mem_offset + block_size, (partition_offset + next_block_address / 512) as u64);
-                let _ = partition.read(
-                    next_block_address as u32,
-                    block_size,
-                    mem_offset + block_size,
-                );
-                return self.explore_next_layer(mem_offset + block_size, n, block_size, partition);
-            }
-            return 0;
-        }
-    }
-
-    // Parse an inode as a directory, using at most 2 * block_size of memory
-    pub fn parse_as_directory(&self, offset: u32, part: &Ext4Partition, block_size: u32) {
-        let mut current_block = 0;
-        let first_block = self.get_nth_data_block_extent(block_size, current_block, part);
-        //debug!(first_block);
-
-        let result = part.read((first_block as u32) * block_size, block_size, offset);
-        let mut parser = offset;
-        let mut inode = unsafe { read_volatile(offset as *const u32) };
-        // The end is defined by a 0x00 inode pointer
-        while inode != 0x00 {
-            let mut flag_reset = false;
-            let mut begin = parser;
-            parser += 4;
-            let rec_len = unsafe { read_volatile(parser as *const u16) };
-            // Test if we need to load the next block
-            if rec_len as u32 + parser - offset >= block_size {
-                let next_block =
-                    self.get_nth_data_block_extent(block_size, current_block + 1, part);
-                let result = part.read(
-                    (next_block as u32) * block_size,
-                    block_size,
-                    offset + block_size,
-                );
-                flag_reset = true;
-            }
-            parser += 2;
-            let name_len = unsafe { read_volatile(parser as *const u8) };
-            parser += 1;
-            let type_flag = unsafe { read_volatile(parser as *const u8) };
-            parser += 1;
-            for i in 0..name_len {
-                let char = unsafe { read_volatile(parser as *const u8) };
-                parser += 1;
-            }
-            parser = begin + rec_len as u32;
-
-            inode = unsafe { read_volatile(parser as *const u32) };
-
-            // If reset flag is set, return to offset for the next block
-            if flag_reset {
-                let next_block =
-                    self.get_nth_data_block_extent(block_size, current_block + 1, part);
-                let result = part.read(
-                    (next_block as u32) * block_size,
-                    block_size,
-                    offset + block_size,
-                );
-                parser = parser % block_size + offset;
-                current_block += 1;
-            }
-        }
-    }
-
-    // Copy n block of file to a specific offset. This is risky as this function will overwrite everything it can.
-    pub fn block_copy(&self, offset: u32, part: &Ext4Partition, block_size: u32, n: u32) {
-        {
-            let mut current_block = 0;
-            let mut next_block = self.get_nth_data_block(block_size, current_block, part);
-            let result = part.read((next_block as u32) * block_size, block_size, offset);
-            while current_block < n {
-                current_block += 1;
-                next_block = self.get_nth_data_block(block_size, current_block, part);
-                let result = part.read(
-                    (next_block as u32) * block_size,
-                    block_size,
-                    offset + current_block * block_size,
-                );
-            }
-        }
-    }
-
-    // Show content of a file using at most 1 block_size space in memory
-    pub fn read_as_file(&self, offset: u32, part: &Ext4Partition, block_size: u32, n: u32) -> u8 {
-        let mut total_byte = 0u32;
-        let mut byte = 0u32;
-        let mut current_block = 0;
-        let mut next_block = self.get_nth_data_block(block_size, current_block, part);
-        let result = part.read((next_block as u32) * block_size, block_size, offset);
-
-        while total_byte < n {
-            let char = unsafe { read_volatile((byte + offset) as *const u8) };
-            if (byte % block_size == 0) & (byte != 0) {
-                current_block += 1;
-                next_block = self.get_nth_data_block(block_size, current_block, part);
-                let result = part.read((next_block as u32) * block_size, block_size, offset);
-                match result {
-                    Err(_) => return 1,
-                    Ok(_) => (),
-                }
-                byte = 0;
-            } else {
-                byte += 1;
-            }
-            total_byte += 1;
-        }
-        0
-    }
-
-    // Search in an inode considered as a directory, using at most 2 * block_size of memory
-    pub fn search(
-        &self,
-        offset: u32,
-        part: &Ext4Partition,
-        block_size: u32,
-        file_type: u8,
-        name: &str,
-    ) -> u32 {
-        let name = name.as_bytes();
-        let mut current_block = 0;
-        let first_block = self.get_nth_data_block_extent(block_size, current_block, part);
-        let result = part.read((first_block as u32) * block_size, block_size, offset);
-        let mut parser = offset;
-        let mut inode = unsafe { read_volatile(offset as *const u32) };
-        // The end is defined by a 0x00 inode pointer
-        while inode != 0x00 {
-            let mut flag_reset = false;
-            let mut begin = parser;
-            parser += 4;
-
-            let rec_len = unsafe { read_volatile(parser as *const u16) };
-
-            // Test if we need to load the next block
-            if rec_len as u32 + parser - offset >= block_size {
-                let next_block =
-                    self.get_nth_data_block_extent(block_size, current_block + 1, part);
-                let result = part.read(
-                    (next_block as u32) * block_size,
-                    block_size,
-                    offset + block_size,
-                );
-                flag_reset = true;
-            }
-            parser += 2;
-            let name_len = unsafe { read_volatile(parser as *const u8) };
-            parser += 1;
-            let type_flag = unsafe { read_volatile(parser as *const u8) };
-
-            let research_size = name.len();
-
-            parser += 1;
-
-            let mut same = 0;
-            for i in 0..name_len {
-                let char = unsafe { read_volatile(parser as *const u8) };
-                if i < research_size as u8 {
-                    if char == name[i as usize] {
-                        same += 1;
-                        parser += 1;
-                    } else {
-                        parser += 1;
-                    }
-                } else {
-                    parser += 1
-                }
-            }
-
-            parser = begin + rec_len as u32;
-
-            if same != name.len() as u32 {
-            } else if type_flag == file_type {
-                return inode;
-            }
-
-            inode = unsafe { read_volatile(parser as *const u32) };
-
-            // If reset flag is set, return to offset for the next block
-            if flag_reset {
-                let next_block =
-                    self.get_nth_data_block_extent(block_size, current_block + 1, part);
-                let result = part.read(
-                    (next_block as u32) * block_size,
-                    block_size,
-                    offset + block_size,
-                );
-                parser = parser % block_size + offset;
-                current_block += 1;
-            }
-        }
-
-        return 0;
-    }
-
-    // Get block number of the nth data block, considering this inode uses a direct/indirect block addressing system
-    pub fn get_nth_data_block_basic(
-        &self,
-        n: u32,
-        offset: u32,
-        block_size: u32,
-        partition: &Ext4Partition,
-    ) -> u32 {
-        if n > 12 {
-            let (path, depth) = self.get_path_recursive(n - 12, 1, block_size);
-            let initial_block = self.i_block[(11 + depth) as usize];
-            partition.read(initial_block * block_size, block_size, offset);
-            let mut next_block_nb = 0u32;
-            for step in path {
-                if step != 0 {
-                    next_block_nb = unsafe { read_volatile((offset + step * 4) as *const u32) };
-                    partition.read(next_block_nb * block_size, block_size, offset);
-                } else {
-                    return next_block_nb;
-                }
-            }
-            return 0;
-        } else {
-            return self.i_block[n as usize];
-        }
-    }
-
-    pub fn get_path_recursive(&self, mut n: u32, depth: usize, block_size: u32) -> ([u32; 4], u8) {
-        // Compute the number of bytes contained
-        let address_per_block = (block_size / 4);
-        let block_count = address_per_block.pow(depth as u32);
-
-        // Check if we have to go to the next stage
-        if n > block_count {
-            return self.get_path_recursive(n - block_count, depth + 1, block_size);
-        } else {
-            let mut path = [0u32; 4];
-            let mut i = 0;
-            while n > block_count {
-                path[i] = (n / (address_per_block).pow((depth - i - 1) as u32)) as u32;
-                n = n % (address_per_block).pow((depth - i - 1) as u32);
-                i += 1;
-            }
-            return (path, depth as u8);
-        }
-    }
-
-    */
 }
 
 #[repr(C, packed)]
@@ -1678,21 +1413,37 @@ struct LinkedDirectoryEntry {
     name: u32,
 }
 
-#[derive(Debug)]
-pub struct Ext4File {
+pub struct Ext4File<'fs> {
     inode: Inode,
+    cursor: usize,
+    fs: &'fs Ext4FS,
 }
 
-impl Ext4File {
-    pub fn from_inode(inode: Inode) -> Result<Self, IOError> {
-        if !inode.mode_contains(inode_mode::S_IFREG) {
-            return Err(IOError::Unknown);
-        }
-        Ok(Self { inode })
+impl<'fs> core::fmt::Debug for Ext4File<'fs> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Ext4File")
+            .field("inode", &self.inode)
+            .field("cursor", &self.cursor)
+            .finish()
     }
 }
 
-impl FsFile for Ext4File {
+impl<'fs> Ext4File<'fs> {
+    pub fn from_inode(fs: &'fs Ext4FS, inode: Inode) -> Result<Self, IOError> {
+        if !inode.mode_contains(inode_mode::S_IFREG) {
+            return Err(IOError::Unknown);
+        }
+        Ok(Self {
+            inode,
+            cursor: 0,
+            fs,
+        })
+    }
+
+    unsafe fn __read_bytes(&self, count: usize, buf: &mut [u8]) {}
+}
+
+impl<'fs> FsFile for Ext4File<'fs> {
     fn read(&mut self, buf: &mut [u8]) -> super::IOResult<usize> {
         todo!()
     }
