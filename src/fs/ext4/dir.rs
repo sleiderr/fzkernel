@@ -1,13 +1,16 @@
 use core::slice;
 
 use alloc::{string::String, vec::Vec};
-use bytemuck::{from_bytes, Pod, Zeroable};
+use bytemuck::{cast, from_bytes, try_cast, Pod, Zeroable};
 
 use crate::{
     drivers::ahci::SATA_DRIVES,
     errors::{CanFail, IOError},
     fs::{
-        ext4::{inode_mode, Ext4FS, Ext4File, ExtentTree, Inode},
+        ext4::{
+            extent::{Ext4InodeRelBlkId, Ext4InodeRelBlkIdRange},
+            inode_mode, Ext4FS, Ext4File, ExtentTree, Inode,
+        },
         IOResult, PartFS,
     },
 };
@@ -255,7 +258,7 @@ impl Ext4Directory {
         let fs = &part.fs;
 
         if let PartFS::Ext4(fs) = fs {
-            let extent_tree = ExtentTree::load_extent_tree(fs, &inode);
+            let extent_tree = ExtentTree::load_extent_tree(fs, &inode, inode_id);
 
             Ok(Self {
                 drive_id,
@@ -293,50 +296,67 @@ impl Ext4Directory {
     unsafe fn __read_bytes(&self, offset: usize, count: usize, buf: &mut [u8]) -> CanFail<IOError> {
         let fs = self.__lock_fs()?;
 
-        let blk_offset_from_file_start = offset / fs.superblock.blk_size() as usize;
+        let blk_offset_from_file_start: Ext4InodeRelBlkId =
+            try_cast(offset as u64 / fs.superblock.blk_size()).map_err(|_| IOError::Unknown)?;
         let blk_offset_from_first_blk = offset % fs.superblock.blk_size() as usize;
-        let last_blk = (offset + count) / fs.superblock.blk_size() as usize;
+        let last_blk: Ext4InodeRelBlkId =
+            try_cast((offset + count) as u64 / fs.superblock.blk_size())
+                .map_err(|_| IOError::Unknown)?;
         let last_blk_count = count % fs.superblock.blk_size() as usize;
 
         if let Some(ext_tree) = &self.extent_tree {
             let mut useful_extents = ext_tree.extents.iter().filter(|ext| {
-                (ext.ee_block..ext.ee_block + (ext.ee_len as u32))
-                    .contains(&(blk_offset_from_file_start as u32))
+                (cast(ext.ee_block)..ext.ee_block + ext.ee_len)
+                    .contains(&(blk_offset_from_file_start))
             });
             let mut curr_extent = useful_extents.next().unwrap();
 
-            for i in blk_offset_from_file_start..usize::min(0, last_blk - 1) {
-                if (curr_extent.ee_block + curr_extent.ee_len as u32) < i as u32 {
+            for i in Ext4InodeRelBlkIdRange(
+                blk_offset_from_file_start,
+                Ext4InodeRelBlkId::min(cast(0_u64), last_blk - 1),
+            ) {
+                if (curr_extent.ee_block + curr_extent.ee_len) < i {
                     curr_extent = useful_extents.next().unwrap();
                 }
                 fs.__read_blk(
-                    curr_extent.start_blk() + i as u64,
+                    try_cast(curr_extent.start_blk() + i).map_err(|_| IOError::Unknown)?,
                     slice::from_raw_parts_mut(
-                        buf.as_mut_ptr()
-                            .offset((i as u64 * fs.superblock.blk_size()) as isize),
+                        buf.as_mut_ptr().offset(
+                            (try_cast::<Ext4InodeRelBlkId, u64>(i).map_err(|_| IOError::Unknown)?
+                                * fs.superblock.blk_size()) as isize,
+                        ),
                         fs.superblock.blk_size() as usize,
                     ),
                 )?;
             }
 
-            if (curr_extent.ee_block + curr_extent.ee_len as u32) < last_blk as u32 {
+            if (curr_extent.ee_block + curr_extent.ee_len) < last_blk {
                 curr_extent = useful_extents.next().unwrap();
             }
 
             let mut temp_buf = alloc::vec![0u8; fs.superblock.blk_size() as usize];
-            fs.__read_blk(curr_extent.start_blk() + last_blk as u64, &mut temp_buf)?;
+            fs.__read_blk(
+                try_cast(curr_extent.start_blk() + last_blk).map_err(|_| IOError::Unknown)?,
+                &mut temp_buf,
+            )?;
 
-            if last_blk != 0 {
+            if last_blk != cast::<u64, Ext4InodeRelBlkId>(0) {
                 slice::from_raw_parts_mut(
-                    buf.as_mut_ptr()
-                        .offset(((last_blk as u64) * fs.superblock.blk_size()) as isize),
+                    buf.as_mut_ptr().offset(
+                        (try_cast::<Ext4InodeRelBlkId, u64>(last_blk)
+                            .map_err(|_| IOError::Unknown)?
+                            * fs.superblock.blk_size()) as isize,
+                    ),
                     last_blk_count,
                 )
                 .copy_from_slice(&temp_buf[..last_blk_count]);
             } else {
                 slice::from_raw_parts_mut(
-                    buf.as_mut_ptr()
-                        .offset(((last_blk as u64) * fs.superblock.blk_size()) as isize),
+                    buf.as_mut_ptr().offset(
+                        (try_cast::<Ext4InodeRelBlkId, u64>(last_blk)
+                            .map_err(|_| IOError::Unknown)?
+                            * fs.superblock.blk_size()) as isize,
+                    ),
                     last_blk_count - blk_offset_from_first_blk,
                 )
                 .copy_from_slice(&temp_buf[blk_offset_from_first_blk..last_blk_count]);

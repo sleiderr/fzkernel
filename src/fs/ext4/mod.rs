@@ -1,20 +1,25 @@
 use core::{mem, ptr, slice};
 
 use alloc::{string::String, vec::Vec};
+use bytemuck::{cast, try_cast, Pod, Zeroable};
 
 use crate::{
     drivers::ahci::{get_sata_drive, SATA_DRIVES},
     error,
     errors::{CanFail, IOError},
     fs::{
-        ext4::dir::{Ext4Directory, Ext4InodeNumber},
+        ext4::{
+            dir::{Ext4Directory, Ext4InodeNumber},
+            extent::{Ext4InodeRelBlkId, Ext4InodeRelBlkIdRange, ExtentTree},
+        },
         IOResult, PartFS,
     },
-    info, println,
+    info,
 };
 use crate::{errors::MountError, fs::FsFile};
 
 pub mod dir;
+pub(crate) mod extent;
 
 pub const EXT4_SIGNATURE: u16 = 0xEF53;
 
@@ -168,6 +173,14 @@ pub const EXT4_FEATURE_INCOMPAT_ENCRYPT: u32 = 0x10000;
 /// This feature provides file system level character encoding support for directories with the
 /// casefold (+F) flag enabled.
 pub const EXT4_FEATURE_INCOMPAT_CASEFOLD: u32 = 0x20000;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(crate) struct Ext4InodeGeneration(u32);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(crate) struct Ext4FsUuid(u128);
 
 #[derive(Clone, Debug)]
 pub struct Ext4FS {
@@ -1265,170 +1278,6 @@ impl BlockMap {
     }
 }
 
-pub const EXT4_EXTENTH_MAGIC: u16 = 0xF30A;
-
-pub struct ExtentTree {
-    extents: Vec<Extent>,
-}
-
-impl core::fmt::Debug for ExtentTree {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        for extent in &self.extents {
-            f.write_fmt(format_args!(
-                "({}-{}) -> {:#x} \n",
-                extent.ee_block,
-                extent.ee_block + extent.ee_len as u32,
-                extent.start_blk()
-            ))?;
-        }
-
-        Ok(())
-    }
-}
-
-fn traverse_extent_layer(fs: &Ext4FS, ext_data: &[u8], extents: &mut Vec<Extent>) -> Option<()> {
-    let header = unsafe { ExtentHeader::load(ext_data.as_ptr() as *const ExtentHeader) }?;
-
-    // this extent points directly to data blocks
-    if header.eh_depth == 0 {
-        for entry in 0..header.eh_entries {
-            let raw_entry = &ext_data[(mem::size_of::<ExtentHeader>()
-                + (entry as usize) * mem::size_of::<Extent>())
-                ..mem::size_of::<ExtentHeader>() + (1 + entry as usize) * mem::size_of::<Extent>()];
-
-            let extent = Extent {
-                ee_block: u32::from_le_bytes(raw_entry[0..4].try_into().ok()?),
-                ee_len: u16::from_le_bytes(raw_entry[4..6].try_into().ok()?),
-                ee_start_hi: u16::from_le_bytes(raw_entry[6..8].try_into().ok()?),
-                ee_start_lo: u32::from_le_bytes(raw_entry[8..12].try_into().ok()?),
-            };
-
-            extents.push(extent);
-        }
-
-        return Some(());
-    }
-
-    for entry in 0..header.eh_entries {
-        let raw_entry = &ext_data[(mem::size_of::<ExtentHeader>()
-            + (entry as usize) * mem::size_of::<ExtentIdx>())
-            ..mem::size_of::<ExtentHeader>() + (1 + entry as usize) * mem::size_of::<ExtentIdx>()];
-
-        let extent_idx = ExtentIdx {
-            ei_block: u32::from_le_bytes(raw_entry[0..4].try_into().ok()?),
-            ei_leaf_lo: u32::from_le_bytes(raw_entry[4..8].try_into().ok()?),
-            ei_leaf_hi: u16::from_le_bytes(raw_entry[8..10].try_into().ok()?),
-            ei_unused: u16::from_le_bytes(raw_entry[10..12].try_into().ok()?),
-        };
-
-        let mut data = alloc::vec![0u8; fs.superblock.blk_size() as usize];
-
-        fs.__read_blk(extent_idx.leaf(), &mut data).ok()?;
-        traverse_extent_layer(fs, &data, extents);
-    }
-
-    Some(())
-}
-
-impl ExtentTree {
-    pub fn load_extent_tree(fs: &Ext4FS, inode: &Inode) -> Option<Self> {
-        if !fs
-            .superblock
-            .incompat_contains(EXT4_FEATURE_INCOMPAT_EXTENTS)
-            | !inode.contains_flag(inode_flags::EXT4_EXTENTS_FL)
-        {
-            return None;
-        };
-        let mut extents: Vec<Extent> = alloc::vec![];
-
-        traverse_extent_layer(fs, &inode.i_block, &mut extents);
-
-        Some(Self { extents })
-    }
-}
-
-/// Header contained in each node of the `ext4` extent tree.
-#[derive(Debug)]
-#[repr(C)]
-struct ExtentHeader {
-    /// Magic number (should be `0xf30a`)
-    eh_magic: u16,
-
-    /// Number of valid entries following the header
-    eh_entries: u16,
-
-    /// Maximum number of entries that could follow the header
-    eh_max: u16,
-
-    /// Depth of this node in the extent tree.
-    ///
-    /// If `eh_depth == 0`, this extent points to data blocks
-    eh_depth: u16,
-
-    /// Generation of the tree
-    eh_generation: u32,
-}
-
-impl ExtentHeader {
-    pub unsafe fn load(exth_ref: *const ExtentHeader) -> Option<Self> {
-        let header = ptr::read_unaligned(exth_ref);
-        if header.eh_magic != EXT4_EXTENTH_MAGIC {
-            None
-        } else {
-            Some(header)
-        }
-    }
-}
-
-/// Represents a leaf node of the extent tree.
-#[derive(Debug)]
-#[repr(C)]
-struct Extent {
-    /// First file block number that this extent covers
-    ee_block: u32,
-
-    /// Number of blocks covered by the extent.
-    ///
-    /// If `ee_len > 32768`, the extent is uninitialized and the actual extent
-    /// length is `ee_len - 32768`.
-    ee_len: u16,
-
-    /// High 16-bits of the block number to which this extent points
-    ee_start_hi: u16,
-
-    /// Low 32-bits of the block number to which this extent points.
-    ee_start_lo: u32,
-}
-
-impl Extent {
-    pub fn start_blk(&self) -> u64 {
-        self.ee_start_lo as u64 | ((self.ee_start_hi as u64) << 32)
-    }
-}
-
-/// Represents an internal node of the extent tree (an index node)
-#[repr(C, packed)]
-struct ExtentIdx {
-    /// This index node covers file blocks from `block` onward.
-    ei_block: u32,
-
-    /// Low 32-bits of the block number of the extent node that is the next level lower in the
-    /// tree.
-    ei_leaf_lo: u32,
-
-    /// High 16-bits of the block number of the extent node that is the next level lower in the
-    /// tree.
-    ei_leaf_hi: u16,
-
-    ei_unused: u16,
-}
-
-impl ExtentIdx {
-    fn leaf(&self) -> u64 {
-        (self.ei_leaf_lo as u64) | ((self.ei_leaf_hi as u64) << 32)
-    }
-}
-
 impl Inode {
     pub fn contains_flag(&self, flag: u32) -> bool {
         self.i_flags & flag != 0
@@ -1457,7 +1306,7 @@ pub struct Ext4File {
     part_id: usize,
     inode: Inode,
     inode_id: usize,
-    pub cursor: usize,
+    cursor: usize,
     extent_tree: Option<ExtentTree>,
 }
 
@@ -1469,8 +1318,7 @@ impl core::fmt::Debug for Ext4File {
             unsafe { ptr::read_unaligned(ptr::addr_of!(self.inode.i_flags)) },
             unsafe { ptr::read_unaligned(ptr::addr_of!(self.inode.i_size)) },
             unsafe { ptr::read_unaligned(ptr::addr_of!(self.inode.i_mode)) },
-            self.extent_tree.as_ref().unwrap_or(&ExtentTree { extents: alloc::vec![] })
-        ))
+            self.extent_tree.as_ref().unwrap_or(&ExtentTree::default())        ))
     }
 }
 
@@ -1517,10 +1365,11 @@ impl Ext4File {
             .partitions
             .get(part_id)
             .ok_or(IOError::InvalidDevice)?;
-        let fs = &part.fs;
+        let fs = &part.fs.clone();
+        drop(drive);
 
         if let PartFS::Ext4(fs) = fs {
-            let extent_tree = ExtentTree::load_extent_tree(fs, &inode);
+            let extent_tree = ExtentTree::load_extent_tree(fs, &inode, cast(inode_id as u32));
             Ok(Self {
                 drive_id,
                 part_id,
@@ -1557,41 +1406,54 @@ impl Ext4File {
     unsafe fn __read_bytes(&self, offset: usize, count: usize, buf: &mut [u8]) -> CanFail<IOError> {
         let fs = self.__lock_fs()?;
 
-        let blk_offset_from_file_start = offset / fs.superblock.blk_size() as usize;
-        let last_blk = (offset + count) / fs.superblock.blk_size() as usize;
+        let blk_offset_from_file_start: Ext4InodeRelBlkId =
+            try_cast(offset as u64 / fs.superblock.blk_size()).map_err(|_| IOError::Unknown)?;
+        let last_blk: Ext4InodeRelBlkId =
+            try_cast((offset + count) as u64 / fs.superblock.blk_size())
+                .map_err(|_| IOError::Unknown)?;
         let last_blk_count = count % fs.superblock.blk_size() as usize;
 
         if let Some(ext_tree) = &self.extent_tree {
             let mut useful_extents = ext_tree.extents.iter().filter(|ext| {
-                (ext.ee_block..ext.ee_block + (ext.ee_len as u32))
-                    .contains(&(blk_offset_from_file_start as u32))
+                (try_cast(ext.ee_block).unwrap()..ext.ee_block + ext.ee_len)
+                    .contains(&(blk_offset_from_file_start))
             });
             let mut curr_extent = useful_extents.next().unwrap();
 
-            for i in blk_offset_from_file_start..usize::min(0, last_blk - 1) {
-                if (curr_extent.ee_block + curr_extent.ee_len as u32) < i as u32 {
+            for i in Ext4InodeRelBlkIdRange(
+                blk_offset_from_file_start,
+                Ext4InodeRelBlkId::min(cast(0_u64), last_blk - 1),
+            ) {
+                if (curr_extent.ee_block + curr_extent.ee_len) < i {
                     curr_extent = useful_extents.next().unwrap();
                 }
                 fs.__read_blk(
-                    curr_extent.start_blk() + i as u64,
+                    try_cast(curr_extent.start_blk() + i).map_err(|_| IOError::Unknown)?,
                     slice::from_raw_parts_mut(
-                        buf.as_mut_ptr()
-                            .offset((i as u64 * fs.superblock.blk_size()) as isize),
+                        buf.as_mut_ptr().offset(
+                            (try_cast::<Ext4InodeRelBlkId, u64>(i).map_err(|_| IOError::Unknown)?
+                                * fs.superblock.blk_size()) as isize,
+                        ),
                         fs.superblock.blk_size() as usize,
                     ),
                 )?;
             }
 
-            if (curr_extent.ee_block + curr_extent.ee_len as u32) < last_blk as u32 {
+            if (curr_extent.ee_block + curr_extent.ee_len) < last_blk {
                 curr_extent = useful_extents.next().unwrap();
             }
 
             let mut temp_buf = alloc::vec![0u8; fs.superblock.blk_size() as usize];
-            fs.__read_blk(curr_extent.start_blk() + last_blk as u64, &mut temp_buf)?;
+            fs.__read_blk(
+                try_cast(curr_extent.start_blk() + last_blk).map_err(|_| IOError::Unknown)?,
+                &mut temp_buf,
+            )?;
 
             slice::from_raw_parts_mut(
-                buf.as_mut_ptr()
-                    .offset(((last_blk as u64) * fs.superblock.blk_size()) as isize),
+                buf.as_mut_ptr().offset(
+                    (try_cast::<Ext4InodeRelBlkId, u64>(last_blk).map_err(|_| IOError::Unknown)?
+                        * fs.superblock.blk_size()) as isize,
+                ),
                 last_blk_count,
             )
             .copy_from_slice(&temp_buf[..last_blk_count]);
