@@ -3,12 +3,15 @@
 //! `Inode` (index node) are the base structure that holds data about file-system objects, such as files or
 //! directories.
 
-use alloc::vec::Vec;
+use core::fmt::Display;
+
+use alloc::{format, string::String, vec::Vec};
 use bytemuck::{bytes_of, cast, Pod, Zeroable};
 
 use crate::{
     error,
     fs::ext4::{crc32c_calc, dir::Ext4InodeNumber, extent::ExtentBlock, Ext4FsUuid},
+    time::{DateTime, UnixTimestamp},
 };
 
 /// File mode / type representation.
@@ -78,6 +81,78 @@ impl InodeFileMode {
     pub(crate) const S_IFSOCK: Self = Self(0xC000);
 }
 
+macro_rules! symb_perm {
+    ($self: ident, $str: tt,  $symbol: literal, $flag: expr) => {
+        if $self.contains($flag) {
+            $str.push($symbol);
+        } else {
+            $str.push('-');
+        }
+    };
+}
+
+impl Display for InodeFileMode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut symbolic_str = String::new();
+
+        symb_perm!(self, symbolic_str, 'r', InodeFileMode::S_IRUSR);
+        symb_perm!(self, symbolic_str, 'w', InodeFileMode::S_IWUSR);
+        symb_perm!(self, symbolic_str, 'x', InodeFileMode::S_IXUSR);
+        symb_perm!(self, symbolic_str, 'r', InodeFileMode::S_IRGRP);
+        symb_perm!(self, symbolic_str, 'w', InodeFileMode::S_IWGRP);
+        symb_perm!(self, symbolic_str, 'x', InodeFileMode::S_IXGRP);
+        symb_perm!(self, symbolic_str, 'r', InodeFileMode::S_IROTH);
+        symb_perm!(self, symbolic_str, 'w', InodeFileMode::S_IWOTH);
+        symb_perm!(self, symbolic_str, 'x', InodeFileMode::S_IXOTH);
+
+        f.write_str(&symbolic_str)
+    }
+}
+
+/// Type associated to a given [`Inode`].
+#[allow(clippy::upper_case_acronyms)]
+pub(crate) enum InodeType {
+    Regular,
+    Directory,
+    FIFO,
+    CharacterDevice,
+    BlockDevice,
+    SymbolicLink,
+    Socket,
+}
+
+impl Display for InodeType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let type_str = match self {
+            InodeType::Regular => "File",
+            InodeType::Directory => "Directory",
+            InodeType::FIFO => "FIFO",
+            InodeType::CharacterDevice => "CharacterDevice",
+            InodeType::BlockDevice => "Block device",
+            InodeType::SymbolicLink => "Symbolic Link",
+            InodeType::Socket => "Socket",
+        };
+
+        f.write_str(type_str)
+    }
+}
+
+impl From<InodeFileMode> for InodeType {
+    fn from(value: InodeFileMode) -> Self {
+        let file_type = InodeFileMode(value.0 & ((1 << 12) - 1));
+
+        match file_type {
+            InodeFileMode::S_IFSOCK => Self::Socket,
+            InodeFileMode::S_IFLNK => Self::SymbolicLink,
+            InodeFileMode::S_IFCHR => Self::CharacterDevice,
+            InodeFileMode::S_IFBLK => Self::BlockDevice,
+            InodeFileMode::S_IFIFO => Self::FIFO,
+            InodeFileMode::S_IFDIR => Self::Directory,
+            _ => Self::Regular,
+        }
+    }
+}
+
 impl core::ops::BitAnd for InodeFileMode {
     type Output = InodeFileMode;
 
@@ -127,6 +202,12 @@ impl core::ops::BitOr for InodeFileMode {
 #[repr(transparent)]
 pub(crate) struct InodeGeneration(u32);
 
+impl Display for InodeGeneration {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
+
 /// Low 32-bits of the size in bytes of the associated `Inode`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
@@ -141,6 +222,12 @@ pub(crate) struct InodeSizeHi(u32);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct InodeSize(u64);
+
+impl Display for InodeSize {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
 
 impl From<InodeSize> for InodeSizeLo {
     fn from(value: InodeSize) -> Self {
@@ -183,6 +270,12 @@ impl core::ops::Sub<u64> for InodeSize {
 #[repr(transparent)]
 pub(crate) struct InodeChksum(u32);
 
+impl Display for InodeChksum {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
+
 impl InodeChksum {
     /// Used to remove the checksum entry from an `Inode` structure.
     pub(crate) const ERASE_CHKSUM: Self = Self(0);
@@ -222,6 +315,12 @@ impl core::ops::Add<InodeChksumHi> for InodeChksumLo {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct InodeFlags(u32);
+
+impl Display for InodeFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
 
 impl InodeFlags {
     /// This file requires secure deletion. (not implemented)
@@ -338,6 +437,12 @@ pub(crate) struct InodeVersion(u32);
 #[repr(transparent)]
 pub(crate) struct InodeBlkCount(u64);
 
+impl Display for InodeBlkCount {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
+
 /// Low 32-bits of the block count for this `Inode`
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
@@ -368,40 +473,76 @@ impl core::ops::Add<InodeBlkCountHi> for InodeBlkCountLo {
     }
 }
 
-/// Represents a time in seconds since the `epoch`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-#[repr(transparent)]
-pub(crate) struct InodeTime(u32);
-
 /// Last access time of this `Inode`, in seconds since the `epoch`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InodeAccessTime(InodeTime);
+pub(crate) struct InodeAccessTime(u32);
 
+impl core::ops::Add<InodeAccessTimeExtraBits> for InodeAccessTime {
+    type Output = UnixTimestamp;
+
+    fn add(self, rhs: InodeAccessTimeExtraBits) -> Self::Output {
+        UnixTimestamp::from(u64::from(self.0) | (u64::from(rhs.0) << 32))
+    }
+}
 /// Last change time for this `Inode`, in seconds since the `epoch`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InodeChangeTime(InodeTime);
+pub(crate) struct InodeChangeTime(u32);
 
+impl core::ops::Add<InodeChangeTimeExtraBits> for InodeChangeTime {
+    type Output = UnixTimestamp;
+
+    fn add(self, rhs: InodeChangeTimeExtraBits) -> Self::Output {
+        UnixTimestamp::from(u64::from(self.0) | (u64::from(rhs.0) << 32))
+    }
+}
 /// Last modification time for this `Inode`, in seconds since the `epoch`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InodeModificationTime(InodeTime);
+pub(crate) struct InodeModificationTime(u32);
 
+impl core::ops::Add<InodeModificationTimeExtraBits> for InodeModificationTime {
+    type Output = UnixTimestamp;
+
+    fn add(self, rhs: InodeModificationTimeExtraBits) -> Self::Output {
+        UnixTimestamp::from(u64::from(self.0) | (u64::from(rhs.0) << 32))
+    }
+}
 /// Deletion time for this `Inode`, in seconds since the `epoch`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InodeDeletionTime(InodeTime);
+pub(crate) struct InodeDeletionTime(u32);
+
+impl From<InodeDeletionTime> for UnixTimestamp {
+    fn from(value: InodeDeletionTime) -> Self {
+        Self::from(u64::from(value.0))
+    }
+}
 
 /// Creation time for this `Inode`, in seconds since the `epoch`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InodeCreationTime(InodeTime);
+pub(crate) struct InodeCreationTime(u32);
+
+impl core::ops::Add<InodeCreationTimeExtraBits> for InodeCreationTime {
+    type Output = UnixTimestamp;
+
+    fn add(self, rhs: InodeCreationTimeExtraBits) -> Self::Output {
+        UnixTimestamp::from(u64::from(self.0) | (u64::from(rhs.0) << 32))
+    }
+}
 
 /// Group ID for this `Inode`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct InodeGroupId(u32);
+
+impl Display for InodeGroupId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
 
 impl InodeGroupId {
     pub(crate) const SUPERUSER: Self = Self(0);
@@ -429,6 +570,12 @@ impl core::ops::Add<InodeGroupIdHi> for InodeGroupIdLo {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct InodeOwnerId(u32);
+
+impl Display for InodeOwnerId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
 
 impl InodeOwnerId {
     pub(crate) const SUPERUSER: Self = Self(0);
@@ -459,6 +606,12 @@ impl core::ops::Add<InodeOwnerIdHi> for InodeOwnerIdLo {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct InodeHardLinkCount(u16);
+
+impl Display for InodeHardLinkCount {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
 
 /// Used for file block indexing information.
 ///
@@ -553,35 +706,28 @@ impl core::ops::Add<u16> for InodeExtraSize {
 /// Extends the seconds since the epoch maximum value, and adds nanosecond timestamp accuracy
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InodeAccessTimeExtraBits(InodeTime);
+pub(crate) struct InodeAccessTimeExtraBits(u32);
 
 /// Extra changed time bits.
 ///
 /// Extends the seconds since the epoch maximum value, and adds nanosecond timestamp accuracy
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InodeChangeTimeExtraBits(InodeTime);
+pub(crate) struct InodeChangeTimeExtraBits(u32);
 
 /// Extra modification time bits.
 ///
 /// Extends the seconds since the epoch maximum value, and adds nanosecond timestamp accuracy
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InodeModificationTimeExtraBits(InodeTime);
-
-/// Extra deletion time bits.
-///
-/// Extends the seconds since the epoch maximum value, and adds nanosecond timestamp accuracy
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-#[repr(transparent)]
-pub(crate) struct InodeDeletionTimeExtraBits(InodeTime);
+pub(crate) struct InodeModificationTimeExtraBits(u32);
 
 /// Extra creation time bits.
 ///
 /// Extends the seconds since the epoch maximum value, and adds nanosecond timestamp accuracy
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InodeCreationTimeExtraBits(InodeTime);
+pub(crate) struct InodeCreationTimeExtraBits(u32);
 
 /// `Inode` project ID.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
@@ -679,7 +825,7 @@ pub(crate) struct Inode {
     pub(crate) i_checksum_hi: InodeChksumHi,
 
     /// Extra change time bits
-    pub(crate) i_ctime_extra: InodeCreationTimeExtraBits,
+    pub(crate) i_ctime_extra: InodeChangeTimeExtraBits,
 
     /// Extra modification time bits
     pub(crate) i_mtime_extra: InodeModificationTimeExtraBits,
@@ -701,6 +847,47 @@ pub(crate) struct Inode {
 }
 
 impl Inode {
+    /// Returns the type of this `Inode` (file, directory, ...)
+    pub(crate) fn inode_type(&self) -> InodeType {
+        InodeType::from(self.i_mode)
+    }
+
+    /// Returns this file deletion time in seconds since the epoch, if applicable.
+    pub(crate) fn deletion_time(&self) -> UnixTimestamp {
+        UnixTimestamp::from(self.i_dtime)
+    }
+
+    /// Returns the last time this file was changed, in seconds since the epoch.
+    ///
+    /// If the `Inode` structure is large enough, the signed seconds count encoded with 32 bits is
+    /// extended with 2 extra bits, and 30 additional bits provide nanoseconds precision.
+    pub(crate) fn change_time(&self) -> UnixTimestamp {
+        self.i_ctime + self.i_ctime_extra
+    }
+
+    /// Returns the last time this file was accessed, in seconds since the epoch.
+    ///
+    /// If the `Inode` structure is large enough, the signed seconds count encoded with 32 bits is
+    /// extended with 2 extra bits, and 30 additional bits provide nanoseconds precision.
+    pub(crate) fn access_time(&self) -> UnixTimestamp {
+        self.i_atime + self.i_atime_extra
+    }
+
+    /// Returns the last time this file was modified, in seconds since the epoch.
+    ///
+    /// If the `Inode` structure is large enough, the signed seconds count encoded with 32 bits is
+    /// extended with 2 extra bits, and 30 additional bits provide nanoseconds precision.
+    pub(crate) fn modification_time(&self) -> UnixTimestamp {
+        self.i_mtime + self.i_mtime_extra
+    }
+
+    /// Returns the time at which this file was created, in seconds since the epoch.
+    ///
+    /// If the `Inode` structure is large enough, the signed seconds count encoded with 32 bits is
+    /// extended with 2 extra bits, and 30 additional bits provide nanoseconds precision.
+    pub(crate) fn creation_time(&self) -> UnixTimestamp {
+        self.i_crtime + self.i_crtime_extra
+    }
     /// Compares the checksum of the `Inode` to its on-disk value.
     ///
     /// The checksum of an `Inode` can be computed (after having set the checksum field to 0) using:
@@ -720,7 +907,7 @@ impl Inode {
             comp_chksum == on_disk_chksum
         };
 
-        if matching_chksum {
+        if !matching_chksum {
             error!(
                 "ext4",
                 "invalid inode checksum (inode {:#X})",
@@ -742,6 +929,11 @@ impl Inode {
         if self.i_extra_isize != InodeExtraSize::NO_EXTRA_SIZE {
             self.i_checksum_hi = chksum.into();
         }
+    }
+
+    /// Returns the checksum value of this `Inode`.
+    pub(crate) fn chksum(&self) -> InodeChksum {
+        self.i_checksum_lo + self.i_checksum_hi
     }
 
     /// Updates the value of the checksum field for this `Inode`, based on the current value of the other
@@ -806,6 +998,14 @@ impl Inode {
         self.has_flag(InodeFlags::EXT4_EXTENTS_FL)
     }
 
+    /// Returns the hard link count.
+    ///
+    /// The maximum hard link count is usually 65 000, but may be increased if the `DIR_NLINK`
+    /// feature is enabled.
+    pub(crate) fn links(&self) -> InodeHardLinkCount {
+        self.i_links_count
+    }
+
     fn compute_chksum(&self, fs_uuid: Ext4FsUuid, inode_id: Ext4InodeNumber) -> InodeChksum {
         let mut chksum_bytes: Vec<u8> = alloc::vec![];
         chksum_bytes.extend_from_slice(bytes_of(&fs_uuid));
@@ -822,5 +1022,34 @@ impl Inode {
         );
 
         cast(crc32c_calc(&chksum_bytes))
+    }
+}
+
+#[allow(clippy::format_in_format_args)]
+impl core::fmt::Display for Inode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!(
+            "Type : {:<9}    Blocks : {:<16}    Size : {} \n\
+        Flags : {:<6}     Generation : {:<8}      Links : {} \n\
+Permissions : {}      UID: {}       GID: {} \n\
+Access: {} \n\
+Modify: {} \n\
+Change: {} \n\
+Checksum: {}
+        ",
+            format!("{}", self.inode_type()),
+            format!("{}", self.blk_count().0),
+            self.size().0,
+            format!("{:#x}", self.i_flags.0),
+            format!("{:#x}", self.i_generation.0),
+            self.links(),
+            self.i_mode,
+            self.uid(),
+            self.gid(),
+            DateTime::from(self.access_time()),
+            DateTime::from(self.modification_time()),
+            DateTime::from(self.change_time()),
+            format!("{:#x}", self.chksum().0)
+        ))
     }
 }
