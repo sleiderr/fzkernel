@@ -11,8 +11,8 @@ use crate::{
     error,
     errors::{CanFail, IOError},
     fs::ext4::{
-        crc32c_calc, dir::Ext4InodeNumber, inode_flags, Ext4FS, Ext4FsUuid, Ext4InodeGeneration,
-        Inode, EXT4_FEATURE_INCOMPAT_EXTENTS,
+        crc32c_calc, dir::Ext4InodeNumber, inode::InodeGeneration, Ext4FS, Ext4FsUuid, Inode,
+        EXT4_FEATURE_INCOMPAT_EXTENTS,
     },
 };
 
@@ -21,7 +21,7 @@ use crate::{
 pub(crate) struct ExtentTree {
     pub(crate) extents: Vec<Extent>,
     inode_id: Ext4InodeNumber,
-    inode_gen: Ext4InodeGeneration,
+    inode_gen: InodeGeneration,
 }
 
 impl core::fmt::Debug for ExtentTree {
@@ -64,7 +64,7 @@ impl core::fmt::Debug for ExtentTree {
 /// ```
 /// crc32c_calc(fs_uuid + inode_id + inode_gen + extent_blk)
 /// ```
-pub(crate) struct ExtentBlock(Vec<u8>);
+pub(crate) struct ExtentBlock(pub(crate) Vec<u8>);
 
 impl ExtentBlock {
     /// Compares the checksum of the `ExtentBlock` loaded in memory to its on-disk value.
@@ -72,7 +72,7 @@ impl ExtentBlock {
         &self,
         fs_uuid: Ext4FsUuid,
         inode_id: Ext4InodeNumber,
-        inode_gen: Ext4InodeGeneration,
+        inode_gen: InodeGeneration,
     ) -> bool {
         let on_disk_chksum: ExtentBlockChksum =
             *from_bytes(&self.0[self.0.len() - 4..self.0.len()]);
@@ -157,7 +157,7 @@ fn traverse_extent_layer(
     ext_data: &ExtentBlock,
     extents: &mut Vec<Extent>,
     inode_id: Ext4InodeNumber,
-    inode_gen: Ext4InodeGeneration,
+    inode_gen: InodeGeneration,
 ) -> Option<()> {
     let header = ext_data.get_header();
 
@@ -197,12 +197,12 @@ impl ExtentTree {
         if !fs
             .superblock
             .incompat_contains(EXT4_FEATURE_INCOMPAT_EXTENTS)
-            | !inode.contains_flag(inode_flags::EXT4_EXTENTS_FL)
+            | !inode.uses_extent_tree()
         {
             return None;
         };
         let mut extents: Vec<Extent> = alloc::vec![];
-        let extent_blk = ExtentBlock(inode.i_block.to_vec());
+        let extent_blk = inode.i_block.as_extent_block();
 
         traverse_extent_layer(
             fs,
@@ -326,7 +326,7 @@ impl Iterator for Ext4InodeRelBlkIdRange {
     type Item = Ext4InodeRelBlkId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.0 + 1 < self.1 {
+        if self.0 < self.1 {
             self.0 = self.0 + 1;
             return Some(self.0 - 1);
         }

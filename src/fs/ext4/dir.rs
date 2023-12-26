@@ -9,7 +9,8 @@ use crate::{
     fs::{
         ext4::{
             extent::{Ext4InodeRelBlkId, Ext4InodeRelBlkIdRange},
-            inode_mode, Ext4FS, Ext4File, ExtentTree, Inode,
+            inode::{InodeFileMode, InodeSize},
+            Ext4FS, Ext4File, ExtentTree, Inode,
         },
         IOResult, PartFS,
     },
@@ -161,10 +162,12 @@ impl Iterator for Ext4Directory {
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut raw_entry = [0u8; Ext4DirectoryEntry::MAX_ENTRY_SIZE as usize];
-        let count_to_read = usize::min(
-            self.inode.size() as usize - self.internal_cursor,
-            Ext4DirectoryEntry::MAX_ENTRY_SIZE as usize,
-        );
+        let count_to_read = u64::min(
+            cast(self.inode.size() - self.internal_cursor.try_into().ok()?),
+            Ext4DirectoryEntry::MAX_ENTRY_SIZE as u64,
+        )
+        .try_into()
+        .ok()?;
 
         if count_to_read <= 8 {
             return None;
@@ -189,7 +192,7 @@ impl Iterator for Ext4Directory {
 
         self.internal_cursor = usize::min(
             self.internal_cursor + rec_len as usize,
-            self.inode.size() as usize,
+            cast::<InodeSize, u64>(self.inode.size()) as usize,
         );
 
         Some(Ext4DirectoryEntry {
@@ -235,13 +238,13 @@ impl Ext4Directory {
 
         Err(IOError::Unknown)
     }
-    pub fn from_inode(
+    pub(crate) fn from_inode(
         drive_id: usize,
         part_id: usize,
         inode: Inode,
         inode_id: Ext4InodeNumber,
     ) -> IOResult<Self> {
-        if !inode.mode_contains(inode_mode::S_IFDIR) {
+        if !inode.mode_contains(InodeFileMode::S_IFDIR) {
             return Err(IOError::InvalidCommand);
         }
 

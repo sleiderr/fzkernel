@@ -1,7 +1,7 @@
 use core::{mem, ptr, slice};
 
 use alloc::{string::String, vec::Vec};
-use bytemuck::{cast, try_cast, Pod, Zeroable};
+use bytemuck::{cast, from_bytes, try_cast, Pod, Zeroable};
 
 use crate::{
     drivers::ahci::{get_sata_drive, SATA_DRIVES},
@@ -11,6 +11,7 @@ use crate::{
         ext4::{
             dir::{Ext4Directory, Ext4InodeNumber},
             extent::{Ext4InodeRelBlkId, Ext4InodeRelBlkIdRange, ExtentTree},
+            inode::{Inode, InodeFileMode, InodeFlags, InodeSize},
         },
         IOResult, PartFS,
     },
@@ -20,6 +21,7 @@ use crate::{errors::MountError, fs::FsFile};
 
 pub mod dir;
 pub(crate) mod extent;
+pub(crate) mod inode;
 
 pub const EXT4_SIGNATURE: u16 = 0xEF53;
 
@@ -176,10 +178,6 @@ pub const EXT4_FEATURE_INCOMPAT_CASEFOLD: u32 = 0x20000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct Ext4InodeGeneration(u32);
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-#[repr(transparent)]
 pub(crate) struct Ext4FsUuid(u128);
 
 #[derive(Clone, Debug)]
@@ -233,6 +231,7 @@ impl Ext4FS {
             .map_err(|_| MountError::IOError)?;
 
         let sb = unsafe { ptr::read(raw_sb.as_ptr() as *mut Ext4Superblock) };
+        let isize = sb.s_inode_size;
 
         if sb.s_checksum_type == EXT4_CHKSUM_TYPE_CRC32 {
             let sb_chcksum = crc32c_calc(&raw_sb[..mem::size_of::<Ext4Superblock>() - 4]);
@@ -377,10 +376,10 @@ impl Ext4FS {
         self.__read_bg_descriptor_preinit(bg_id, part_offset)
     }
 
-    pub fn __read_inode(&self, inode_id: u64) -> Result<Inode, IOError> {
+    pub(crate) fn __read_inode(&self, inode_id: u64) -> Result<Inode, IOError> {
         let inode_blk_group = (inode_id - 1) / self.superblock.inodes_per_group() as u64;
         let inode_bg_idx = (inode_id - 1) % self.superblock.inodes_per_group() as u64;
-        let inode_byte_idx = inode_bg_idx * self.superblock.s_inode_size as u64;
+        let inode_byte_idx = inode_bg_idx * self.superblock.inode_size() as u64;
 
         let inode_blk_offset = inode_byte_idx / self.superblock.blk_size();
         let inode_bytes_idx_in_blk = inode_byte_idx % self.superblock.blk_size();
@@ -404,9 +403,15 @@ impl Ext4FS {
         }?;
 
         let raw_inode = &raw_inode_blk[(inode_bytes_idx_in_blk as usize)
-            ..(inode_bytes_idx_in_blk + mem::size_of::<Inode>() as u64) as usize];
+            ..(inode_bytes_idx_in_blk + self.superblock.inode_size() as u64) as usize];
 
-        unsafe { Ok(ptr::read(raw_inode.as_ptr() as *const Inode)) }
+        let mut filled_inode = alloc::vec![0u8; mem::size_of::<Inode>()];
+        filled_inode[..raw_inode.len()].copy_from_slice(raw_inode);
+
+        let inode: Inode = *from_bytes(&filled_inode);
+        inode.validate_chksum(*from_bytes(&self.superblock.s_uuid), cast(inode_id as u32));
+
+        Ok(inode)
     }
 }
 
@@ -760,6 +765,11 @@ impl Ext4Superblock {
         self.s_blocks_per_group
     }
 
+    /// Returns the size of the inode structure.
+    pub fn inode_size(&self) -> u16 {
+        self.s_inode_size
+    }
+
     /// Returns the number of inodes per block group.
     pub fn inodes_per_group(&self) -> u32 {
         self.s_inodes_per_group
@@ -994,305 +1004,6 @@ pub const EXT4_BG_BLOCK_UNINIT: u16 = 0x0002;
 pub const EXT4_BG_INODE_ZEROED: u16 = 0x0004;
 
 #[repr(C, packed)]
-#[derive(Debug)]
-pub struct Inode {
-    /// File mode
-    pub i_mode: u16,
-
-    /// Lower 16-bit of Owner UID
-    i_uid: u16,
-
-    /// Lower 32-bits of size in bytes
-    i_size: u32,
-
-    /// Last access time, in seconds since the epoch
-    i_atime: u32,
-
-    /// Last inode change time, in seconds since the epoch
-    i_ctime: u32,
-
-    /// Last data modification time, in seconds since the epoch
-    i_mtime: u32,
-
-    /// Deletion time, in seconds since the epoch
-    i_dtime: u32,
-
-    /// Lower 16-bits of GID
-    i_gid: u16,
-
-    /// Hard link count
-    ///
-    /// The usual link limit is 65,000 hard links, but if [`EXT4_FEATURE_DIR_NLINK`] is set, `ext4`
-    /// supports more than 64,998 subdirectories by setting this field to 1 to indicate that the
-    /// number of hard links is not known.
-    i_links_count: u16,
-
-    /// Lower 32-bits of block count.
-    pub i_blocks_lo: u32,
-
-    /// Inode flags
-    i_flags: u32,
-
-    /// Inode version
-    i_version: u32,
-
-    /// Block map or extent tree
-    pub i_block: [u8; 60],
-
-    /// File version
-    i_generation: u32,
-
-    /// Lower 32-bits of extended attribute block.
-    i_file_acl_lo: u32,
-
-    /// Upper 32-bits of file directory/size.
-    i_dir_acl: u32,
-
-    /// Fragment address (outdated)
-    i_faddr: u32,
-
-    /// High 16-bits of the block count
-    i_blocks_high: u16,
-
-    /// High 16-bits of the extended attribute block
-    i_file_acl_high: u16,
-
-    /// High 16-bits of the Owner UID
-    i_uid_high: u16,
-
-    /// High 16-bits of the GID
-    i_gid_high: u16,
-
-    /// Lower 16-bits of the inode checksum
-    i_checksum_lo: u16,
-
-    reserved: u16,
-
-    /// Size of this inode - 128
-    i_extra_isize: u16,
-
-    /// Upper 16-bits of the inode checksum
-    i_checksum_hi: u16,
-
-    /// Extra change time bits
-    i_ctime_extra: u32,
-
-    /// Extra modification time bits
-    i_mtime_extra: u32,
-
-    /// Extra access time bits
-    i_atime_extra: u32,
-
-    /// File creation time, in seconds since the epoch
-    i_crtime: u32,
-
-    /// Extra file creation time bits.
-    i_crtime_extra: u32,
-
-    /// Upper 32-bits of version number
-    i_version_hi: u32,
-
-    /// Project ID
-    i_projid: u32,
-}
-
-pub mod inode_mode {
-    //! [`Inode`] field `i_mode` value is a combination of these flags.
-
-    /// Others may execute.
-    pub const S_IXOTH: u16 = 0x0001;
-
-    /// Others may write.
-    pub const S_IWOTH: u16 = 0x0002;
-
-    /// Others may read.
-    pub const S_IROTH: u16 = 0x0004;
-
-    /// Group may execute.
-    pub const S_IXGRP: u16 = 0x0008;
-
-    /// Group may write.
-    pub const S_IWGRP: u16 = 0x0010;
-
-    /// Group may read.
-    pub const S_IRGRP: u16 = 0x0020;
-
-    /// User may execute.
-    pub const S_IXUSR: u16 = 0x0040;
-
-    /// User may write.
-    pub const S_IWUSR: u16 = 0x0080;
-
-    /// User may read.
-    pub const S_IRUSR: u16 = 0x0100;
-
-    /// Sticky bit.
-    pub const S_ISVTX: u16 = 0x0200;
-
-    /// Set GID
-    pub const S_ISGID: u16 = 0x0400;
-
-    /// Set UID
-    pub const S_ISUID: u16 = 0x0800;
-
-    /// FIFO
-    pub const S_IFIFO: u16 = 0x1000;
-
-    /// Character device
-    pub const S_IFCHR: u16 = 0x2000;
-
-    /// Directory
-    pub const S_IFDIR: u16 = 0x4000;
-
-    /// Block device
-    pub const S_IFBLK: u16 = 0x6000;
-
-    /// Regular file
-    pub const S_IFREG: u16 = 0x8000;
-
-    /// Symbolic link
-    pub const S_IFLNK: u16 = 0xA000;
-
-    /// Socket
-    pub const S_IFSOCK: u16 = 0xC000;
-}
-
-pub mod inode_flags {
-    //! [`Inode`] field `i_value` is a combination of these flags.
-
-    /// This file requires secure deletion. (not implemented)
-    pub const EXT4_SECRM_FL: u32 = 0x1;
-
-    /// This file should be preserved. (not implemented)
-    pub const EXT4_UNRM_FL: u32 = 0x2;
-
-    /// File is compressed
-    pub const EXT4_COMPR_FL: u32 = 0x4;
-
-    /// All writes to the file must be synchronous
-    pub const EXT4_SYNC_FL: u32 = 0x8;
-
-    /// File is immutable
-    pub const EXT4_IMMUTABLE_FL: u32 = 0x10;
-
-    /// File can only be appended
-    pub const EXT4_APPEND_FL: u32 = 0x20;
-
-    /// The `dump` utility should not dump this file.
-    pub const EXT4_NODUMP_FL: u32 = 0x40;
-
-    /// Do not update access time
-    pub const EXT4_NOATIME_FL: u32 = 0x80;
-
-    /// Dirty compressed file.
-    pub const EXT4_DIRTY_FL: u32 = 0x100;
-
-    /// File has one or more compressed clusters.
-    pub const EXT4_COMPRBLK_FL: u32 = 0x200;
-
-    /// Do not compress file.
-    pub const EXT4_NOCOMPR_FL: u32 = 0x400;
-
-    /// Encrypted inode.
-    pub const EXT4_ENCRYPT_FL: u32 = 0x800;
-
-    /// Directory has hashed indexes.
-    pub const EXT4_INDEX_FL: u32 = 0x1000;
-
-    /// AFS magic directory
-    pub const EXT4_IMAGIC_FL: u32 = 0x2000;
-
-    /// File data must always be written through the journal
-    pub const EXT4_JOURNAL_DATA_FL: u32 = 0x4000;
-
-    /// File tail should not be merged.
-    pub const EXT4_NOTAIL_FL: u32 = 0x8000;
-
-    /// All directory entry data should be written synchronously.
-    pub const EXT4_DIRSYNC_FL: u32 = 0x10000;
-
-    /// Top of directory hierarchy.
-    pub const EXT4_TOPDIR_FL: u32 = 0x20000;
-
-    /// Huge file.
-    pub const EXT4_HUGE_FILE_FL: u32 = 0x40000;
-
-    /// Inode uses extents.
-    pub const EXT4_EXTENTS_FL: u32 = 0x80000;
-
-    /// Verity protected file.
-    pub const EXT4_VERITY_FL: u32 = 0x100000;
-
-    /// Inode stores a large extended attribute value in its data block.
-    pub const EXT4_EA_INODE_FL: u32 = 0x200000;
-
-    /// This file has blocks allocated past `EOF`.
-    pub const EXT4_EOFBLOCKS_FL: u32 = 0x400000;
-
-    /// Inode is a snapshot.
-    pub const EXT4_SNAPFILE_FL: u32 = 0x800000;
-
-    /// Snapshot is being deleted.
-    pub const EXT4_SNAPFILE_DELETED_FL: u32 = 0x1000000;
-
-    /// Snapshot shrink has completed.
-    pub const EXT4_SNAPFILE_SHRUNK_FL: u32 = 0x2000000;
-
-    /// Inode has inline data.
-    pub const EXT4_INLINE_DATA_FL: u32 = 0x4000000;
-
-    /// Create children with the same project ID.
-    pub const EXT4_PROJINHERIT_FL: u32 = 0x8000000;
-
-    /// Reserved for `ext4` library.
-    pub const EXT4_RESERVED_FL: u32 = 0x80000000;
-}
-
-impl Inode {
-    pub fn mode_contains(&self, flag: u16) -> bool {
-        self.i_mode & flag != 0
-    }
-}
-
-pub struct BlockMap {
-    i_entries: [u32; 15],
-}
-
-impl BlockMap {
-    pub fn load_blk_map(inode: &Inode) -> Option<Self> {
-        let mut i_entries = [0u32; 15];
-
-        for (i, entry) in i_entries.iter_mut().enumerate() {
-            *entry = u32::from_le_bytes(inode.i_block[i..i + 4].try_into().ok()?);
-        }
-
-        Some(Self { i_entries })
-    }
-
-    pub fn read_file_blk(&self, blk_id: u32) -> u32 {
-        if blk_id < 11 {
-            return self.i_entries[blk_id as usize];
-        }
-
-        0
-    }
-}
-
-impl Inode {
-    pub fn contains_flag(&self, flag: u32) -> bool {
-        self.i_flags & flag != 0
-    }
-
-    pub fn uses_extent_tree(&self) -> bool {
-        self.contains_flag(inode_flags::EXT4_EXTENTS_FL)
-    }
-
-    pub fn size(&self) -> u64 {
-        self.i_size as u64 | ((self.i_dir_acl as u64) << 32)
-    }
-}
-
-#[repr(C, packed)]
 struct LinkedDirectoryEntry {
     inode: u16,
     rec_len: u16,
@@ -1315,9 +1026,9 @@ impl core::fmt::Debug for Ext4File {
         f.write_fmt(format_args!(
             "ext4 file | inode = {}    flags = {:#x}    size = {}    mode = {:#x} \n    Extents: \n{:?}",
             self.inode_id,
-            unsafe { ptr::read_unaligned(ptr::addr_of!(self.inode.i_flags)) },
-            unsafe { ptr::read_unaligned(ptr::addr_of!(self.inode.i_size)) },
-            unsafe { ptr::read_unaligned(ptr::addr_of!(self.inode.i_mode)) },
+            cast::<InodeFlags, u32>(self.inode.i_flags),
+            cast::<InodeSize, u64>(self.inode.size()),
+            cast::<InodeFileMode, u16>(self.inode.i_mode),
             self.extent_tree.as_ref().unwrap_or(&ExtentTree::default())        ))
     }
 }
@@ -1345,13 +1056,13 @@ impl Ext4File {
 
         Err(IOError::Unknown)
     }
-    pub fn from_inode(
+    pub(crate) fn from_inode(
         drive_id: usize,
         part_id: usize,
         inode: Inode,
         inode_id: usize,
     ) -> IOResult<Self> {
-        if !inode.mode_contains(inode_mode::S_IFREG) {
+        if !inode.mode_contains(InodeFileMode::S_IFREG) {
             return Err(IOError::InvalidCommand);
         }
 
@@ -1415,15 +1126,12 @@ impl Ext4File {
 
         if let Some(ext_tree) = &self.extent_tree {
             let mut useful_extents = ext_tree.extents.iter().filter(|ext| {
-                (try_cast(ext.ee_block).unwrap()..ext.ee_block + ext.ee_len)
-                    .contains(&(blk_offset_from_file_start))
+                ext.ee_block >= last_blk || ext.ee_block + ext.ee_len <= blk_offset_from_file_start
             });
+
             let mut curr_extent = useful_extents.next().unwrap();
 
-            for i in Ext4InodeRelBlkIdRange(
-                blk_offset_from_file_start,
-                Ext4InodeRelBlkId::min(cast(0_u64), last_blk - 1),
-            ) {
+            for i in Ext4InodeRelBlkIdRange(blk_offset_from_file_start, last_blk) {
                 if (curr_extent.ee_block + curr_extent.ee_len) < i {
                     curr_extent = useful_extents.next().unwrap();
                 }
@@ -1492,7 +1200,7 @@ impl FsFile for Ext4File {
     }
 
     fn size(&self) -> super::IOResult<usize> {
-        Ok(self.inode.size() as usize)
+        Ok(cast::<InodeSize, u64>(self.inode.size()) as usize)
     }
 
     fn truncate(&mut self, size: usize) -> super::IOResult<usize> {
