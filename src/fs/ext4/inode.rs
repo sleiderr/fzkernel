@@ -3,16 +3,84 @@
 //! `Inode` (index node) are the base structure that holds data about file-system objects, such as files or
 //! directories.
 
-use core::fmt::Display;
+use core::fmt::{Display, Formatter};
 
 use alloc::{format, string::String, vec::Vec};
 use bytemuck::{bytes_of, cast, Pod, Zeroable};
 
 use crate::{
     error,
-    fs::ext4::{crc32c_calc, dir::InodeNumber, extent::ExtentBlock, Ext4FsUuid},
+    fs::ext4::{crc32c_calc, extent::ExtentBlock, Ext4FsUuid},
     time::{DateTime, UnixTimestamp},
 };
+
+/// A number representing an inode.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(C)]
+pub struct InodeNumber(u32);
+
+impl InodeNumber {
+    /// Inode 0 represents an unused directory entry
+    pub const UNUSED_DIR_ENTRY: Self = Self(0);
+
+    /// Inode 2 is reserved for the root directory of the file system.
+    pub const ROOT_DIR: Self = Self(0x2);
+
+    /// Inode 3 is reserved for the user quota
+    pub const USER_QUOTA: Self = Self(0x3);
+
+    /// Inode 4 is reserved for the group quota file
+    pub const GROUP_QUOTA: Self = Self(0x4);
+
+    /// Inode 5 is unused, but may have been intended for stage 2 bootloaders
+    pub const BOOTLOADER: Self = Self(0x5);
+
+    /// Inode 6 is unused, but may have been intended for the never implemented undeletion
+    pub const UNDELETE: Self = Self(0x6);
+
+    /// Inode 7 is the reserved group descriptors inode
+    pub const RESIZE: Self = Self(0x7);
+
+    /// Inode 8 is the ext4 journal
+    pub const JOURNAL: Self = Self(0x8);
+
+    /// Inode 9 is the exclude inode, for snapshots
+    pub const EXCLUDE: Self = Self(0x9);
+
+    /// Inode 10 is used for ext4 metadata replication in some non-upstream patches
+    pub const REPLICA: Self = Self(0xA);
+}
+
+impl Display for InodeNumber {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("{}", self.0))
+    }
+}
+
+impl core::ops::Sub<u32> for InodeNumber {
+    type Output = u32;
+
+    fn sub(self, rhs: u32) -> Self::Output {
+        self.0.saturating_sub(rhs)
+    }
+}
+
+impl From<InodeNumber> for u32 {
+    fn from(value: InodeNumber) -> Self {
+        value.0
+    }
+}
+
+impl From<InodeNumber> for usize {
+    fn from(value: InodeNumber) -> usize {
+        value.0.try_into().expect("invalid inode number")
+    }
+}
+impl From<usize> for InodeNumber {
+    fn from(value: usize) -> Self {
+        InodeNumber(value.try_into().expect("invalid inode number (not 32-bit)"))
+    }
+}
 
 /// File mode / type representation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
@@ -92,7 +160,7 @@ macro_rules! symb_perm {
 }
 
 impl Display for InodeFileMode {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         let mut symbolic_str = String::new();
 
         symb_perm!(self, symbolic_str, 'r', InodeFileMode::S_IRUSR);
@@ -122,7 +190,7 @@ pub(crate) enum InodeType {
 }
 
 impl Display for InodeType {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         let type_str = match self {
             InodeType::Regular => "File",
             InodeType::Directory => "Directory",
@@ -203,7 +271,7 @@ impl core::ops::BitOr for InodeFileMode {
 pub(crate) struct InodeGeneration(u32);
 
 impl Display for InodeGeneration {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.0))
     }
 }
@@ -224,7 +292,7 @@ pub(crate) struct InodeSizeHi(u32);
 pub(crate) struct InodeSize(u64);
 
 impl Display for InodeSize {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.0))
     }
 }
@@ -271,7 +339,7 @@ impl core::ops::Sub<u64> for InodeSize {
 pub(crate) struct InodeChksum(u32);
 
 impl Display for InodeChksum {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.0))
     }
 }
@@ -317,7 +385,7 @@ impl core::ops::Add<InodeChksumHi> for InodeChksumLo {
 pub(crate) struct InodeFlags(u32);
 
 impl Display for InodeFlags {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.0))
     }
 }
@@ -438,7 +506,7 @@ pub(crate) struct InodeVersion(u32);
 pub(crate) struct InodeBlkCount(u64);
 
 impl Display for InodeBlkCount {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.0))
     }
 }
@@ -539,7 +607,7 @@ impl core::ops::Add<InodeCreationTimeExtraBits> for InodeCreationTime {
 pub(crate) struct InodeGroupId(u32);
 
 impl Display for InodeGroupId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.0))
     }
 }
@@ -572,7 +640,7 @@ impl core::ops::Add<InodeGroupIdHi> for InodeGroupIdLo {
 pub(crate) struct InodeOwnerId(u32);
 
 impl Display for InodeOwnerId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.0))
     }
 }
@@ -608,7 +676,7 @@ impl core::ops::Add<InodeOwnerIdHi> for InodeOwnerIdLo {
 pub(crate) struct InodeHardLinkCount(u16);
 
 impl Display for InodeHardLinkCount {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.0))
     }
 }
@@ -1026,8 +1094,8 @@ impl Inode {
     }
 }
 #[allow(clippy::format_in_format_args)]
-impl core::fmt::Display for Inode {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl Display for Inode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!(
             "Type : {:<9}    Blocks : {:<16}    Size : {} \n\
         Flags : {:<6}     Generation : {:<8}      Links : {} \n\

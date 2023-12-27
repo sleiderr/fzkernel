@@ -7,17 +7,18 @@ use core::{cmp::Ordering, mem};
 use alloc::vec::Vec;
 use bytemuck::{bytes_of, cast, from_bytes, Pod, Zeroable};
 
+use crate::fs::ext4::inode::InodeNumber;
 use crate::{
     error,
     errors::{CanFail, IOError},
     fs::ext4::{
-        crc32c_calc, dir::InodeNumber, inode::InodeGeneration, Ext4Fs, Ext4FsUuid, Inode,
+        crc32c_calc, inode::InodeGeneration, Ext4Fs, Ext4FsUuid, Inode,
         EXT4_FEATURE_INCOMPAT_EXTENTS,
     },
 };
 
 /// Internal ext4 extent tree representation.
-#[derive(Default)]
+#[derive(Default, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub(crate) struct ExtentTree {
     pub(crate) extents: Vec<Extent>,
     inode_id: InodeNumber,
@@ -29,8 +30,8 @@ impl core::fmt::Debug for ExtentTree {
         for extent in &self.extents {
             f.write_fmt(format_args!(
                 "({:?}-{:?}) -> {:?} \n",
-                extent.ee_block,
-                extent.ee_block + extent.ee_len,
+                extent.block,
+                extent.block + extent.len,
                 extent.start_blk()
             ))?;
         }
@@ -108,17 +109,16 @@ impl ExtentBlock {
     /// Returns the raw bytes for the entry `entry` of the extent block.
     pub(crate) fn get_entry_bytes(&self, entry: u16) -> Option<ExtentBlkRawEntry> {
         let header = self.get_header();
-        let entries = header.eh_entries;
+        let entries = header.entries;
 
         if cast::<u16, Ext4ExtentHeaderEntriesCount>(entry) >= entries {
             return None;
         }
 
         Some(ExtentBlkRawEntry(
-            &self.0[(mem::size_of::<ExtentHeader>()
-                + (usize::try_from(entry).unwrap()) * mem::size_of::<Extent>())
+            &self.0[(mem::size_of::<ExtentHeader>() + usize::from(entry) * mem::size_of::<Extent>())
                 ..mem::size_of::<ExtentHeader>()
-                    + (1 + usize::try_from(entry).unwrap()) * mem::size_of::<Extent>()],
+                    + (1 + usize::from(entry)) * mem::size_of::<Extent>()],
         ))
     }
 }
@@ -163,7 +163,7 @@ fn traverse_extent_layer(
 
     // this extent points directly to data blocks
     if header.is_leaf() {
-        for entry in 0..cast::<Ext4ExtentHeaderEntriesCount, u16>(header.eh_entries) {
+        for entry in 0..cast::<Ext4ExtentHeaderEntriesCount, u16>(header.entries) {
             let extent: Extent = ext_data.get_entry_bytes(entry)?.as_extent();
 
             extents.push(extent);
@@ -172,7 +172,7 @@ fn traverse_extent_layer(
         return Some(());
     }
 
-    for entry in 0..cast::<Ext4ExtentHeaderEntriesCount, u16>(header.eh_entries) {
+    for entry in 0..cast::<Ext4ExtentHeaderEntriesCount, u16>(header.entries) {
         let extent_idx: ExtentIdx = ext_data.get_entry_bytes(entry)?.as_extent_idx();
 
         let mut data = alloc::vec![0u8; usize::try_from(fs.superblock.blk_size()).ok()?];
@@ -227,7 +227,7 @@ impl ExtentTree {
             .binary_search_by(|ext| {
                 if ext.contains(blk_id) {
                     return Ordering::Equal;
-                } else if ext.ee_block > blk_id {
+                } else if ext.block > blk_id {
                     return Ordering::Greater;
                 }
 
@@ -236,7 +236,7 @@ impl ExtentTree {
             .ok()?;
 
         let extent = self.extents.get(ext_id)?;
-        let offset_in_extent = blk_id - extent.ee_block;
+        let offset_in_extent = blk_id - extent.block;
 
         Some(extent.start_blk() + offset_in_extent)
     }
@@ -313,14 +313,14 @@ impl core::ops::Sub<Ext4ExtentInitialBlock> for Ext4InodeRelBlkId {
     }
 }
 
-impl core::cmp::PartialEq<Ext4ExtentInitialBlock> for Ext4InodeRelBlkId {
+impl PartialEq<Ext4ExtentInitialBlock> for Ext4InodeRelBlkId {
     fn eq(&self, other: &Ext4ExtentInitialBlock) -> bool {
         self.0 == u64::from(other.0)
     }
 }
 
-impl core::cmp::PartialOrd<Ext4ExtentInitialBlock> for Ext4InodeRelBlkId {
-    fn partial_cmp(&self, other: &Ext4ExtentInitialBlock) -> Option<core::cmp::Ordering> {
+impl PartialOrd<Ext4ExtentInitialBlock> for Ext4InodeRelBlkId {
+    fn partial_cmp(&self, other: &Ext4ExtentInitialBlock) -> Option<Ordering> {
         Some(self.0.cmp(&u64::from(other.0)))
     }
 }
@@ -399,27 +399,27 @@ struct Ext4ExtentHeaderEntriesMax(u16);
 #[repr(C, packed)]
 pub(crate) struct ExtentHeader {
     /// Magic number (should be `0xf30a`)
-    eh_magic: Ext4ExtentHeaderMagic,
+    magic: Ext4ExtentHeaderMagic,
 
     /// Number of valid entries following the header
-    eh_entries: Ext4ExtentHeaderEntriesCount,
+    entries: Ext4ExtentHeaderEntriesCount,
 
     /// Maximum number of entries that could follow the header
-    eh_max: Ext4ExtentHeaderEntriesMax,
+    max: Ext4ExtentHeaderEntriesMax,
 
     /// Depth of this node in the extent tree.
     ///
     /// If `eh_depth == 0`, this extent points to data blocks
-    eh_depth: Ext4ExtentHeaderDepth,
+    depth: Ext4ExtentHeaderDepth,
 
     /// Generation of the tree
-    eh_generation: Ext4ExtentHeaderGeneration,
+    generation: Ext4ExtentHeaderGeneration,
 }
 
 impl ExtentHeader {
     /// Checks if this header corresponds to leaf nodes.
     pub(crate) fn is_leaf(&self) -> bool {
-        let depth = self.eh_depth;
+        let depth = self.depth;
         depth == Ext4ExtentHeaderDepth::LEAF_DEPTH
     }
 
@@ -427,7 +427,7 @@ impl ExtentHeader {
     pub(crate) unsafe fn load(h_bytes: &[u8]) -> Option<Self> {
         let header: ExtentHeader = *from_bytes(h_bytes);
 
-        let magic = header.eh_magic;
+        let magic = header.magic;
         if magic == Ext4ExtentHeaderMagic::VALID_EXT4_MAGIC {
             Some(header)
         } else {
@@ -466,14 +466,14 @@ impl Ext4ExtentLength {
 #[repr(transparent)]
 pub(super) struct Ext4ExtentInitialBlock(u32);
 
-impl core::cmp::PartialEq<Ext4InodeRelBlkId> for Ext4ExtentInitialBlock {
+impl PartialEq<Ext4InodeRelBlkId> for Ext4ExtentInitialBlock {
     fn eq(&self, other: &Ext4InodeRelBlkId) -> bool {
         u64::from(self.0) == other.0
     }
 }
 
-impl core::cmp::PartialOrd<Ext4InodeRelBlkId> for Ext4ExtentInitialBlock {
-    fn partial_cmp(&self, other: &Ext4InodeRelBlkId) -> Option<core::cmp::Ordering> {
+impl PartialOrd<Ext4InodeRelBlkId> for Ext4ExtentInitialBlock {
+    fn partial_cmp(&self, other: &Ext4InodeRelBlkId) -> Option<Ordering> {
         Some(u64::from(self.0).cmp(&other.0))
     }
 }
@@ -509,28 +509,28 @@ impl core::ops::Add<Ext4ExtentPtrHi> for Ext4ExtentPtrLo {
 #[repr(C)]
 pub(crate) struct Extent {
     /// First file block number that this extent covers
-    pub(super) ee_block: Ext4ExtentInitialBlock,
+    pub(super) block: Ext4ExtentInitialBlock,
 
     /// Number of blocks covered by the extent.
     ///
     /// If `ee_len > 32768`, the extnt is uninitialized and the actual extent
     /// length is `ee_len - 32768`.
-    pub(super) ee_len: Ext4ExtentLength,
+    pub(super) len: Ext4ExtentLength,
 
     /// High 16-bits of the block number to which this extent points
-    pub(super) ee_start_hi: Ext4ExtentPtrHi,
+    pub(super) start_hi: Ext4ExtentPtrHi,
 
     /// Low 32-bits of the block number to which this extent points.
-    pub(super) ee_start_lo: Ext4ExtentPtrLo,
+    pub(super) start_lo: Ext4ExtentPtrLo,
 }
 
 impl Extent {
     pub(crate) fn start_blk(&self) -> Ext4RealBlkId {
-        self.ee_start_lo + self.ee_start_hi
+        self.start_lo + self.start_hi
     }
 
     pub(crate) fn contains(&self, blk_id: Ext4InodeRelBlkId) -> bool {
-        self.ee_block <= blk_id && self.ee_block + self.ee_len >= blk_id
+        self.block <= blk_id && self.block + self.len >= blk_id
     }
 }
 

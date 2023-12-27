@@ -1,6 +1,6 @@
 use crate::error;
-use crate::fs::ext4::dir::InodeNumber;
 use crate::fs::ext4::extent::Ext4RealBlkId;
+use crate::fs::ext4::inode::InodeNumber;
 use crate::fs::ext4::{crc32c_calc, Ext4FsUuid};
 use alloc::vec::Vec;
 use bytemuck::{bytes_of, cast, Pod, Zeroable};
