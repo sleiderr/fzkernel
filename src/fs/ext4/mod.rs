@@ -1,6 +1,6 @@
+use alloc::{string::String, vec::Vec};
 use core::{mem, ptr, slice};
 
-use alloc::{string::String, vec::Vec};
 use bytemuck::{cast, from_bytes, try_cast, Pod, Zeroable};
 
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
     errors::{CanFail, IOError},
     fs::{
         ext4::{
-            bitmap::InodeBitmap,
+            bitmap::{BlockBitmap, InodeBitmap},
             dir::{Ext4Directory, InodeNumber},
             extent::{Ext4InodeRelBlkId, Ext4InodeRelBlkIdRange, ExtentTree},
             inode::{Inode, InodeFileMode, InodeFlags, InodeSize},
@@ -963,6 +963,20 @@ pub struct GroupDescriptor64 {
 }
 
 impl GroupDescriptor64 {
+    pub(crate) fn get_blk_bitmap(&self, fs: &Ext4Fs) -> BlockBitmap {
+        let mut blk_bitmap_buf = alloc::vec![0; fs.superblock.blk_size() as usize];
+
+        fs.__read_blk(self.block_bitmap_blk_addr(), &mut blk_bitmap_buf)
+            .unwrap();
+        let bitmap = BlockBitmap::from_bytes(
+            &blk_bitmap_buf[..(fs.superblock.inodes_per_group() / 8) as usize],
+        );
+        let chksum = u32::from(self.bg_block_bitmap_csum_lo)
+            | (u32::from(self.bg_block_bitmap_csum_hi) << 16);
+        bitmap.validate_chksum(*from_bytes(&fs.superblock.s_uuid), cast(chksum));
+
+        bitmap
+    }
     pub(crate) fn get_inode_bitmap(&self, fs: &Ext4Fs) -> InodeBitmap {
         let mut inode_bitmap_buf = alloc::vec![0; fs.superblock.blk_size() as usize];
 

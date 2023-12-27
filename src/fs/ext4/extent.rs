@@ -247,6 +247,16 @@ impl ExtentTree {
 #[repr(transparent)]
 pub(crate) struct Ext4RealBlkId(u64);
 
+impl From<Ext4RealBlkId> for usize {
+    fn from(value: Ext4RealBlkId) -> Self {
+        value.0.try_into().expect("invalid blk number")
+    }
+}
+impl From<usize> for Ext4RealBlkId {
+    fn from(value: usize) -> Self {
+        Ext4RealBlkId(value.try_into().expect("invalid blk number"))
+    }
+}
 impl core::ops::Add<Ext4ExtentLength> for Ext4RealBlkId {
     type Output = Ext4RealBlkId;
 
