@@ -10,7 +10,7 @@ use bytemuck::{bytes_of, cast, Pod, Zeroable};
 
 use crate::{
     error,
-    fs::ext4::{crc32c_calc, dir::Ext4InodeNumber, extent::ExtentBlock, Ext4FsUuid},
+    fs::ext4::{crc32c_calc, dir::InodeNumber, extent::ExtentBlock, Ext4FsUuid},
     time::{DateTime, UnixTimestamp},
 };
 
@@ -888,6 +888,7 @@ impl Inode {
     pub(crate) fn creation_time(&self) -> UnixTimestamp {
         self.i_crtime + self.i_crtime_extra
     }
+
     /// Compares the checksum of the `Inode` to its on-disk value.
     ///
     /// The checksum of an `Inode` can be computed (after having set the checksum field to 0) using:
@@ -895,7 +896,7 @@ impl Inode {
     /// ```
     /// crc32c_calc(fs_uuid + inode_id + inode_gen + inode_block)
     /// ```
-    pub(crate) fn validate_chksum(&self, fs_uuid: Ext4FsUuid, inode_id: Ext4InodeNumber) -> bool {
+    pub(crate) fn validate_chksum(&self, fs_uuid: Ext4FsUuid, inode_id: InodeNumber) -> bool {
         let on_disk_chksum = self.i_checksum_lo + self.i_checksum_hi;
         let comp_chksum = self.compute_chksum(fs_uuid, inode_id);
 
@@ -911,7 +912,7 @@ impl Inode {
             error!(
                 "ext4",
                 "invalid inode checksum (inode {:#X})",
-                cast::<Ext4InodeNumber, u32>(inode_id)
+                cast::<InodeNumber, u32>(inode_id)
             );
 
             return false;
@@ -940,7 +941,7 @@ impl Inode {
     /// fields.
     ///
     /// Useful before writing back the `Inode` to disk after having updated several of its field.
-    pub(crate) fn update_chksum(&mut self, fs_uuid: Ext4FsUuid, inode_id: Ext4InodeNumber) {
+    pub(crate) fn update_chksum(&mut self, fs_uuid: Ext4FsUuid, inode_id: InodeNumber) {
         self.set_chksum(self.compute_chksum(fs_uuid, inode_id));
     }
 
@@ -1006,7 +1007,7 @@ impl Inode {
         self.i_links_count
     }
 
-    fn compute_chksum(&self, fs_uuid: Ext4FsUuid, inode_id: Ext4InodeNumber) -> InodeChksum {
+    fn compute_chksum(&self, fs_uuid: Ext4FsUuid, inode_id: InodeNumber) -> InodeChksum {
         let mut chksum_bytes: Vec<u8> = alloc::vec![];
         chksum_bytes.extend_from_slice(bytes_of(&fs_uuid));
         chksum_bytes.extend_from_slice(bytes_of(&inode_id));
@@ -1024,7 +1025,6 @@ impl Inode {
         cast(crc32c_calc(&chksum_bytes))
     }
 }
-
 #[allow(clippy::format_in_format_args)]
 impl core::fmt::Display for Inode {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

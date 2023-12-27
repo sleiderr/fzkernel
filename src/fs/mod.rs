@@ -24,7 +24,7 @@ pub type IOResult<T> = Result<T, IOError>;
 /// Represents the current file-system on a [`Partition`]
 #[derive(Clone, Debug)]
 pub enum PartFS {
-    Ext4(Box<ext4::Ext4FS>),
+    Ext4(Box<ext4::Ext4Fs>),
     Unknown,
 }
 

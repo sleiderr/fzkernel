@@ -10,7 +10,7 @@ use crate::{
         ext4::{
             extent::{Ext4InodeRelBlkId, Ext4InodeRelBlkIdRange},
             inode::{InodeFileMode, InodeSize},
-            Ext4FS, Ext4File, ExtentTree, Inode,
+            Ext4File, Ext4Fs, ExtentTree, Inode,
         },
         IOResult, PartFS,
     },
@@ -20,7 +20,7 @@ use crate::{
 pub struct Ext4DirectoryEntry {
     drive_id: usize,
     part_id: usize,
-    inode: Ext4InodeNumber,
+    inode: InodeNumber,
     rec_len: u16,
     name_len: u8,
     pub file_type: Option<Ext4DirectoryFileType>,
@@ -60,9 +60,9 @@ impl Ext4DirectoryEntry {
 /// A number representing an inode.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(C)]
-pub struct Ext4InodeNumber(u32);
+pub struct InodeNumber(u32);
 
-impl Ext4InodeNumber {
+impl InodeNumber {
     /// Inode 0 represents an unused directory entry
     pub const UNUSED_DIR_ENTRY: Self = Self(0);
 
@@ -94,9 +94,20 @@ impl Ext4InodeNumber {
     pub const REPLICA: Self = Self(0xA);
 }
 
-impl From<Ext4InodeNumber> for u32 {
-    fn from(value: Ext4InodeNumber) -> Self {
+impl From<InodeNumber> for u32 {
+    fn from(value: InodeNumber) -> Self {
         value.0
+    }
+}
+
+impl From<InodeNumber> for usize {
+    fn from(value: InodeNumber) -> usize {
+        value.0.try_into().expect("invalid inode number")
+    }
+}
+impl From<usize> for InodeNumber {
+    fn from(value: usize) -> Self {
+        InodeNumber(value.try_into().expect("invalid inode number (not 32-bit)"))
     }
 }
 
@@ -152,7 +163,7 @@ pub struct Ext4Directory {
     drive_id: usize,
     part_id: usize,
     inode: Inode,
-    inode_id: Ext4InodeNumber,
+    inode_id: InodeNumber,
     internal_cursor: usize,
     extent_tree: Option<ExtentTree>,
 }
@@ -178,13 +189,13 @@ impl Iterator for Ext4Directory {
                 .ok()?;
         }
 
-        let inode: Ext4InodeNumber = *from_bytes(&raw_entry[..4]);
+        let inode: InodeNumber = *from_bytes(&raw_entry[..4]);
         let rec_len = u16::from_le_bytes(raw_entry[4..6].try_into().ok()?);
         let name_len = raw_entry[6];
         let file_type: Option<Ext4DirectoryFileType> = Some(*from_bytes(&[raw_entry[7]]));
         let raw_name: Vec<u8> = raw_entry[8..8 + name_len as usize].to_vec();
 
-        if inode == Ext4InodeNumber::UNUSED_DIR_ENTRY {
+        if inode == InodeNumber::UNUSED_DIR_ENTRY {
             return None;
         }
 
@@ -212,11 +223,7 @@ impl Ext4Directory {
         self.find(|entry| entry.name == name)
     }
 
-    pub fn from_inode_id(
-        drive_id: usize,
-        part_id: usize,
-        inode_id: Ext4InodeNumber,
-    ) -> IOResult<Self> {
+    pub fn from_inode_id(drive_id: usize, part_id: usize, inode_id: InodeNumber) -> IOResult<Self> {
         let drive = SATA_DRIVES
             .get()
             .ok_or(IOError::InvalidDevice)?
@@ -242,7 +249,7 @@ impl Ext4Directory {
         drive_id: usize,
         part_id: usize,
         inode: Inode,
-        inode_id: Ext4InodeNumber,
+        inode_id: InodeNumber,
     ) -> IOResult<Self> {
         if !inode.mode_contains(InodeFileMode::S_IFDIR) {
             return Err(IOError::InvalidCommand);
@@ -276,7 +283,7 @@ impl Ext4Directory {
         }
     }
 
-    fn __lock_fs(&self) -> IOResult<alloc::boxed::Box<Ext4FS>> {
+    fn __lock_fs(&self) -> IOResult<alloc::boxed::Box<Ext4Fs>> {
         let drive = SATA_DRIVES
             .get()
             .ok_or(IOError::InvalidDevice)?

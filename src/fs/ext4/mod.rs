@@ -9,7 +9,8 @@ use crate::{
     errors::{CanFail, IOError},
     fs::{
         ext4::{
-            dir::{Ext4Directory, Ext4InodeNumber},
+            bitmap::InodeBitmap,
+            dir::{Ext4Directory, InodeNumber},
             extent::{Ext4InodeRelBlkId, Ext4InodeRelBlkIdRange, ExtentTree},
             inode::{Inode, InodeFileMode, InodeFlags, InodeSize},
         },
@@ -19,6 +20,7 @@ use crate::{
 };
 use crate::{errors::MountError, fs::FsFile};
 
+pub(super) mod bitmap;
 pub mod dir;
 pub(crate) mod extent;
 pub(crate) mod inode;
@@ -181,14 +183,14 @@ pub const EXT4_FEATURE_INCOMPAT_CASEFOLD: u32 = 0x20000;
 pub(crate) struct Ext4FsUuid(u128);
 
 #[derive(Clone, Debug)]
-pub struct Ext4FS {
+pub struct Ext4Fs {
     drive_id: usize,
     partition_id: usize,
     superblock: Ext4Superblock,
     group_descriptors: Vec<GroupDescriptor>,
 }
 
-impl Ext4FS {
+impl Ext4Fs {
     pub fn root_dir(&self) -> Ext4Directory {
         let root_inode = self.__read_inode(2).unwrap();
 
@@ -196,7 +198,7 @@ impl Ext4FS {
             self.drive_id,
             self.partition_id,
             root_inode,
-            Ext4InodeNumber::ROOT_DIR,
+            InodeNumber::ROOT_DIR,
         )
         .unwrap()
     }
@@ -961,6 +963,21 @@ pub struct GroupDescriptor64 {
 }
 
 impl GroupDescriptor64 {
+    pub(crate) fn get_inode_bitmap(&self, fs: &Ext4Fs) -> InodeBitmap {
+        let mut inode_bitmap_buf = alloc::vec![0; fs.superblock.blk_size() as usize];
+
+        fs.__read_blk(self.inode_bitmap_blk_addr(), &mut inode_bitmap_buf)
+            .unwrap();
+        let bitmap = InodeBitmap::from_bytes(
+            &inode_bitmap_buf[..(fs.superblock.inodes_per_group() / 8) as usize],
+        );
+        let chksum = u32::from(self.bg_inode_bitmap_csum_lo)
+            | (u32::from(self.bg_inode_bitmap_csum_hi) << 16);
+        bitmap.validate_chksum(*from_bytes(&fs.superblock.s_uuid), cast(chksum));
+
+        bitmap
+    }
+
     pub fn block_bitmap_blk_addr(&self) -> u64 {
         self.bg_block_bitmap_lo as u64 | ((self.bg_block_bitmap_hi as u64) << 32)
     }
@@ -1094,7 +1111,7 @@ impl Ext4File {
         }
     }
 
-    fn __lock_fs(&self) -> IOResult<alloc::boxed::Box<Ext4FS>> {
+    fn __lock_fs(&self) -> IOResult<alloc::boxed::Box<Ext4Fs>> {
         let drive = SATA_DRIVES
             .get()
             .ok_or(IOError::InvalidDevice)?

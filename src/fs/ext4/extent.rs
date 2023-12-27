@@ -11,7 +11,7 @@ use crate::{
     error,
     errors::{CanFail, IOError},
     fs::ext4::{
-        crc32c_calc, dir::Ext4InodeNumber, inode::InodeGeneration, Ext4FS, Ext4FsUuid, Inode,
+        crc32c_calc, dir::InodeNumber, inode::InodeGeneration, Ext4Fs, Ext4FsUuid, Inode,
         EXT4_FEATURE_INCOMPAT_EXTENTS,
     },
 };
@@ -20,7 +20,7 @@ use crate::{
 #[derive(Default)]
 pub(crate) struct ExtentTree {
     pub(crate) extents: Vec<Extent>,
-    inode_id: Ext4InodeNumber,
+    inode_id: InodeNumber,
     inode_gen: InodeGeneration,
 }
 
@@ -71,7 +71,7 @@ impl ExtentBlock {
     pub(crate) fn validate_chksum(
         &self,
         fs_uuid: Ext4FsUuid,
-        inode_id: Ext4InodeNumber,
+        inode_id: InodeNumber,
         inode_gen: InodeGeneration,
     ) -> bool {
         let on_disk_chksum: ExtentBlockChksum =
@@ -89,7 +89,7 @@ impl ExtentBlock {
             error!(
                 "ext4",
                 "invalid extent block checksum (inode {:#x})",
-                cast::<Ext4InodeNumber, u32>(inode_id)
+                cast::<InodeNumber, u32>(inode_id)
             );
 
             return false;
@@ -153,10 +153,10 @@ pub(crate) struct ExtentBlockChksum(u32);
 
 /// Extent-layer traversal routine.
 fn traverse_extent_layer(
-    fs: &Ext4FS,
+    fs: &Ext4Fs,
     ext_data: &ExtentBlock,
     extents: &mut Vec<Extent>,
-    inode_id: Ext4InodeNumber,
+    inode_id: InodeNumber,
     inode_gen: InodeGeneration,
 ) -> Option<()> {
     let header = ext_data.get_header();
@@ -190,9 +190,9 @@ fn traverse_extent_layer(
 impl ExtentTree {
     /// Loads an entire extent tree associated with an [`Inode`] to memory.
     pub(crate) fn load_extent_tree(
-        fs: &Ext4FS,
+        fs: &Ext4Fs,
         inode: &Inode,
-        inode_id: Ext4InodeNumber,
+        inode_id: InodeNumber,
     ) -> Option<Self> {
         if !fs
             .superblock

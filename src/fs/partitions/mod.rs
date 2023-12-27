@@ -3,7 +3,7 @@
 //! Contains the implementation of the two standards partition scheme, _GPT_ and _MBR_.
 
 use crate::fs::{
-    ext4::Ext4FS,
+    ext4::Ext4Fs,
     partitions::{
         gpt::{GPTPartitionEntry, GUIDPartitionTable},
         mbr::{MBRPartitionEntry, MBRPartitionTable},
@@ -50,8 +50,8 @@ impl Partition {
                 mbr::PartitionType::ExtendedLBA => todo!(),
                 mbr::PartitionType::LinuxSwap => todo!(),
                 mbr::PartitionType::LinuxNative => {
-                    if Ext4FS::identify(drive_id, meta.start_lba() as u64).ok()? {
-                        let fs = Ext4FS::mount(drive_id, part_id, meta.start_lba() as u64).ok()?;
+                    if Ext4Fs::identify(drive_id, meta.start_lba() as u64).ok()? {
+                        let fs = Ext4Fs::mount(drive_id, part_id, meta.start_lba() as u64).ok()?;
 
                         PartFS::Ext4(alloc::boxed::Box::new(fs))
                     } else {
@@ -70,8 +70,8 @@ impl Partition {
                 mbr::PartitionType::Unknown => PartFS::Unknown,
             },
             PartitionMetadata::GPT(meta) => {
-                if Ext4FS::identify(drive_id, meta.start_lba()).ok()? {
-                    let fs = Ext4FS::mount(drive_id, part_id, meta.start_lba()).ok()?;
+                if Ext4Fs::identify(drive_id, meta.start_lba()).ok()? {
+                    let fs = Ext4Fs::mount(drive_id, part_id, meta.start_lba()).ok()?;
 
                     PartFS::Ext4(alloc::boxed::Box::new(fs))
                 } else {
