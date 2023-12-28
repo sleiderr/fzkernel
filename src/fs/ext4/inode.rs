@@ -15,6 +15,18 @@ use crate::{
     time::{DateTime, UnixTimestamp},
 };
 
+/// A number of [`Inode`], 16-bit encoded.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(crate) struct InodeCount16(u16);
+
+impl InodeCount16 {
+    pub(crate) fn add_high_bits(&self, high: InodeCount16) -> InodeCount {
+        cast(u32::from(self.0) | (u32::from(high.0) << 16))
+    }
+}
+
+/// A number of [`Inode`], 32-bit encoded (default).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct InodeCount(u32);

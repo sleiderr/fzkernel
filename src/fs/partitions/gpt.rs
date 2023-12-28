@@ -116,14 +116,13 @@ impl GPT {
         let mut partitions = alloc::vec![];
 
         for (i, partition) in self.partitions.iter().enumerate() {
-            partitions.push(
-                Partition::from_metadata(
-                    i,
-                    self.drive_id,
-                    super::PartitionMetadata::GPT(*partition),
-                )
-                .unwrap(),
-            );
+            let mut part = Partition::from_metadata(
+                i,
+                self.drive_id,
+                super::PartitionMetadata::GPT(*partition),
+            )
+            .unwrap();
+            partitions.push(part);
         }
 
         partitions

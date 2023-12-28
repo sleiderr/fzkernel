@@ -80,6 +80,11 @@ impl SATADrive {
             if let Some(gpt) = gpt {
                 self.partitions = gpt.get_partitions();
                 self.partition_table = PartitionTable::GPT(gpt);
+
+                for partition in &mut self.partitions {
+                    partition.load_fs().unwrap();
+                }
+
                 return;
             }
         }

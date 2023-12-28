@@ -2,6 +2,7 @@
 //!
 //! Contains the implementation of the two standards partition scheme, _GPT_ and _MBR_.
 
+use crate::errors::{CanFail, MountError};
 use crate::fs::{
     ext4::Ext4Fs,
     partitions::{
@@ -32,7 +33,16 @@ impl Partition {
         drive_id: usize,
         metadata: PartitionMetadata,
     ) -> Option<Self> {
-        let fs = match metadata {
+        Some(Self {
+            metadata,
+            id: part_id,
+            drive_id,
+            fs: PartFS::Unknown,
+        })
+    }
+
+    pub fn load_fs(&mut self) -> CanFail<MountError> {
+        self.fs = match self.metadata {
             PartitionMetadata::MBR(meta) => match meta.partition_type() {
                 mbr::PartitionType::Empty => PartFS::Unknown,
                 mbr::PartitionType::DOSFat12 => todo!(),
@@ -50,9 +60,10 @@ impl Partition {
                 mbr::PartitionType::ExtendedLBA => todo!(),
                 mbr::PartitionType::LinuxSwap => todo!(),
                 mbr::PartitionType::LinuxNative => {
-                    if Ext4Fs::identify(drive_id, meta.start_lba() as u64).ok()? {
-                        let fs = Ext4Fs::mount(drive_id, part_id, meta.start_lba() as u64).ok()?;
-
+                    if Ext4Fs::identify(self.drive_id, meta.start_lba() as u64)
+                        .map_err(|_| MountError::IOError)?
+                    {
+                        let fs = Ext4Fs::mount(self.drive_id, self.id, meta.start_lba() as u64)?;
                         PartFS::Ext4(alloc::boxed::Box::new(fs))
                     } else {
                         PartFS::Unknown
@@ -70,8 +81,10 @@ impl Partition {
                 mbr::PartitionType::Unknown => PartFS::Unknown,
             },
             PartitionMetadata::GPT(meta) => {
-                if Ext4Fs::identify(drive_id, meta.start_lba()).ok()? {
-                    let fs = Ext4Fs::mount(drive_id, part_id, meta.start_lba()).ok()?;
+                if Ext4Fs::identify(self.drive_id, meta.start_lba())
+                    .map_err(|_| MountError::IOError)?
+                {
+                    let fs = Ext4Fs::mount(self.drive_id, self.id, meta.start_lba())?;
 
                     PartFS::Ext4(alloc::boxed::Box::new(fs))
                 } else {
@@ -80,12 +93,7 @@ impl Partition {
             }
         };
 
-        Some(Self {
-            metadata,
-            id: part_id,
-            drive_id,
-            fs,
-        })
+        Ok(())
     }
 
     /// Returns this partition's starting LBA.

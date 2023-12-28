@@ -12,6 +12,7 @@ use crate::fs::ext4::sb::{Ext4BlkCount, Ext4FsUuid, IncompatibleFeatureSet};
 use crate::{
     error,
     errors::{CanFail, IOError},
+    ext4_uint_field_range,
     fs::ext4::{crc32c_calc, inode::InodeGeneration, Ext4Fs, Inode},
 };
 
@@ -250,10 +251,24 @@ pub(crate) struct Ext4RealBlkId16(u16);
 #[repr(transparent)]
 pub(crate) struct Ext4RealBlkId32(u32);
 
+impl Ext4RealBlkId32 {
+    pub(crate) fn add_high_bits(self, high: Ext4RealBlkId32) -> Ext4RealBlkId {
+        cast(u64::from(self.0) | (u64::from(high.0) << 32))
+    }
+}
+
 /// A physical block address (valid for direct reads from the disk).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct Ext4RealBlkId(u64);
+
+impl core::ops::Add<u64> for Ext4RealBlkId {
+    type Output = Ext4RealBlkId;
+
+    fn add(self, rhs: u64) -> Self::Output {
+        Self(self.0.saturating_add(rhs))
+    }
+}
 
 impl PartialEq<Ext4BlkCount> for Ext4RealBlkId {
     fn eq(&self, other: &Ext4BlkCount) -> bool {
@@ -298,14 +313,6 @@ impl core::ops::Add<Ext4ExtentLength> for Ext4RealBlkId {
 
     fn add(self, rhs: Ext4ExtentLength) -> Self::Output {
         Self(self.0 + u64::from(rhs.0))
-    }
-}
-
-impl core::ops::Add<u64> for Ext4RealBlkId {
-    type Output = Ext4RealBlkId;
-
-    fn add(self, rhs: u64) -> Self::Output {
-        Ext4RealBlkId(self.0 + rhs)
     }
 }
 
@@ -361,25 +368,12 @@ impl PartialOrd<Ext4ExtentInitialBlock> for Ext4InodeRelBlkId {
     }
 }
 
-/// A range bounded inclusively below and exclusively above between two logical block addresses
-/// relative to an [`Inode`].
-pub(crate) struct Ext4InodeRelBlkIdRange(
-    pub(crate) Ext4InodeRelBlkId,
-    pub(crate) Ext4InodeRelBlkId,
+ext4_uint_field_range!(
+    Ext4InodeRelBlkIdRange,
+    Ext4InodeRelBlkId,
+    " A range bounded inclusively below and exclusively above between two logical block addresses
+relative to an [`Inode`]."
 );
-
-impl Iterator for Ext4InodeRelBlkIdRange {
-    type Item = Ext4InodeRelBlkId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.0 < self.1 {
-            self.0 = self.0 + 1;
-            return Some(self.0 - 1);
-        }
-
-        None
-    }
-}
 
 /// Magic number contained in an [`ExtentHeader`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
@@ -593,21 +587,21 @@ impl core::ops::Add<Ext4ExtentLeafPtrHi> for Ext4ExtentLeafPtrLo {
 #[repr(C)]
 struct ExtentIdx {
     /// This index node covers file blocks from `block` onward.
-    ei_block: Ext4ExtentInitialBlock,
+    block: Ext4ExtentInitialBlock,
 
     /// Low 32-bits of the block number of the extent node that is the next level lower in the
     /// tree.
-    ei_leaf_lo: Ext4ExtentLeafPtrLo,
+    leaf_lo: Ext4ExtentLeafPtrLo,
 
     /// High 16-bits of the block number of the extent node that is the next level lower in the
     /// tree.
-    ei_leaf_hi: Ext4ExtentLeafPtrHi,
+    leaf_hi: Ext4ExtentLeafPtrHi,
 
-    ei_unused: u16,
+    unused: u16,
 }
 
 impl ExtentIdx {
     fn leaf(&self) -> Ext4RealBlkId {
-        self.ei_leaf_lo + self.ei_leaf_hi
+        self.leaf_lo + self.leaf_hi
     }
 }

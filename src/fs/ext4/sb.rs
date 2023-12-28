@@ -8,6 +8,7 @@
 #![allow(clippy::too_many_lines)]
 
 use crate::error;
+use crate::fs::ext4::block_grp::BlockGroupNumber;
 use crate::fs::ext4::crc32c_calc;
 use crate::fs::ext4::extent::{Ext4RealBlkId, Ext4RealBlkId32};
 use crate::fs::ext4::inode::{InodeBlk, InodeCount, InodeNumber, InodeSizeHi, InodeSizeLo};
@@ -28,8 +29,34 @@ macro_rules! ext4_uint_field_derive_display {
     };
 }
 
+#[macro_export]
+macro_rules! ext4_uint_field_range {
+    ($struct_name: tt, $field_name: tt, $desc: literal) => {
+        #[derive(
+            Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable,
+        )]
+        #[repr(C)]
+        #[doc = $desc]
+        pub(crate) struct $struct_name(pub(crate) $field_name, pub(crate) $field_name);
+
+        impl Iterator for $struct_name {
+            type Item = $field_name;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.0 < self.1 {
+                    self.0 = self.0 + 1;
+                    return Some(self.0 - 1);
+                }
+
+                None
+            }
+        }
+    };
+}
+
 /// Defines a standard structure for flag-related fields in the `Ext4Superblock`.
-macro_rules! ext4_sb_flag_field {
+#[macro_export]
+macro_rules! ext4_flag_field {
     ($struct_name: tt, $size: ident, $desc: literal) => {
         #[derive(
             Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable,
@@ -64,7 +91,7 @@ macro_rules! ext4_sb_flag_field {
     };
 }
 
-ext4_sb_flag_field!(
+ext4_flag_field!(
     CompatibleFeatureSet,
     u32,
     "Compatible feature set flags. \
@@ -130,7 +157,7 @@ impl CompatibleFeatureSet {
     }
 }
 
-ext4_sb_flag_field!(
+ext4_flag_field!(
     ReadOnlyCompatibleFeatureSet,
     u32,
     "Read-only compatible feature set flags. If the system does not understand one of the read-only
@@ -215,7 +242,7 @@ impl ReadOnlyCompatibleFeatureSet {
     }
 }
 
-ext4_sb_flag_field!(
+ext4_flag_field!(
     IncompatibleFeatureSet,
     u32,
     "Incompatible feature set flags. The system should not mount the filesystem if it does not
@@ -302,7 +329,7 @@ impl IncompatibleFeatureSet {
     }
 }
 
-ext4_sb_flag_field!(Ext4SuperblockFlags, u32, "");
+ext4_flag_field!(Ext4SuperblockFlags, u32, "");
 
 impl Ext4SuperblockFlags {
     /// Empty superblock flags set.
@@ -335,7 +362,7 @@ impl Ext4SuperblockFlags {
     }
 }
 
-ext4_sb_flag_field!(Ext4SuperblockMountOptions, u32, "");
+ext4_flag_field!(Ext4SuperblockMountOptions, u32, "");
 
 impl Ext4SuperblockMountOptions {
     /// Empty mount options set.
@@ -405,10 +432,32 @@ pub(crate) struct Ext4BlkCount8(u8);
 #[repr(transparent)]
 pub(crate) struct Ext4BlkCount16(u16);
 
+impl Ext4BlkCount16 {
+    pub(crate) fn add_high_bits(self, high: Ext4BlkCount16) -> Ext4BlkCount32 {
+        cast(u32::from(self.0) | (u32::from(high.0) << 16))
+    }
+}
+
 /// 32-bit encoded logical block count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct Ext4BlkCount32(u32);
+
+impl core::ops::Div<u32> for Ext4BlkCount32 {
+    type Output = u32;
+
+    fn div(self, rhs: u32) -> Self::Output {
+        self.0 / rhs
+    }
+}
+
+impl core::ops::Div<Ext4BlkCount32> for u32 {
+    type Output = u32;
+
+    fn div(self, rhs: Ext4BlkCount32) -> Self::Output {
+        self / rhs.0
+    }
+}
 
 impl Ext4BlkCount32 {
     pub(crate) fn add_high_bits(self, high: Ext4BlkCount32) -> Ext4BlkCount {
@@ -974,8 +1023,12 @@ impl Ext4Superblock {
     }
 
     /// Returns the number of Block Groups for this filesystem.
-    pub(crate) fn bg_count(&self) -> u64 {
-        1 + self.blk_count() / self.blocks_per_group.into()
+    pub(crate) fn bg_count(&self) -> BlockGroupNumber {
+        cast::<u32, BlockGroupNumber>(
+            (1 + self.blk_count() / self.blocks_per_group.into())
+                .try_into()
+                .expect("invalid block group count"),
+        )
     }
 
     /// Returns the number of free blocks.

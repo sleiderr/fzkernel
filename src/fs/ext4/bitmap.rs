@@ -8,10 +8,34 @@ use bytemuck::{bytes_of, cast, Pod, Zeroable};
 use core::ops::Range;
 use vob::Vob;
 
+/// Checksum of the [`BlockBitmap`] structure.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(super) struct BlockBitmapChksum(u32);
 
+/// Low 16-bits of the checksum of the [`BlockBitmap`] structure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(super) struct BlockBitmapChksumLo(u16);
+
+impl core::ops::Add<BlockBitmapChksumHi> for BlockBitmapChksumLo {
+    type Output = BlockBitmapChksum;
+
+    fn add(self, rhs: BlockBitmapChksumHi) -> Self::Output {
+        BlockBitmapChksum(u32::from(self.0) | (u32::from(rhs.0) << 16))
+    }
+}
+
+/// High 16-bits of the checksum of the [`BlockBitmap`] structure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(super) struct BlockBitmapChksumHi(u16);
+
+/// The `BlockBitmap` is used by `ext4` to store whether the different blocks of a block group are in use or not.
+///
+/// Each bit in the bitmap represents the state of the corresponding block (in-use or free) for this block
+/// group.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BlockBitmap(pub(super) Vob);
 
 impl BlockBitmap {
@@ -123,15 +147,34 @@ impl BlockBitmap {
     }
 }
 
-/// Checksum of the `InodeBitmap` structure.
+/// Checksum of the [`InodeBitmap`] structure.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(super) struct InodeBitmapChksum(u32);
+
+/// Low 16-bits of the checksum of the [`InodeBitmap`] structure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(super) struct InodeBitmapChksumLo(u16);
+
+/// High 16-bits of the checksum of the [`InodeBitmap`] structure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(super) struct InodeBitmapChksumHi(u16);
+
+impl core::ops::Add<InodeBitmapChksumHi> for InodeBitmapChksumLo {
+    type Output = InodeBitmapChksum;
+
+    fn add(self, rhs: InodeBitmapChksumHi) -> Self::Output {
+        InodeBitmapChksum(u32::from(self.0) | (u32::from(rhs.0) << 16))
+    }
+}
 
 /// The `InodeBitmap` is used by `ext4` to store whether the different [`Inode`] of a block group are in use or not.
 ///
 /// Each bit in the bitmap represents the state of the corresponding `Inode` entry (in-use or free) for this block
 /// group.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct InodeBitmap(pub(super) Vob);
 
 impl InodeBitmap {
