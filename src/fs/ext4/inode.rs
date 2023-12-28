@@ -8,15 +8,46 @@ use core::fmt::{Display, Formatter};
 use alloc::{format, string::String, vec::Vec};
 use bytemuck::{bytes_of, cast, Pod, Zeroable};
 
+use crate::fs::ext4::sb::Ext4FsUuid;
 use crate::{
-    error,
-    fs::ext4::{crc32c_calc, extent::ExtentBlock, Ext4FsUuid},
+    error, ext4_uint_field_derive_display,
+    fs::ext4::{crc32c_calc, extent::ExtentBlock},
     time::{DateTime, UnixTimestamp},
 };
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct InodeCount(u32);
+
+ext4_uint_field_derive_display!(InodeCount);
+
+impl core::ops::Div<u32> for InodeCount {
+    type Output = u32;
+
+    fn div(self, rhs: u32) -> Self::Output {
+        self.0 / rhs
+    }
+}
+
+impl core::ops::Div<InodeCount> for u32 {
+    type Output = u32;
+
+    fn div(self, rhs: InodeCount) -> Self::Output {
+        self / rhs.0
+    }
+}
+
+impl core::ops::Rem<InodeCount> for u32 {
+    type Output = u32;
+
+    fn rem(self, rhs: InodeCount) -> Self::Output {
+        self % rhs.0
+    }
+}
+
 /// A number representing an inode.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-#[repr(C)]
+#[repr(transparent)]
 pub struct InodeNumber(u32);
 
 impl InodeNumber {
@@ -51,11 +82,7 @@ impl InodeNumber {
     pub const REPLICA: Self = Self(0xA);
 }
 
-impl Display for InodeNumber {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.write_fmt(format_args!("{}", self.0))
-    }
-}
+ext4_uint_field_derive_display!(InodeNumber);
 
 impl core::ops::Sub<u32> for InodeNumber {
     type Output = u32;

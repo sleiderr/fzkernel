@@ -3,7 +3,9 @@ use core::{mem, ptr, slice};
 
 use bytemuck::{cast, from_bytes, try_cast, Pod, Zeroable};
 
+use crate::fs::ext4::extent::Ext4RealBlkId;
 use crate::fs::ext4::inode::InodeNumber;
+use crate::fs::ext4::sb::{Ext4Superblock, IncompatibleFeatureSet};
 use crate::{
     drivers::ahci::{get_sata_drive, SATA_DRIVES},
     error,
@@ -17,7 +19,7 @@ use crate::{
         },
         IOResult, PartFS,
     },
-    info,
+    info, println,
 };
 use crate::{errors::MountError, fs::FsFile};
 
@@ -26,163 +28,11 @@ pub mod dir;
 pub(crate) mod extent;
 mod file;
 pub(crate) mod inode;
+mod sb;
 
 pub const EXT4_SIGNATURE: u16 = 0xEF53;
 
 pub const EXT4_CHKSUM_TYPE_CRC32: u8 = 0x1;
-
-/// Compression feature flag (not implemented)
-pub const EXT4_FEATURE_INCOMPAT_COMPRESSION: u32 = 0x0001;
-
-/// Directory preallocation.
-pub const EXT4_FEATURE_COMPAT_DIR_PREALLOC: u32 = 0x0001;
-
-/// Used by AFS to indicate inodes that are not linked into the directory namespace.
-pub const EXT4_FEATURE_COMPAT_IMAGIC_INODES: u32 = 0x0002;
-
-/// Create a journal file to ensure file system consistency (even across dirty shutdowns).
-pub const EXT4_FEATURE_COMPAT_HAS_JOURNAL: u32 = 0x0004;
-
-/// This feature enables the use of extended attributes.
-pub const EXT4_FEATURE_COMPAT_EXT_ATTR: u32 = 0x0008;
-
-/// This feature indicates that space has been reserved so that the block group descriptor table
-/// can be extended while resizing a mounted file system.
-///
-/// This features requires that the [`EXT4_FEATURE_R0_COMPAT_SPARSE_SUPER`] or
-/// [`EXT4_FEATURE_COMPAT_SPARSE_SUPER2`] feature be enabled.
-pub const EXT4_FEATURE_COMPAT_RESIZE_INODE: u32 = 0x0010;
-
-/// Use hashed B-trees to speed up name lookup in large directories.
-pub const EXT4_FEATURE_COMPAT_DIR_INDEX: u32 = 0x0020;
-
-/// This feature indicates that there will only be at most 2 backup superblocks and block group
-/// descriptors.
-pub const EXT4_FEATURE_COMPAT_SPARSE_SUPER2: u32 = 0x0200;
-
-pub const EXT4_FEATURE_COMPAT_FAST_COMMIT: u32 = 0x0400;
-
-/// Marks the file system's inode numbers and UUID as stable.
-///
-/// This feature allows the use of specialized encryption settings that will make use of the inode
-/// numbers and UUID.
-pub const EXT4_FEATURE_COMPAT_STABLE_INODES: u32 = 0x0800;
-
-pub const EXT4_FEATURE_COMPAT_ORPHAN_FILE: u32 = 0x1000;
-
-/// This file system feature indicates that backup copies of the superblock are present only in a
-/// subset of block groups.
-pub const EXT4_FEATURE_R0_COMPAT_SPARSE_SUPER: u32 = 0x0001;
-
-/// This feature flag is usually set when a file larger than 2 GB is created.
-pub const EXT4_FEATURE_R0_COMPAT_LARGE_FILE: u32 = 0x0002;
-
-pub const EXT4_FEATURE_R0_COMPAT_BTREE_DIR: u32 = 0x0004;
-
-/// This feature allows files to be larger than 2 TB in size.
-pub const EXT4_FEATURE_R0_COMPAT_HUGE_FILE: u32 = 0x0008;
-
-/// Group descriptors have checksums.
-pub const EXT4_FEATURE_R0_COMPAT_GDT_CSUM: u32 = 0x0010;
-
-/// This feature lifts the usual 65,000 hard links limit per inode.
-pub const EXT4_FEATURE_DIR_NLINK: u32 = 0x0020;
-
-/// This feature reserves a specific amount of space in each node for extended metadata (ns
-/// timestamps, or file creation time).
-///
-/// For this feature to be useful, the inode size must be 256 bytes in size or larger.
-pub const EXT4_FEATURE_R0_COMPAT_EXTRA_ISIZE: u32 = 0x0040;
-
-/// This creates quota inodes and set them in the [`Superblock`].
-pub const EXT4_FEATURE_R0_COMPAT_QUOTA: u32 = 0x0100;
-
-/// This feature enables clustered block allocation, so that the unit of allocation is a power of
-/// two number of blocks.
-///
-/// Requires that the `EXT4_FEATURE_INCOMPAT_EXTENTS` feature be enabled.
-pub const EXT4_FEATURE_R0_COMPAT_BIGALLOC: u32 = 0x0200;
-
-/// This feature enables metadata checksumming.
-///
-/// This stores checksums for all of the file system metadata.
-pub const EXT4_FEATURE_R0_COMPAT_METADATA_CSUM: u32 = 0x0400;
-
-/// Read-only file system image.
-pub const EXT4_FEATURE_R0_COMPAT_READONLY: u32 = 0x1000;
-
-/// This feature provides project quota support.
-pub const EXT4_FEATURE_R0_COMPAT_PROJECT: u32 = 0x2000;
-
-/// This feature enables support for verity protected files.
-///
-/// Verity files are read-only, and their data is transparently verified against a Merkle tree
-/// hidden past the end of the file.
-/// This is most useful for authenticating important read-only files on read-write file systems.
-/// If the file system is read-only, using `dm-verity` to authenticate the entire block may provide
-/// much better security.
-pub const EXT4_FEATURE_R0_COMPAT_VERITY: u32 = 0x8000;
-
-pub const EXT4_FEATURE_R0_COMPAT_ORPHAN_PRESENT: u32 = 0x10000;
-
-/// Enables the storage of file type information in directory entries.
-pub const EXT4_FEATURE_INCOMPAT_FILETYPE: u32 = 0x0002;
-
-/// File system needs journal recovery.
-pub const EXT4_FEATURE_INCOMPAT_RECOVER: u32 = 0x0004;
-
-/// This feature is enabled on the [`Superblock`] found on an external journal device.
-pub const EXT4_FEATURE_INCOMPAT_JOURNAL_DEV: u32 = 0x0008;
-
-/// This feature allows file systems to be resized on-line without explicitly needing to reserve
-/// space for growth in size of the block group descriptors.
-pub const EXT4_FEATURE_INCOMPAT_META_BG: u32 = 0x0010;
-
-/// This feature allow the mapping of logical block numbers for a particular inode to physical
-/// blocks on the storage device to be stored using an extent tree, a more efficient data structure
-/// than the traditional indirect block scheme used by `ext2` and `ext3` filesystems.
-pub const EXT4_FEATURE_INCOMPAT_EXTENTS: u32 = 0x0040;
-
-/// This feature allows for a file system size above 2^32 blocks.
-pub const EXT4_FEATURE_INCOMPAT_64BIT: u32 = 0x0080;
-
-/// This feature provides Multiple mount protection (useful in shared environments).
-pub const EXT4_FEATURE_INCOMPAT_MMP: u32 = 0x0100;
-
-/// This feature allow the per-block group metadata to be placed on the storage media.
-pub const EXT4_FEATURE_INCOMPAT_FLEX_BG: u32 = 0x0200;
-
-/// This feature allow the value of each extended attribute to be placed in the data block of a
-/// separate inode if necessary, increasing the limit on the size and number of extended attributes
-/// per file.
-pub const EXT4_FEATURE_INCOMPAT_EA_INODE: u32 = 0x0400;
-
-/// Data in directory entry.
-///
-/// This allows additional data fields to be stored in each directory entry.
-pub const EXT4_FEATURE_INCOMPAT_DIRDATA: u32 = 0x1000;
-
-/// This feature allows the file system to store the metadata checksum seed in the superblock,
-/// which allows the administrator to change the UUID of a file system while it is mounted.
-pub const EXT4_FEATURE_INCOMPAT_CSUM_SEED: u32 = 0x2000;
-
-/// This feature increases the limit on the number of files per directory.
-pub const EXT4_FEATURE_INCOMPAT_LARGEDIR: u32 = 0x4000;
-
-/// This feature allows data to be stored in the inode and extended attribute area.
-pub const EXT4_FEATURE_INCOMPAT_INLINE_DATA: u32 = 0x8000;
-
-/// This feature enables support for file system level encryption of data block and file names. The
-/// inode metadata is _not_ encrypted
-pub const EXT4_FEATURE_INCOMPAT_ENCRYPT: u32 = 0x10000;
-
-/// This feature provides file system level character encoding support for directories with the
-/// casefold (+F) flag enabled.
-pub const EXT4_FEATURE_INCOMPAT_CASEFOLD: u32 = 0x20000;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-#[repr(transparent)]
-pub(crate) struct Ext4FsUuid(u128);
 
 #[derive(Clone, Debug)]
 pub struct Ext4Fs {
@@ -216,7 +66,7 @@ impl Ext4Fs {
 
         let sb = unsafe { ptr::read(raw_sb.as_ptr() as *mut Ext4Superblock) };
 
-        Ok(sb.s_magic == EXT4_SIGNATURE)
+        Ok(sb.magic.is_valid())
     }
 
     pub fn mount(
@@ -235,23 +85,13 @@ impl Ext4Fs {
             .map_err(|_| MountError::IOError)?;
 
         let sb = unsafe { ptr::read(raw_sb.as_ptr() as *mut Ext4Superblock) };
-        let isize = sb.s_inode_size;
+        let isize = sb.inode_size;
 
-        if sb.s_checksum_type == EXT4_CHKSUM_TYPE_CRC32 {
-            let sb_chcksum = crc32c_calc(&raw_sb[..mem::size_of::<Ext4Superblock>() - 4]);
-
-            if sb_chcksum != sb.s_checksum {
-                error!(
-                    "ext4-fs",
-                    "found ext4 filesystem with invalid superblock checksum (got {:#010x} expected {:#010x})",
-                    sb_chcksum,
-                    unsafe { ptr::read_unaligned(ptr::addr_of!(sb.s_checksum)) }
-                );
-                return Err(MountError::BadSuperblock);
-            }
+        if sb.checksum_type == EXT4_CHKSUM_TYPE_CRC32 && !sb.validate_chksum() {
+            return Err(MountError::BadSuperblock);
         }
 
-        if sb.s_magic != EXT4_SIGNATURE {
+        if !sb.magic.is_valid() {
             return Err(MountError::BadSuperblock);
         }
 
@@ -263,11 +103,11 @@ impl Ext4Fs {
         info!(
             "ext4-fs",
             "label = {}    inodes_count = {}    blk_count = {}    mmp = {}    opts = {}",
-            sb.label(),
-            sb.inode_count(),
+            String::from(sb.volume_name),
+            sb.inodes_count,
             sb.blk_count(),
             sb.mmp_enabled(),
-            sb.mount_opts()
+            String::from(sb.mount_opts)
         );
 
         let mut fs = Self {
@@ -297,7 +137,7 @@ impl Ext4Fs {
 
     fn __read_blk_preinit(
         &self,
-        blk_id: u64,
+        blk_id: Ext4RealBlkId,
         part_offset: u64,
         buffer: &mut [u8],
     ) -> CanFail<IOError> {
@@ -313,7 +153,7 @@ impl Ext4Fs {
         drive.read(start_lba, sectors_count as u16, buffer)
     }
 
-    fn __read_blk(&self, blk_id: u64, buffer: &mut [u8]) -> CanFail<IOError> {
+    fn __read_blk(&self, blk_id: Ext4RealBlkId, buffer: &mut [u8]) -> CanFail<IOError> {
         let drive = get_sata_drive(self.drive_id).lock();
         let partition_data = drive
             .partitions
@@ -333,7 +173,11 @@ impl Ext4Fs {
     ) -> Result<GroupDescriptor, IOError> {
         assert!(bg_id < self.superblock.bg_count());
 
-        let descriptor_size = if self.superblock.feat_64bit_support() {
+        let descriptor_size = if self
+            .superblock
+            .feature_incompat
+            .includes(IncompatibleFeatureSet::EXT4_FEATURE_INCOMPAT_64BIT)
+        {
             64
         } else {
             32
@@ -352,12 +196,16 @@ impl Ext4Fs {
         let desc_idx_in_blk = bg_id % descriptor_per_block;
 
         let mut blk = alloc::vec![0; self.superblock.blk_size() as usize];
-        self.__read_blk_preinit(desc_blk_id, part_offset, &mut blk)?;
+        self.__read_blk_preinit(Ext4RealBlkId::from(desc_blk_id), part_offset, &mut blk)?;
 
         let raw_bg_descriptor = &blk[((desc_idx_in_blk * descriptor_size) as usize)
             ..(((desc_idx_in_blk + 1) * descriptor_size) as usize)];
 
-        if self.superblock.feat_64bit_support() {
+        if self
+            .superblock
+            .feature_incompat
+            .includes(IncompatibleFeatureSet::EXT4_FEATURE_INCOMPAT_64BIT)
+        {
             Ok(GroupDescriptor::Size64(unsafe {
                 ptr::read(raw_bg_descriptor.as_ptr() as *const GroupDescriptor64)
             }))
@@ -381,9 +229,9 @@ impl Ext4Fs {
     }
 
     pub(crate) fn __read_inode(&self, inode_id: InodeNumber) -> Result<Inode, IOError> {
-        let inode_blk_group = (inode_id - 1) / self.superblock.inodes_per_group();
-        let inode_bg_idx = (inode_id - 1) % self.superblock.inodes_per_group();
-        let inode_byte_idx = u64::from(inode_bg_idx) * u64::from(self.superblock.inode_size());
+        let inode_blk_group = (inode_id - 1) / self.superblock.inodes_per_group;
+        let inode_bg_idx = (inode_id - 1) % self.superblock.inodes_per_group;
+        let inode_byte_idx = u64::from(inode_bg_idx) * u64::from(self.superblock.inode_size);
 
         let inode_blk_offset: u64 = inode_byte_idx / self.superblock.blk_size();
 
@@ -398,438 +246,25 @@ impl Ext4Fs {
 
         match descriptor {
             GroupDescriptor::Size32(desc) => self.__read_blk(
-                inode_blk_offset + u64::from(desc.inode_table_blk_addr()),
+                Ext4RealBlkId::from(inode_blk_offset + u64::from(desc.inode_table_blk_addr())),
                 &mut raw_inode_blk,
             ),
             GroupDescriptor::Size64(desc) => self.__read_blk(
-                inode_blk_offset + desc.inode_table_blk_addr(),
+                Ext4RealBlkId::from(inode_blk_offset + desc.inode_table_blk_addr()),
                 &mut raw_inode_blk,
             ),
         }?;
 
         let raw_inode = &raw_inode_blk[(inode_bytes_idx_in_blk as usize)
-            ..(inode_bytes_idx_in_blk + self.superblock.inode_size() as u64) as usize];
+            ..(inode_bytes_idx_in_blk + self.superblock.inode_size as u64) as usize];
 
         let mut filled_inode = alloc::vec![0u8; mem::size_of::<Inode>()];
         filled_inode[..raw_inode.len()].copy_from_slice(raw_inode);
 
         let inode: Inode = *from_bytes(&filled_inode);
-        inode.validate_chksum(*from_bytes(&self.superblock.s_uuid), inode_id);
+        inode.validate_chksum(self.superblock.uuid, inode_id);
 
         Ok(inode)
-    }
-}
-
-/// The ext4 `Superblock` hold useful information about the filesystem's characteristics and
-/// attributes (block count, sizes, required features, ...).
-///
-/// A copy of the partition's `Superblock` is kept in all groups, except if the `sparse_super`
-/// feature is enabled, in which case it is only kept in groups whose group number is either 0 or a
-/// power of 3, 5, 7.
-#[derive(Clone, Copy, Debug)]
-#[repr(C, packed)]
-pub struct Ext4Superblock {
-    /// Inodes count
-    pub s_inodes_count: u32,
-
-    /// Blocks count
-    pub s_blocks_count: u32,
-
-    /// Reserved blocks count
-    pub s_r_blocks_count: u32,
-
-    /// Free blocks count
-    pub s_free_blocks_count: u32,
-
-    /// Free inodes count
-    pub s_free_inodes_count: u32,
-
-    /// First Data Block.
-    ///
-    /// Block number of the block containing the `Superblock`
-    pub s_first_datablock: u32,
-
-    /// Block size.
-    ///
-    /// Defined as `log_2(block_size) - 10`
-    pub s_log_block_size: u32,
-
-    /// Allocation cluster size.
-    ///
-    /// Defined as `log_2(cluster_size) - 10`
-    pub s_log_cluster_size: u32,
-
-    /// Number of blocks in each group
-    pub s_blocks_per_group: u32,
-
-    /// Number of clusters in each group
-    pub s_clusters_per_group: u32,
-
-    /// Number of inodes in each group
-    pub s_inodes_per_group: u32,
-
-    /// Last mount time
-    pub s_mtime: u32,
-
-    /// Last write time
-    pub s_wtime: u32,
-
-    /// Mount count (since last consistency check)
-    pub s_mnt_count: u16,
-
-    /// Number of mounts allowed before a consistency check is required
-    pub s_max_mnt_count: u16,
-
-    /// `ext4` magic signature: `0xef53`
-    pub s_magic: u16,
-
-    /// File system state
-    pub s_state: u16,
-
-    /// Behavior on error detection
-    pub s_errors: u16,
-
-    /// Minor revision level
-    pub s_minor_rev_level: u16,
-
-    /// Time of last consistency check
-    pub s_lastcheck: u32,
-
-    /// Max time between successive consistency checks
-    pub s_checkinterval: u32,
-
-    /// Operating System ID from which the filesystem was created
-    pub s_creator_os: u32,
-
-    /// Major revision level
-    pub s_rev_level: u32,
-
-    /// Default user ID for reserved blocks
-    pub s_def_resuid: u16,
-
-    /// Default group ID for reserved blocks
-    pub s_def_resgid: u16,
-
-    /// First non-reserved inode in file system
-    pub s_first_ino: u32,
-
-    /// Size of each inode structure in bytes
-    pub s_inode_size: u16,
-
-    /// Block group number of this superblock
-    pub s_block_group_nr: u16,
-
-    /// Compatible feature set
-    pub s_feature_compat: u32,
-
-    /// Incompatible feature set
-    pub s_feature_incompat: u32,
-
-    /// Read-only compatible feature set
-    pub s_feature_ro_compat: u32,
-
-    /// 128-bit UUID for volume
-    pub s_uuid: [u8; 16],
-
-    /// Volume name
-    pub s_volume_name: [u8; 16],
-
-    /// Path volume was last mounted to
-    pub s_last_mounted: [u8; 64],
-
-    /// Compression algorithm used
-    pub s_algo_bitmap: u32,
-
-    /// Number of blocks to try to preallocate for files
-    pub s_prealloc_blocks: u8,
-
-    /// Number of block to preallocate for directories
-    pub s_prealloc_dir_block: u8,
-
-    pub s_reserved_gdt_blocks: u16,
-
-    /// UUID of journal Superblock
-    pub s_journal_uuid: [u8; 16],
-
-    /// Inode number of journal file
-    pub s_journal_inum: u32,
-
-    /// Device number of journal file
-    pub s_journal_dev: u32,
-
-    /// Start of list of inodes to delete (orphan nodes)
-    pub s_last_orphan: u32,
-
-    /// HTREE hash seed
-    pub s_hash_seed: [u32; 4],
-
-    /// Default hash version to use
-    pub s_def_hash_version: u8,
-
-    pub s_jnl_backup_type: u8,
-    pub s_desc_size: u16,
-
-    /// Default mount options
-    pub s_default_mount_options: u32,
-
-    /// First metablock block group, if enabled
-    pub s_first_meta_bg: u32,
-
-    /// File system creation time
-    pub s_mkfs_time: u32,
-
-    /// Backup of the journal inode
-    pub s_jnl_blocks: [u32; 17],
-
-    // Valid if the 64bit support is enabled `EXT4_FEATURE_INCOMPAT_64BIT`
-    /// Blocks count high 32-bits
-    pub s_blocks_count_hi: u32,
-
-    /// Reserved blocks count high 32-bits
-    pub s_r_blocks_count_hi: u32,
-
-    /// Free blocks count high 32-bits
-    pub s_free_blocks_count_hi: u32,
-
-    /// Minimum inode size
-    pub s_min_extra_isize: u16,
-
-    /// Minimum inode reservation size
-    pub s_want_extra_isize: u16,
-
-    /// Miscellaneous flags
-    pub s_flags: u32,
-
-    /// Amount of logical blocks read of written per disk in a `RAID` array
-    pub s_raid_stride: u16,
-
-    /// Number of seconds to wait in Multi-mount prevention checking
-    pub s_mmp_interval: u16,
-
-    /// Block for Multi-mount protection
-    pub s_mmp_block: u64,
-
-    /// Amount of blocks to read or write before returning to the current disk in a RAID array
-    /// (N * stride)
-    pub s_raid_stripe_width: u32,
-
-    /// `FLEX_BG` group size
-    ///
-    /// Defined as `log_2(groups_per_flex) - 10`
-    pub s_log_groups_per_flex: u8,
-
-    /// Metadata checksum algorithm used
-    pub s_checksum_type: u8,
-
-    /// Padding to next 32 bits
-    s_reserved_pad: u16,
-
-    /// Amount of KBs written
-    pub s_kbytes_written: u64,
-
-    /// Inode number of the active snapshot
-    pub s_snapshot_inum: u32,
-
-    /// Sequential ID of active snapshot
-    pub s_snapshot_id: u32,
-
-    /// Reserved blocks for active snapshot future use
-    pub s_snapshot_r_blocks_count: u64,
-
-    /// Inode number of the head of the on-disk snapshot list
-    s_snapshot_list: u32,
-
-    /// Number of filesystem errors
-    s_error_count: u32,
-
-    /// First time an error occured
-    s_first_error_time: u32,
-
-    /// Inode number in the first error
-    s_first_error_ino: u32,
-
-    /// Block number in the first error
-    s_first_error_block: u64,
-
-    /// Function where the first error occured
-    s_first_error_func: [u8; 32],
-
-    /// Line number where the first error occured
-    s_first_error_line: u32,
-
-    /// Last time an error occured
-    s_last_error_time: u32,
-
-    /// Inode number of the last error
-    s_last_error_ino: u32,
-
-    /// Line number where the last error occured
-    s_last_error_line: u32,
-
-    /// Block number in the last error
-    s_last_error_block: u64,
-
-    /// Function where the last error occured
-    s_last_error_func: [u8; 32],
-
-    /// Mount options (C string)
-    s_mount_opts: [u8; 64],
-
-    /// Inode number for user quota file
-    s_usr_quota_inum: u32,
-
-    /// Inode number for group quota file
-    s_grp_quota_inum: u32,
-
-    /// Overhead block/clusters in file system
-    s_overhead_blocks: u32,
-
-    /// Block groups with backup `Superblock`s if the sparse superblock is set
-    s_backup_bgs: [u32; 2],
-
-    /// Encryption algorithm used
-    s_encrypt_algos: [u8; 4],
-
-    /// Salt used for `string2key` algorithm
-    s_encrypt_pw_salt: [u8; 16],
-
-    /// Location of the lost+found inode
-    s_lpf_ino: u32,
-
-    /// Inode for tracking project quota
-    s_prj_quota_inum: u32,
-
-    /// `crc32c(uuid)` if `csum_seed` is set
-    s_checksum_seed: u32,
-
-    /// High 8-bits of the last written time field
-    s_wtime_hi: u8,
-
-    /// High 8-bits of the last mount time field
-    s_mtime_hi: u8,
-
-    /// High 8-bits of the filesystem creation time field
-    s_mkfs_time_hi: u8,
-
-    /// High 8-bits of the last consistency check time field
-    s_lastcheck_hi: u8,
-
-    /// High 8-bits of the first error time field
-    s_first_error_time_hi: u8,
-
-    /// High 8-bits of the last error time field
-    s_last_error_time_hi: u8,
-
-    /// Error code of the first error
-    s_first_error_errcode: u8,
-
-    /// Error code of the last error
-    s_last_error_errcode: u8,
-
-    /// Filename charset encoding
-    s_encoding: u16,
-
-    /// Filename charset encoding flags
-    s_encoding_flags: u16,
-
-    s_reserved: [u32; 95],
-
-    /// Checksum of the superblock: `crc32c(superblock)`
-    s_checksum: u32,
-}
-
-impl Ext4Superblock {
-    /// Checks if this `ext4` filesystem uses 64 bit features.
-    pub fn feat_64bit_support(&self) -> bool {
-        self.s_feature_incompat & EXT4_FEATURE_INCOMPAT_64BIT != 0
-    }
-
-    /// Checks is a feature part of the incompatible set is available for this `Ext4FS`.
-    pub fn incompat_contains(&self, flag: u32) -> bool {
-        self.s_feature_incompat & flag != 0
-    }
-
-    /// Returns the number of Block Groups for this filesystem.
-    pub fn bg_count(&self) -> u64 {
-        1 + self.blk_count() / self.blocks_per_group() as u64
-    }
-
-    /// Returns a C-style string describing this filesystem's mount options.
-    pub fn mount_opts(&self) -> String {
-        let opts_bytes: Vec<u8> = self
-            .s_mount_opts
-            .into_iter()
-            .take_while(|&ch| ch != 0 && ch.is_ascii())
-            .collect();
-
-        String::from_utf8(opts_bytes).unwrap_or_else(|_| String::from(""))
-    }
-
-    /// Returns the number of blocks per block group.
-    pub fn blocks_per_group(&self) -> u32 {
-        self.s_blocks_per_group
-    }
-
-    /// Returns the size of the inode structure.
-    pub fn inode_size(&self) -> u16 {
-        self.s_inode_size
-    }
-
-    /// Returns the number of inodes per block group.
-    pub fn inodes_per_group(&self) -> u32 {
-        self.s_inodes_per_group
-    }
-
-    /// Returns the total count of inodes.
-    pub fn inode_count(&self) -> u32 {
-        self.s_inodes_count
-    }
-
-    /// Returns the number of free inodes.
-    pub fn free_inodes_count(&self) -> u32 {
-        self.s_free_inodes_count
-    }
-
-    /// Returns the number of free blocks.
-    pub fn free_blk_count(&self) -> u64 {
-        if self.feat_64bit_support() {
-            (self.s_free_blocks_count as u64) | ((self.s_free_blocks_count_hi as u64) << 32)
-        } else {
-            self.s_free_blocks_count as u64
-        }
-    }
-
-    /// Returns the total count of blocks.
-    pub fn blk_count(&self) -> u64 {
-        if self.feat_64bit_support() {
-            (self.s_blocks_count as u64) | ((self.s_blocks_count_hi as u64) << 32)
-        } else {
-            self.s_blocks_count as u64
-        }
-    }
-
-    /// Returns the size of a block, in bytes.
-    pub fn blk_size(&self) -> u64 {
-        1024 << self.s_log_block_size
-    }
-
-    /// Checks if this `ext4` filesystem uses the _Multi Mount Protection_ (`MMP`) feature.
-    pub fn mmp_enabled(&self) -> bool {
-        self.s_feature_incompat & EXT4_FEATURE_INCOMPAT_MMP != 0
-    }
-
-    /// Returns this filesystem's label.
-    pub fn label(&self) -> String {
-        let label_bytes: Vec<u8> = self
-            .s_volume_name
-            .into_iter()
-            .take_while(|&ch| ch != 0 && ch.is_ascii())
-            .collect();
-
-        String::from_utf8(label_bytes).unwrap_or_else(|_| {
-            error!("ext4-fs", "invalid volume label");
-            String::from("")
-        })
     }
 }
 
@@ -969,28 +404,34 @@ impl GroupDescriptor64 {
     pub(crate) fn get_blk_bitmap(&self, fs: &Ext4Fs) -> BlockBitmap {
         let mut blk_bitmap_buf = alloc::vec![0; fs.superblock.blk_size() as usize];
 
-        fs.__read_blk(self.block_bitmap_blk_addr(), &mut blk_bitmap_buf)
-            .unwrap();
+        fs.__read_blk(
+            Ext4RealBlkId::from(self.block_bitmap_blk_addr()),
+            &mut blk_bitmap_buf,
+        )
+        .unwrap();
         let bitmap = BlockBitmap::from_bytes(
-            &blk_bitmap_buf[..(fs.superblock.inodes_per_group() / 8) as usize],
+            &blk_bitmap_buf[..(fs.superblock.inodes_per_group / 8) as usize],
         );
         let chksum = u32::from(self.bg_block_bitmap_csum_lo)
             | (u32::from(self.bg_block_bitmap_csum_hi) << 16);
-        bitmap.validate_chksum(*from_bytes(&fs.superblock.s_uuid), cast(chksum));
+        bitmap.validate_chksum(fs.superblock.uuid, cast(chksum));
 
         bitmap
     }
     pub(crate) fn get_inode_bitmap(&self, fs: &Ext4Fs) -> InodeBitmap {
         let mut inode_bitmap_buf = alloc::vec![0; fs.superblock.blk_size() as usize];
 
-        fs.__read_blk(self.inode_bitmap_blk_addr(), &mut inode_bitmap_buf)
-            .unwrap();
+        fs.__read_blk(
+            Ext4RealBlkId::from(self.inode_bitmap_blk_addr()),
+            &mut inode_bitmap_buf,
+        )
+        .unwrap();
         let bitmap = InodeBitmap::from_bytes(
-            &inode_bitmap_buf[..(fs.superblock.inodes_per_group() / 8) as usize],
+            &inode_bitmap_buf[..(fs.superblock.inodes_per_group / 8) as usize],
         );
         let chksum = u32::from(self.bg_inode_bitmap_csum_lo)
             | (u32::from(self.bg_inode_bitmap_csum_hi) << 16);
-        bitmap.validate_chksum(*from_bytes(&fs.superblock.s_uuid), cast(chksum));
+        bitmap.validate_chksum(fs.superblock.uuid, cast(chksum));
 
         bitmap
     }
@@ -1036,15 +477,6 @@ pub const EXT4_BG_BLOCK_UNINIT: u16 = 0x0002;
 
 /// Block group flag: Inode table is zeroed
 pub const EXT4_BG_INODE_ZEROED: u16 = 0x0004;
-
-#[repr(C, packed)]
-struct LinkedDirectoryEntry {
-    inode: u16,
-    rec_len: u16,
-    name_len: u8,
-    file_type: u8,
-    name: u32,
-}
 
 /*****************************************************************/
 /*                                                               */

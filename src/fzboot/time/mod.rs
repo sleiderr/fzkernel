@@ -454,6 +454,10 @@ impl core::ops::Rem<u64> for UnixTimestamp {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct UnixTimestamp32(u32);
+
 fn get_current_date_in_block(days_passed: i64) -> (u16, u16, u64) {
     let mut curr_month = 0;
     let mut day_counter = days_passed;

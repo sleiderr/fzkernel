@@ -8,13 +8,11 @@ use alloc::vec::Vec;
 use bytemuck::{bytes_of, cast, from_bytes, Pod, Zeroable};
 
 use crate::fs::ext4::inode::InodeNumber;
+use crate::fs::ext4::sb::{Ext4BlkCount, Ext4FsUuid, IncompatibleFeatureSet};
 use crate::{
     error,
     errors::{CanFail, IOError},
-    fs::ext4::{
-        crc32c_calc, inode::InodeGeneration, Ext4Fs, Ext4FsUuid, Inode,
-        EXT4_FEATURE_INCOMPAT_EXTENTS,
-    },
+    fs::ext4::{crc32c_calc, inode::InodeGeneration, Ext4Fs, Inode},
 };
 
 /// Internal ext4 extent tree representation.
@@ -180,7 +178,7 @@ fn traverse_extent_layer(
         fs.__read_blk(extent_idx.leaf(), &mut data).ok()?;
 
         let extent_blk = ExtentBlock(data);
-        extent_blk.validate_chksum(*from_bytes(&fs.superblock.s_uuid), inode_id, inode_gen);
+        extent_blk.validate_chksum(fs.superblock.uuid, inode_id, inode_gen);
         traverse_extent_layer(fs, &extent_blk, extents, inode_id, inode_gen);
     }
 
@@ -196,7 +194,8 @@ impl ExtentTree {
     ) -> Option<Self> {
         if !fs
             .superblock
-            .incompat_contains(EXT4_FEATURE_INCOMPAT_EXTENTS)
+            .feature_incompat
+            .includes(IncompatibleFeatureSet::EXT4_FEATURE_INCOMPAT_EXTENTS)
             | !inode.uses_extent_tree()
         {
             return None;
@@ -242,21 +241,58 @@ impl ExtentTree {
     }
 }
 
+/// A 16-bit physical block address (valid for direct reads from the disk).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(crate) struct Ext4RealBlkId16(u16);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(crate) struct Ext4RealBlkId32(u32);
+
 /// A physical block address (valid for direct reads from the disk).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct Ext4RealBlkId(u64);
+
+impl PartialEq<Ext4BlkCount> for Ext4RealBlkId {
+    fn eq(&self, other: &Ext4BlkCount) -> bool {
+        self.0 == cast(*other)
+    }
+}
+
+impl PartialOrd<Ext4BlkCount> for Ext4RealBlkId {
+    fn partial_cmp(&self, other: &Ext4BlkCount) -> Option<Ordering> {
+        Some(self.0.cmp(&cast(*other)))
+    }
+}
+
+impl From<u64> for Ext4RealBlkId {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
 
 impl From<Ext4RealBlkId> for usize {
     fn from(value: Ext4RealBlkId) -> Self {
         value.0.try_into().expect("invalid blk number")
     }
 }
+
 impl From<usize> for Ext4RealBlkId {
     fn from(value: usize) -> Self {
         Ext4RealBlkId(value.try_into().expect("invalid blk number"))
     }
 }
+
+impl core::ops::Mul<u64> for Ext4RealBlkId {
+    type Output = u64;
+
+    fn mul(self, rhs: u64) -> Self::Output {
+        self.0 * rhs
+    }
+}
+
 impl core::ops::Add<Ext4ExtentLength> for Ext4RealBlkId {
     type Output = Ext4RealBlkId;
 
@@ -545,10 +581,10 @@ pub(super) struct Ext4ExtentLeafPtrLo(u32);
 pub(super) struct Ext4ExtentLeafPtrHi(u16);
 
 impl core::ops::Add<Ext4ExtentLeafPtrHi> for Ext4ExtentLeafPtrLo {
-    type Output = u64;
+    type Output = Ext4RealBlkId;
 
     fn add(self, rhs: Ext4ExtentLeafPtrHi) -> Self::Output {
-        u64::from(self.0) | (u64::from(rhs.0) << 32)
+        Ext4RealBlkId::from(u64::from(self.0) | (u64::from(rhs.0) << 32))
     }
 }
 
@@ -571,7 +607,7 @@ struct ExtentIdx {
 }
 
 impl ExtentIdx {
-    fn leaf(&self) -> u64 {
+    fn leaf(&self) -> Ext4RealBlkId {
         self.ei_leaf_lo + self.ei_leaf_hi
     }
 }

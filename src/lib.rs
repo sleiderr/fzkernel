@@ -13,6 +13,7 @@
 #![warn(clippy::as_conversions)]
 #![allow(dead_code)]
 #![allow(clippy::mut_from_ref)]
+#![allow(clippy::module_name_repetitions)]
 #![no_std]
 #[macro_use]
 
