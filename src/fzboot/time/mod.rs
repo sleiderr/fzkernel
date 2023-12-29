@@ -363,7 +363,7 @@ impl fmt::Debug for DateTime {
 }
 #[cfg(feature = "alloc")]
 impl Display for DateTime {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.format_datetime_iso8601())
     }
 }
@@ -459,6 +459,7 @@ impl core::ops::Rem<u64> for UnixTimestamp {
     }
 }
 
+/// 32-bit encoded _Unix_ timestamp (seconds since the epoch)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct UnixTimestamp32(u32);

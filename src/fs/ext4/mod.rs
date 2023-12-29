@@ -13,6 +13,7 @@
 
 #![allow(clippy::copy_iterator)]
 
+use alloc::boxed::Box;
 use alloc::sync::{Arc, Weak};
 use alloc::{string::String, vec::Vec};
 use core::cell::RefCell;
@@ -30,7 +31,7 @@ use crate::fs::ext4::inode::{
     InodeCache, InodeCacheRemovalPolicy, InodeNumber, LockedInode, LockedInodeStrongRef,
 };
 use crate::fs::ext4::sb::{Ext4ChksumAlgorithm, Ext4Superblock, LockedSuperblock, Superblock};
-use crate::fs::Fs;
+use crate::fs::{Directory, Fs};
 use crate::{
     drivers::ahci::get_sata_drive,
     errors::{CanFail, IOError},
@@ -157,8 +158,11 @@ impl Ext4Fs {
     ///
     /// In case of any I/O error, a generic error will be returned. An error may mean that the filesystem
     /// is corrupted.
-    pub(crate) fn root_dir(&self) -> IOResult<Ext4Directory> {
-        Ext4Directory::from_inode_id(self.fs_ptr.upgrade().unwrap(), InodeNumber::ROOT_DIR)
+    pub(crate) fn root_dir(&self) -> IOResult<Directory> {
+        Ok(Box::new(Ext4Directory::from_inode_id(
+            self.fs_ptr.upgrade().ok_or(IOError::Unknown)?,
+            InodeNumber::ROOT_DIR,
+        )?))
     }
 
     /// Allocates a growable buffer (a [`Vec`]), initialized with a capacity corresponding to the block size

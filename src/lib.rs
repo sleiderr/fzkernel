@@ -2,6 +2,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(naked_functions)]
 #![feature(pointer_byte_offsets)]
+#![feature(type_alias_impl_trait)]
 #![warn(missing_copy_implementations)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]

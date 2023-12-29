@@ -68,7 +68,7 @@ pub type File = Box<dyn FsFile>;
 
 /// A file-system independent directory. This provides a basic set of functionalities when working
 /// with directories. That should be the only directory-related type useful in most cases.
-pub type Directory = Box<dyn FsDirectory<Item = DirEntry>>;
+pub type Directory = Box<dyn FsDirectory<Item = impl TryInto<DirEntry>>>;
 
 impl FsFile for Box<dyn FsFile> {
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
@@ -128,7 +128,7 @@ pub trait FsDirectory: Iterator + Debug {
     /// # Errors
     ///
     /// Fails if the directory is the file system's root directory.
-    fn parent(&self) -> IOResult<Directory>;
+    fn parent(&mut self) -> Option<Directory>;
 
     /// Returns `true` if the directory is the file system's root directory.
     ///
