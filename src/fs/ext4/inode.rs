@@ -5,28 +5,38 @@
 
 use core::fmt::{Display, Formatter};
 
+use alloc::sync::{Arc, Weak};
 use alloc::{format, string::String, vec::Vec};
-use bytemuck::{bytes_of, cast, Pod, Zeroable};
+use bytemuck::{bytes_of, cast, from_bytes, Pod, Zeroable};
+use core::mem;
+use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use hashbrown::HashMap;
+use spin::RwLock;
 
-use crate::fs::ext4::sb::Ext4FsUuid;
+use crate::errors::IOError;
+use crate::fs::ext4::sb::{Ext4FsUuid, LockedSuperblock};
+use crate::fs::ext4::WeakLockedExt4Fs;
+use crate::fs::IOResult;
 use crate::{
     error, ext4_uint_field_derive_display,
     fs::ext4::{crc32c_calc, extent::ExtentBlock},
     time::{DateTime, UnixTimestamp},
 };
 
-/// A number of [`Inode`], 16-bit encoded.
+/// A number of [`Ext4Inode`], 16-bit encoded.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct InodeCount16(u16);
 
 impl InodeCount16 {
-    pub(crate) fn add_high_bits(&self, high: InodeCount16) -> InodeCount {
+    /// Converts a 16-bit inode count to a 32-bit inode count by merging 2 16-bit counts.
+    pub(crate) fn add_high_bits(self, high: InodeCount16) -> InodeCount {
         cast(u32::from(self.0) | (u32::from(high.0) << 16))
     }
 }
 
-/// A number of [`Inode`], 32-bit encoded (default).
+/// A number of [`Ext4Inode`], 32-bit encoded (default).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct InodeCount(u32);
@@ -95,6 +105,18 @@ impl InodeNumber {
 }
 
 ext4_uint_field_derive_display!(InodeNumber);
+
+impl PartialEq<InodeCount> for InodeNumber {
+    fn eq(&self, other: &InodeCount) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl PartialOrd<InodeCount> for InodeNumber {
+    fn partial_cmp(&self, other: &InodeCount) -> Option<core::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
 
 impl core::ops::Sub<u32> for InodeNumber {
     type Output = u32;
@@ -216,7 +238,7 @@ impl Display for InodeFileMode {
     }
 }
 
-/// Type associated to a given [`Inode`].
+/// Type associated to a given [`Ext4Inode`].
 #[allow(clippy::upper_case_acronyms)]
 pub(crate) enum InodeType {
     Regular,
@@ -425,7 +447,7 @@ pub(crate) struct InodeFlags(u32);
 
 impl Display for InodeFlags {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.write_fmt(format_args!("{}", self.0))
+        f.write_fmt(format_args!("{:#x}", self.0))
     }
 }
 
@@ -846,13 +868,104 @@ pub(crate) struct InodeProjectId(u32);
 #[repr(transparent)]
 pub(crate) struct InodeVersionHi(u32);
 
+#[derive(Debug)]
+pub(crate) struct Inode {
+    /// Pointer to the associated filesystem [`Ext4Superblock`]
+    pub(crate) sb: LockedSuperblock,
+
+    /// The associated inode number.
+    pub(crate) number: InodeNumber,
+
+    /// Whether this [`Inode`] is currently cached in the [`InodeCache`] or not
+    pub(crate) cache: AtomicBool,
+
+    /// `ext4` inode structure
+    pub(crate) ext4_struct: Ext4Inode,
+}
+
+impl Inode {
+    /// Converts a [`Ext4Inode`] structure into an [`Inode`] internal representation.
+    ///
+    /// The [`Ext4Inode`] data structure contains the metadata of the `ext4` filesystem, and is encapsulated in the
+    /// [`Inode`] structure, that keeps track of additional useful data.
+    pub(super) fn from_ext4_inode(
+        sb: LockedSuperblock,
+        ext4_inode: Ext4Inode,
+        inode_id: InodeNumber,
+    ) -> Self {
+        Self {
+            sb,
+            number: inode_id,
+            cache: AtomicBool::default(),
+            ext4_struct: ext4_inode,
+        }
+    }
+    /// Compares the checksum of the `Inode` to its on-disk value.
+    ///
+    /// The checksum of an `Inode` can be computed (after having set the checksum field to 0) using:
+    ///
+    /// ```
+    /// crc32c_calc(fs_uuid + inode_id + inode_gen + inode_block)
+    /// ```
+    pub(crate) fn validate_chksum(&self) -> bool {
+        let on_disk_chksum = self.i_checksum_lo + self.i_checksum_hi;
+        let sb = self.sb.read();
+        let comp_chksum = self.compute_chksum(sb.uuid, self.number);
+        drop(sb);
+
+        let matching_chksum = if self.i_extra_isize == InodeExtraSize::NO_EXTRA_SIZE {
+            let comp_chksum_lo: InodeChksumLo = comp_chksum.into();
+
+            comp_chksum_lo == on_disk_chksum.into()
+        } else {
+            comp_chksum == on_disk_chksum
+        };
+
+        if !matching_chksum {
+            error!(
+                "ext4",
+                "invalid inode checksum (inode {:#X})",
+                cast::<InodeNumber, u32>(self.number)
+            );
+
+            return false;
+        }
+
+        true
+    }
+
+    /// Updates the value of the checksum field for this `Inode`, based on the current value of the other
+    /// fields.
+    ///
+    /// Useful before writing back the `Inode` to disk after having updated several of its field.
+    pub(crate) fn update_chksum(&mut self) {
+        let fs_uuid = self.sb.read().uuid;
+        let new_chksum = self.compute_chksum(fs_uuid, self.number);
+        self.set_chksum(new_chksum);
+    }
+}
+
+impl Deref for Inode {
+    type Target = Ext4Inode;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ext4_struct
+    }
+}
+
+impl DerefMut for Inode {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ext4_struct
+    }
+}
+
 /// The `Inode` (index node) stores all metadata related to a file or a directory (permissions, blocks,
 /// timestamps, ...).
 ///
 /// Directories are direct file name to `Inode` maps.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(C)]
-pub(crate) struct Inode {
+pub(crate) struct Ext4Inode {
     /// File mode
     pub(crate) i_mode: InodeFileMode,
 
@@ -953,7 +1066,7 @@ pub(crate) struct Inode {
     pub(crate) i_projid: InodeProjectId,
 }
 
-impl Inode {
+impl Ext4Inode {
     /// Returns the type of this `Inode` (file, directory, ...)
     pub(crate) fn inode_type(&self) -> InodeType {
         InodeType::from(self.i_mode)
@@ -996,38 +1109,6 @@ impl Inode {
         self.i_crtime + self.i_crtime_extra
     }
 
-    /// Compares the checksum of the `Inode` to its on-disk value.
-    ///
-    /// The checksum of an `Inode` can be computed (after having set the checksum field to 0) using:
-    ///
-    /// ```
-    /// crc32c_calc(fs_uuid + inode_id + inode_gen + inode_block)
-    /// ```
-    pub(crate) fn validate_chksum(&self, fs_uuid: Ext4FsUuid, inode_id: InodeNumber) -> bool {
-        let on_disk_chksum = self.i_checksum_lo + self.i_checksum_hi;
-        let comp_chksum = self.compute_chksum(fs_uuid, inode_id);
-
-        let matching_chksum = if self.i_extra_isize == InodeExtraSize::NO_EXTRA_SIZE {
-            let comp_chksum_lo: InodeChksumLo = comp_chksum.into();
-
-            comp_chksum_lo == on_disk_chksum.into()
-        } else {
-            comp_chksum == on_disk_chksum
-        };
-
-        if !matching_chksum {
-            error!(
-                "ext4",
-                "invalid inode checksum (inode {:#X})",
-                cast::<InodeNumber, u32>(inode_id)
-            );
-
-            return false;
-        }
-
-        true
-    }
-
     /// Sets the value of the checksum field for this `Inode`.
     ///
     /// May store only the low 16-bits of the checksum if this `Inode` does not use the
@@ -1042,14 +1123,6 @@ impl Inode {
     /// Returns the checksum value of this `Inode`.
     pub(crate) fn chksum(&self) -> InodeChksum {
         self.i_checksum_lo + self.i_checksum_hi
-    }
-
-    /// Updates the value of the checksum field for this `Inode`, based on the current value of the other
-    /// fields.
-    ///
-    /// Useful before writing back the `Inode` to disk after having updated several of its field.
-    pub(crate) fn update_chksum(&mut self, fs_uuid: Ext4FsUuid, inode_id: InodeNumber) {
-        self.set_chksum(self.compute_chksum(fs_uuid, inode_id));
     }
 
     /// Returns the block count for this `Inode`.
@@ -1132,8 +1205,9 @@ impl Inode {
         cast(crc32c_calc(&chksum_bytes))
     }
 }
+
 #[allow(clippy::format_in_format_args)]
-impl Display for Inode {
+impl Display for Ext4Inode {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!(
             "Type : {:<9}    Blocks : {:<16}    Size : {} \n\
@@ -1158,5 +1232,223 @@ Checksum: {}
             DateTime::from(self.change_time()),
             format!("{:#x}", self.chksum().0)
         ))
+    }
+}
+
+/// Weak pointer to a locked [`Inode`] structure.
+///
+/// This is the main interface for the other parts of the system to access inodes.
+/// The [`Inode`] behind this pointer should remain allocated as long as there exists any reference (weak or strong)
+/// to it, even though weak `LockedInode` references do not ensure that the allocation is kept.
+///
+/// Most of the time, a strong reference to the backing [`Inode`] is stored in the [`InodeCache`], and while it will
+/// usually not be removed while the inode is in use somewhere, it may still be if the cache is under heavy load, or if
+/// the cache entry was not accessed for a long time.
+pub(crate) type LockedInode = Weak<RwLock<Inode>>;
+
+/// Strong pointer to a locked [`Inode`] structure.
+///
+/// Unlike a standard [`LockedInode`], this keeps the allocation alive and ensures the underlying [`Inode`] structure
+/// will remain accessible.
+pub(crate) type LockedInodeStrongRef = Arc<RwLock<Inode>>;
+
+/// Status of a cache entry in the [`InodeCache`] structure.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(super) enum InodeCacheEntryState {
+    /// The entry is valid, and the data can be used safely.
+    #[default]
+    Valid,
+
+    /// The entry was marked for deletion, and the corresponding data should not be used.
+    MustClear,
+}
+
+/// [`InodeCache`] flush policy.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(super) enum InodeCacheRemovalPolicy {
+    /// Entry marked for deletion should be immediately removed from the cache.
+    #[default]
+    Immediate,
+
+    /// Entries are marked for deletion and removed by batch later on.
+    BatchRemoval,
+}
+
+/// An entry in the [`InodeCache`] structure.
+///
+/// Contains a strong pointer to the corresponding [`Inode`] structure, as well as additional data and heuristics
+/// necessary for the good operation of the [`InodeCache`].
+#[derive(Debug)]
+pub(super) struct InodeCacheEntry {
+    /// Strong pointer to the [`Inode`] corresponding to the entry.
+    pub(super) inode: LockedInodeStrongRef,
+
+    /// Number of times this cache entry was accessed.
+    pub(super) usage_count: AtomicU32,
+
+    /// Current state of this cache entry.
+    pub(super) entry_state: InodeCacheEntryState,
+}
+
+/// The `InodeCache` stores the most-recently used [`Inode`] entries of an `ext4` filesystem.
+///
+/// This is the main interface to access [`Inode`] of the corresponding filesystem, this cache should be queried
+/// first when attempting to load an [`Inode`], and it will take the appropriate actions to provide that [`Inode`],
+/// whether the entry is already cached or not.
+///
+/// # Implementation
+///
+/// The `InodeCache` is currently implemented using a [`HashMap`], with the [`InodeNumber`] as keys.
+///
+/// # Cache flushes
+///
+/// Several policies are available (variants of [`InodeCacheRemovalPolicy`]) :
+///
+/// - Immediate removal ([`InodeCacheRemovalPolicy::Immediate`]) : remove entries as soon as they are marked for
+/// deletion
+///
+/// - Batch removal ([`InodeCacheRemovalPolicy::BatchRemoval`]): entries marked for deletion are removed by batch
+///
+/// Immediate removal is simpler, but batch removal might offer better performances in some cases.
+#[derive(Debug)]
+pub(super) struct InodeCache {
+    /// Backing [`HashMap`] for the inode cache.
+    pub(super) hashtable: HashMap<InodeNumber, InodeCacheEntry>,
+
+    pub(super) removal_policy: InodeCacheRemovalPolicy,
+
+    pub(super) fs: WeakLockedExt4Fs,
+}
+
+impl InodeCache {
+    /// Removes an entry from the `InodeCache`, identified by its [`InodeNumber`].
+    ///
+    /// Does nothing if there is no entry corresponding to the given [`InodeNumber`]
+    /// Follows the removal policies defined globally for the entire cache.
+    pub(super) fn remove_entry(&mut self, inode_id: InodeNumber) {
+        match self.removal_policy {
+            InodeCacheRemovalPolicy::Immediate => {
+                let entry = self.hashtable.remove_entry(&inode_id);
+                if let Some(entry) = entry {
+                    if Arc::strong_count(&entry.1.inode) > 1 {
+                        entry.1.inode.write().cache.store(false, Ordering::SeqCst);
+                    }
+                }
+            }
+            InodeCacheRemovalPolicy::BatchRemoval => {
+                if let Some(entry) = self.hashtable.get_mut(&inode_id) {
+                    entry.entry_state = InodeCacheEntryState::MustClear;
+                }
+            }
+        }
+    }
+
+    /// Loads an [`Inode`] from the `InodeCache`, or from disk in case of a cache miss.
+    ///
+    /// In case of a cache miss, it also inserts the [`Inode`] into the cache. Otherwise, increases the usage count
+    /// of the entry and returns a strong reference to the inode ([`LockedInodeStrongRef`]).
+    ///
+    /// Returns [`None`] in case of a cache miss and a failure while trying to load the entry from the disk.
+    pub(crate) fn load_cached_inode_or_insert(
+        &mut self,
+        inode_id: InodeNumber,
+    ) -> Option<LockedInodeStrongRef> {
+        if let Some(inode_cache_entry) = self.hashtable.get_mut(&inode_id) {
+            inode_cache_entry
+                .usage_count
+                .fetch_add(1, Ordering::Relaxed);
+            return Some(inode_cache_entry.inode.clone());
+        }
+
+        let inode = self.load_inode_from_raw(inode_id).ok()?;
+        let inode_cache_entry = InodeCacheEntry {
+            inode: inode.clone(),
+            usage_count: AtomicU32::default(),
+            entry_state: InodeCacheEntryState::Valid,
+        };
+        self.hashtable.insert(inode_id, inode_cache_entry);
+
+        Some(inode)
+    }
+
+    fn load_inode_from_raw(&self, inode_id: InodeNumber) -> IOResult<LockedInodeStrongRef> {
+        let locked_fs = self.fs.upgrade().ok_or(IOError::Unknown)?;
+        let fs = locked_fs.read();
+        let sb = fs.superblock.read();
+        let (inode_bg, inode_entry_blk_offset, inode_entry_bytes_offset_in_blk) =
+            sb.get_inode_entry_pos(inode_id);
+
+        let locked_descriptor = fs.get_group_descriptor(inode_bg).ok_or(IOError::Unknown)?;
+
+        let descriptor = locked_descriptor.read();
+
+        let mut raw_inode_entry_blk = fs.allocate_blk();
+
+        fs.read_blk_from_device(
+            descriptor.inode_table_blk_addr() + inode_entry_blk_offset,
+            &mut raw_inode_entry_blk,
+        )?;
+
+        let raw_inode = &raw_inode_entry_blk[usize::try_from(inode_entry_bytes_offset_in_blk)
+            .expect("invalid byte size")
+            ..usize::try_from(inode_entry_bytes_offset_in_blk + u64::from(sb.inode_size))
+                .expect("invalid byte size")];
+
+        let mut filled_inode = alloc::vec![0u8; mem::size_of::<Ext4Inode>()];
+        filled_inode[..raw_inode.len()].copy_from_slice(raw_inode);
+
+        let ext4_inode: Ext4Inode = *from_bytes(&filled_inode);
+        let inode = Inode::from_ext4_inode(fs.superblock.clone(), ext4_inode, inode_id);
+
+        inode.validate_chksum();
+
+        Ok(Arc::new(RwLock::new(inode)))
+    }
+
+    /// Reserves extra capacity to insert several cache entries at once.
+    ///
+    /// Useful when a lot of [`Inode`] have to be loaded in a short period time (when querying information about all
+    /// files in a directory for instance).
+    pub(super) fn reserve_entries_capacity(&mut self, count: InodeCount) {
+        self.hashtable
+            .reserve(usize::try_from(cast::<InodeCount, u32>(count)).expect("invalid inode count"));
+    }
+
+    /// Flushes the entire cache (removes every entry), without deallocating the underlying physical memory.
+    pub(super) fn flush_cache(&mut self) {
+        self.hashtable.clear();
+    }
+
+    /// Flushes the entire cache (removes every entry), and deallocates the underlying physical memory.
+    pub(super) fn flush_cache_and_deallocate(&mut self) {
+        self.hashtable.clear();
+        self.hashtable.shrink_to(0);
+    }
+
+    /// Flushes the cache entries marked as `MustClear`, immediately.
+    pub(super) fn flush_invalid_cache_entries(&mut self) {
+        self.hashtable
+            .retain(|_, entry| !matches!(entry.entry_state, InodeCacheEntryState::MustClear));
+    }
+
+    /// Marks a cache entry for removal later on.
+    pub(super) fn delayed_entry_removal(&mut self, inode_id: InodeNumber) {
+        if let Some(inode_cache_entry) = self.hashtable.get_mut(&inode_id) {
+            inode_cache_entry.entry_state = InodeCacheEntryState::MustClear;
+        }
+    }
+}
+
+impl Deref for InodeCache {
+    type Target = HashMap<InodeNumber, InodeCacheEntry>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.hashtable
+    }
+}
+
+impl DerefMut for InodeCache {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.hashtable
     }
 }

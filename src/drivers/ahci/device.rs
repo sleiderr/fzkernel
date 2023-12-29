@@ -39,7 +39,6 @@ use crate::{
 /// let mut buffer = [0u8; 1024];
 /// drive.read(0, 2, &mut buffer);
 /// ```
-#[derive(Debug)]
 pub struct SATADrive {
     pub id: usize,
     device_info: [u16; 256],

@@ -1,91 +1,226 @@
+//! `ext4fs` (Fourth Extended Filesystem) `FrozenBoot`'s implementation.
+//!
+//! `ext4` is widely used, and serves as the default filesystem in many Linux distributions (such
+//! as _Debian_ or _Ubuntu_). It is an evolution of the `ext2` and `ext3` filesystems, more advanced and feature-rich,
+//! with:
+//!
+//! - **Journaling**
+//! - **Extents**
+//! - **Large filesystem support**
+//!
+//! This implementation only covers the basic features of the `ext4` filesystem for now, and can only mount such
+//! filesystems read-only.
+
 #![allow(clippy::copy_iterator)]
 
+use alloc::sync::{Arc, Weak};
 use alloc::{string::String, vec::Vec};
-use core::{mem, ptr};
+use core::cell::RefCell;
+use core::mem;
 
 use bytemuck::from_bytes;
+use hashbrown::HashMap;
 
-use crate::fs::ext4::block_grp::{BlockGroupNumber, BlockGroupNumberRange, GroupDescriptor};
+use spin::RwLock;
+
+use crate::errors::MountError;
+use crate::fs::ext4::block_grp::{BlockGroupNumber, GroupDescriptorCache, LockedGroupDescriptor};
 use crate::fs::ext4::extent::Ext4RealBlkId;
-use crate::fs::ext4::inode::InodeNumber;
-use crate::fs::ext4::sb::{Ext4Superblock, IncompatibleFeatureSet};
+use crate::fs::ext4::inode::{
+    InodeCache, InodeCacheRemovalPolicy, InodeNumber, LockedInode, LockedInodeStrongRef,
+};
+use crate::fs::ext4::sb::{Ext4ChksumAlgorithm, Ext4Superblock, LockedSuperblock, Superblock};
+use crate::fs::Fs;
 use crate::{
     drivers::ahci::get_sata_drive,
     errors::{CanFail, IOError},
     fs::{
-        ext4::{dir::Ext4Directory, extent::ExtentTree, inode::Inode},
+        ext4::{dir::Ext4Directory, extent::ExtentTree, inode::Ext4Inode},
         IOResult,
     },
-    info, println,
+    info,
 };
-use crate::{errors::MountError, fs::FsFile};
 
 pub(super) mod bitmap;
 pub(crate) mod block_grp;
-pub mod dir;
+pub(crate) mod dir;
 pub(crate) mod extent;
-mod file;
+pub(crate) mod file;
 pub(crate) mod inode;
 pub(crate) mod sb;
 
-pub const EXT4_SIGNATURE: u16 = 0xEF53;
+/// Strong pointer to a locked [`Ext4Fs`] structure.
+///
+/// This is the only interface to access the underlying structure, and thus the main way to interact with a `ext4`
+/// filesystem.
+///
+/// The [`Ext4Fs`] structure will remain allocated for as long as the filesystem is mounted (as a strong reference is
+/// kept in the global filesystem register).
+pub(super) type LockedExt4Fs = Arc<RwLock<Ext4Fs>>;
 
-pub const EXT4_CHKSUM_TYPE_CRC32: u8 = 0x1;
+/// Weak pointer to a locked [`Ext4Fs`] structure.
+///
+/// The underlying allocation will remain accessible as long as the filesystem is mounted. However, the weak reference
+/// count is not checked when unmounting a filesystem, and therefore holding such reference do not ensure that the
+/// filesystem cannot be unmounted, contrary to a [`LockedExt4Fs`] reference.
+pub(super) type WeakLockedExt4Fs = Weak<RwLock<Ext4Fs>>;
 
-#[derive(Clone, Debug)]
-pub struct Ext4Fs {
+/// Internal representation of a `ext4` filesystem.
+///
+/// Holds the main data structures required for the operation of the filesystem:
+///
+/// - `ext4`'s Superblock
+///
+/// - Various caches (inode cache, block group descriptor)
+///
+/// This is the main (and only?) interface to properly interact with the filesystem.
+///
+/// This structure can only be accessed through a smart [`Arc`] pointer, the underlying allocation is guaranteed to
+/// remain valid while the `ext4` filesystem is mounted.
+#[derive(Debug)]
+pub(crate) struct Ext4Fs {
     drive_id: usize,
     partition_id: usize,
-    superblock: Ext4Superblock,
-    group_descriptors: Vec<GroupDescriptor>,
+
+    superblock: LockedSuperblock,
+
+    descriptors_cache: RefCell<GroupDescriptorCache>,
+
+    inode_cache: RefCell<InodeCache>,
+
+    fs_ptr: Weak<RwLock<Self>>,
 }
 
 impl Ext4Fs {
-    pub fn root_dir(&self) -> Ext4Directory {
-        let root_inode = self.__read_inode(InodeNumber::ROOT_DIR).unwrap();
+    /// Returns a strong reference ([`LockedInodeStrongRef`]) to an inode.
+    ///
+    /// This ensures that the corresponding [`Inode`] structure remains allocated for at least the lifetime of that
+    /// reference.
+    pub(super) fn get_inode_strong(&self, inode_id: InodeNumber) -> Option<LockedInodeStrongRef> {
+        let mut inode_cache = self.inode_cache.borrow_mut();
+        inode_cache.load_cached_inode_or_insert(inode_id)
+    }
 
-        Ext4Directory::from_inode(
-            self.drive_id,
-            self.partition_id,
-            root_inode,
-            InodeNumber::ROOT_DIR,
+    /// Returns a weak reference ([`LockedInode`]) to an inode.
+    ///
+    /// This does not ensure that the corresponding [`Inode`] structure remains allocated for the lifetime of reference,
+    /// as it may be removed from cache before (cache removal may occur even if the weak reference count is not null).
+    pub(super) fn get_inode(&self, inode_id: InodeNumber) -> Option<LockedInode> {
+        let mut inode_cache = self.inode_cache.borrow_mut();
+        Some(Arc::downgrade(
+            &inode_cache.load_cached_inode_or_insert(inode_id)?,
+        ))
+    }
+
+    /// Returns a weak reference ([`LockedInode`]) to an inode.
+    ///
+    /// This also verifies that the given [`InodeNumber`] is a valid inode identifier in the filesystem, and therefore
+    /// may be useful when the caller suspects that this inode number does not correspond to a real entry, as that
+    /// function will return faster if so.
+    ///
+    /// This does not ensure that the corresponding [`Inode`] structure remains allocated for the lifetime of reference,
+    /// as it may be removed from cache before (cache removal may occur even if the weak reference count is not null).//
+    pub(super) fn get_inode_checked(&self, inode_id: InodeNumber) -> Option<LockedInode> {
+        let mut inode_cache = self.inode_cache.borrow_mut();
+        let sb = self.superblock.read();
+        let inode_bg = sb.get_inode_blk_group(inode_id);
+
+        if inode_id > sb.inodes_count || inode_bg > sb.bg_count() {
+            return None;
+        }
+
+        let locked_descriptor = self.get_group_descriptor(inode_bg)?;
+
+        let mut descriptor = locked_descriptor.write();
+
+        if !descriptor.get_or_load_inode_bitmap().inode_in_use(inode_id) {
+            return None;
+        }
+
+        Some(Arc::downgrade(
+            &inode_cache.load_cached_inode_or_insert(inode_id)?,
+        ))
+    }
+
+    /// Returns a strong reference ([`LockedGroupDescriptor`]) to a block group descriptor.
+    pub(super) fn get_group_descriptor(
+        &self,
+        bg_number: BlockGroupNumber,
+    ) -> Option<LockedGroupDescriptor> {
+        let mut bg_desc_cache = self.descriptors_cache.borrow_mut();
+        bg_desc_cache.load_cached_group_descriptor_or_insert(bg_number)
+    }
+
+    /// Returns the root directory of this filesystem.
+    ///
+    /// # Errors
+    ///
+    /// In case of any I/O error, a generic error will be returned. An error may mean that the filesystem
+    /// is corrupted.
+    pub(crate) fn root_dir(&self) -> IOResult<Ext4Directory> {
+        Ext4Directory::from_inode_id(self.fs_ptr.upgrade().unwrap(), InodeNumber::ROOT_DIR)
+    }
+
+    /// Allocates a growable buffer (a [`Vec`]), initialized with a capacity corresponding to the block size
+    /// of the filesystem.
+    pub(crate) fn allocate_blk(&self) -> Vec<u8> {
+        let sb = self.superblock.read();
+        alloc::vec![0u8; usize::try_from(sb.blk_size()).expect("invalid block size")]
+    }
+
+    fn read_blk_from_device(&self, blk_id: Ext4RealBlkId, buffer: &mut [u8]) -> CanFail<IOError> {
+        let sb = self.superblock.read();
+        if blk_id > sb.blk_count() {
+            return Err(IOError::InvalidCommand);
+        }
+
+        let mut drive = get_sata_drive(self.drive_id).lock();
+        let partition_data = drive
+            .partitions
+            .get(self.partition_id)
+            .ok_or(IOError::Unknown)?
+            .start_lba();
+
+        let sectors_count = sb.blk_size() / u64::from(drive.logical_sector_size());
+        let start_lba =
+            partition_data + (blk_id * sb.blk_size()) / u64::from(drive.logical_sector_size());
+
+        drive.read(
+            start_lba,
+            u16::try_from(sectors_count).expect("invalid sectors count"),
+            buffer,
         )
-        .unwrap()
     }
+}
 
-    pub fn identify(drive_id: usize, partition_data: u64) -> Result<bool, IOError> {
-        let mut drive = get_sata_drive(drive_id).lock();
-
-        let sb_start_lba = (1024 / drive.logical_sector_size() as u64) + partition_data;
-        let sb_size_in_lba = mem::size_of::<Ext4Superblock>() as u32 / drive.logical_sector_size();
-
-        let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
-        drive.read(sb_start_lba as u64, sb_size_in_lba as u16, &mut raw_sb)?;
-
-        let sb = unsafe { ptr::read(raw_sb.as_ptr() as *mut Ext4Superblock) };
-
-        Ok(sb.magic.is_valid())
-    }
-
-    pub fn mount(
+impl Fs for Ext4Fs {
+    fn mount(
         drive_id: usize,
         partition_id: usize,
         partition_data: u64,
-    ) -> Result<Self, MountError> {
+    ) -> Result<LockedExt4Fs, MountError> {
         let mut drive = get_sata_drive(drive_id).lock();
 
-        let sb_start_lba = (1024 / drive.logical_sector_size() as u64) + partition_data;
-        let sb_size_in_lba = mem::size_of::<Ext4Superblock>() as u32 / drive.logical_sector_size();
+        let sb_start_lba = (1024 / u64::from(drive.logical_sector_size())) + partition_data;
+        let sb_size_in_lba = u32::try_from(mem::size_of::<Ext4Superblock>())
+            .expect("invalid superblock size")
+            / drive.logical_sector_size();
 
         let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
         drive
-            .read(sb_start_lba as u64, sb_size_in_lba as u16, &mut raw_sb)
+            .read(
+                sb_start_lba,
+                u16::try_from(sb_size_in_lba).expect("invalid superblock size"),
+                &mut raw_sb,
+            )
             .map_err(|_| MountError::IOError)?;
 
-        let sb = unsafe { ptr::read(raw_sb.as_ptr() as *mut Ext4Superblock) };
-        let isize = sb.inode_size;
+        let ext4_sb = *from_bytes(&raw_sb);
+        let sb = Superblock {
+            ext4_superblock: ext4_sb,
+        };
 
-        if sb.checksum_type == EXT4_CHKSUM_TYPE_CRC32 && !sb.validate_chksum() {
+        if sb.checksum_type == Ext4ChksumAlgorithm::CHKSUM_CRC32_C && !sb.validate_chksum() {
             return Err(MountError::BadSuperblock);
         }
 
@@ -108,90 +243,49 @@ impl Ext4Fs {
             String::from(sb.mount_opts)
         );
 
-        let mut fs = Self {
-            drive_id,
-            partition_id,
-            superblock: sb,
-            group_descriptors: alloc::vec![],
-        };
-        drop(drive);
-
-        fs.init_group_descriptors()
-            .map_err(|_| MountError::IOError)?;
+        let fs = Arc::new_cyclic(|ptr| {
+            RwLock::new(Ext4Fs {
+                drive_id,
+                partition_id,
+                superblock: Arc::new(RwLock::new(sb)),
+                inode_cache: RefCell::new(InodeCache {
+                    hashtable: HashMap::default(),
+                    removal_policy: InodeCacheRemovalPolicy::default(),
+                    fs: ptr.clone(),
+                }),
+                fs_ptr: ptr.clone(),
+                descriptors_cache: RefCell::new(GroupDescriptorCache {
+                    descriptor_table: HashMap::default(),
+                    fs: ptr.clone(),
+                }),
+            })
+        });
 
         Ok(fs)
     }
 
-    pub(crate) fn allocate_blk(&self) -> Vec<u8> {
-        alloc::vec![0u8; self.superblock.blk_size() as usize]
-    }
+    fn identify(drive_id: usize, partition_data: u64) -> Result<bool, IOError> {
+        let mut drive = get_sata_drive(drive_id).lock();
 
-    pub fn init_group_descriptors(&mut self) -> CanFail<IOError> {
-        self.group_descriptors.clear();
+        let sb_start_lba = (1024 / u64::from(drive.logical_sector_size())) + partition_data;
+        let sb_size_in_lba = u32::try_from(mem::size_of::<Ext4Superblock>())
+            .expect("invalid superblock size")
+            / drive.logical_sector_size();
 
-        for i in BlockGroupNumberRange(
-            BlockGroupNumber::INITIAL_BLK_GRP,
-            self.superblock.bg_count(),
-        ) {
-            let gd = GroupDescriptor::load_descriptor(i, &self.superblock, self)?;
-            self.group_descriptors.push(gd);
-        }
-
-        Ok(())
-    }
-
-    fn __read_blk(&self, blk_id: Ext4RealBlkId, buffer: &mut [u8]) -> CanFail<IOError> {
-        if blk_id > self.superblock.blk_count() {
-            return Err(IOError::InvalidCommand);
-        }
-
-        let mut drive = get_sata_drive(self.drive_id).lock();
-        let partition_data = drive
-            .partitions
-            .get(self.partition_id)
-            .ok_or(IOError::Unknown)?
-            .start_lba();
-
-        let sectors_count = self.superblock.blk_size() / drive.logical_sector_size() as u64;
-        let start_lba = partition_data
-            + (blk_id * self.superblock.blk_size()) / drive.logical_sector_size() as u64;
-
-        drive.read(start_lba, sectors_count as u16, buffer)
-    }
-
-    pub(crate) fn __read_inode(&self, inode_id: InodeNumber) -> Result<Inode, IOError> {
-        let inode_blk_group = (inode_id - 1) / self.superblock.inodes_per_group;
-        let inode_bg_idx = (inode_id - 1) % self.superblock.inodes_per_group;
-        let inode_byte_idx = u64::from(inode_bg_idx) * u64::from(self.superblock.inode_size);
-
-        let inode_blk_offset: u64 = inode_byte_idx / self.superblock.blk_size();
-
-        let inode_bytes_idx_in_blk: u64 = inode_byte_idx % self.superblock.blk_size();
-
-        let descriptor = self
-            .group_descriptors
-            .get(inode_blk_group as usize)
-            .ok_or(IOError::Unknown)?;
-
-        let mut raw_inode_blk = alloc::vec![0; self.superblock.blk_size() as usize];
-
-        self.__read_blk(
-            Ext4RealBlkId::from(descriptor.inode_table_blk_addr() + inode_blk_offset),
-            &mut raw_inode_blk,
+        let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
+        drive.read(
+            sb_start_lba,
+            u16::try_from(sb_size_in_lba).expect("invalid superblock size"),
+            &mut raw_sb,
         )?;
 
-        let raw_inode = &raw_inode_blk[(inode_bytes_idx_in_blk as usize)
-            ..(inode_bytes_idx_in_blk + self.superblock.inode_size as u64) as usize];
+        let ext4_sb: Ext4Superblock = *from_bytes(&raw_sb);
 
-        let mut filled_inode = alloc::vec![0u8; mem::size_of::<Inode>()];
-        filled_inode[..raw_inode.len()].copy_from_slice(raw_inode);
-
-        let inode: Inode = *from_bytes(&filled_inode);
-        inode.validate_chksum(self.superblock.uuid, inode_id);
-
-        Ok(inode)
+        Ok(ext4_sb.magic.is_valid())
     }
 }
+
+unsafe impl Sync for Ext4Fs {}
 
 /*****************************************************************/
 /*                                                               */
@@ -214,45 +308,271 @@ impl Ext4Fs {
 /*****************************************************************/
 
 const CRC32C_LO_TABLE: [u32; 256] = [
-    0x00000000, 0xF26B8303, 0xE13B70F7, 0x1350F3F4, 0xC79A971F, 0x35F1141C, 0x26A1E7E8, 0xD4CA64EB,
-    0x8AD958CF, 0x78B2DBCC, 0x6BE22838, 0x9989AB3B, 0x4D43CFD0, 0xBF284CD3, 0xAC78BF27, 0x5E133C24,
-    0x105EC76F, 0xE235446C, 0xF165B798, 0x030E349B, 0xD7C45070, 0x25AFD373, 0x36FF2087, 0xC494A384,
-    0x9A879FA0, 0x68EC1CA3, 0x7BBCEF57, 0x89D76C54, 0x5D1D08BF, 0xAF768BBC, 0xBC267848, 0x4E4DFB4B,
-    0x20BD8EDE, 0xD2D60DDD, 0xC186FE29, 0x33ED7D2A, 0xE72719C1, 0x154C9AC2, 0x061C6936, 0xF477EA35,
-    0xAA64D611, 0x580F5512, 0x4B5FA6E6, 0xB93425E5, 0x6DFE410E, 0x9F95C20D, 0x8CC531F9, 0x7EAEB2FA,
-    0x30E349B1, 0xC288CAB2, 0xD1D83946, 0x23B3BA45, 0xF779DEAE, 0x05125DAD, 0x1642AE59, 0xE4292D5A,
-    0xBA3A117E, 0x4851927D, 0x5B016189, 0xA96AE28A, 0x7DA08661, 0x8FCB0562, 0x9C9BF696, 0x6EF07595,
-    0x417B1DBC, 0xB3109EBF, 0xA0406D4B, 0x522BEE48, 0x86E18AA3, 0x748A09A0, 0x67DAFA54, 0x95B17957,
-    0xCBA24573, 0x39C9C670, 0x2A993584, 0xD8F2B687, 0x0C38D26C, 0xFE53516F, 0xED03A29B, 0x1F682198,
-    0x5125DAD3, 0xA34E59D0, 0xB01EAA24, 0x42752927, 0x96BF4DCC, 0x64D4CECF, 0x77843D3B, 0x85EFBE38,
-    0xDBFC821C, 0x2997011F, 0x3AC7F2EB, 0xC8AC71E8, 0x1C661503, 0xEE0D9600, 0xFD5D65F4, 0x0F36E6F7,
-    0x61C69362, 0x93AD1061, 0x80FDE395, 0x72966096, 0xA65C047D, 0x5437877E, 0x4767748A, 0xB50CF789,
-    0xEB1FCBAD, 0x197448AE, 0x0A24BB5A, 0xF84F3859, 0x2C855CB2, 0xDEEEDFB1, 0xCDBE2C45, 0x3FD5AF46,
-    0x7198540D, 0x83F3D70E, 0x90A324FA, 0x62C8A7F9, 0xB602C312, 0x44694011, 0x5739B3E5, 0xA55230E6,
-    0xFB410CC2, 0x092A8FC1, 0x1A7A7C35, 0xE811FF36, 0x3CDB9BDD, 0xCEB018DE, 0xDDE0EB2A, 0x2F8B6829,
-    0x82F63B78, 0x709DB87B, 0x63CD4B8F, 0x91A6C88C, 0x456CAC67, 0xB7072F64, 0xA457DC90, 0x563C5F93,
-    0x082F63B7, 0xFA44E0B4, 0xE9141340, 0x1B7F9043, 0xCFB5F4A8, 0x3DDE77AB, 0x2E8E845F, 0xDCE5075C,
-    0x92A8FC17, 0x60C37F14, 0x73938CE0, 0x81F80FE3, 0x55326B08, 0xA759E80B, 0xB4091BFF, 0x466298FC,
-    0x1871A4D8, 0xEA1A27DB, 0xF94AD42F, 0x0B21572C, 0xDFEB33C7, 0x2D80B0C4, 0x3ED04330, 0xCCBBC033,
-    0xA24BB5A6, 0x502036A5, 0x4370C551, 0xB11B4652, 0x65D122B9, 0x97BAA1BA, 0x84EA524E, 0x7681D14D,
-    0x2892ED69, 0xDAF96E6A, 0xC9A99D9E, 0x3BC21E9D, 0xEF087A76, 0x1D63F975, 0x0E330A81, 0xFC588982,
-    0xB21572C9, 0x407EF1CA, 0x532E023E, 0xA145813D, 0x758FE5D6, 0x87E466D5, 0x94B49521, 0x66DF1622,
-    0x38CC2A06, 0xCAA7A905, 0xD9F75AF1, 0x2B9CD9F2, 0xFF56BD19, 0x0D3D3E1A, 0x1E6DCDEE, 0xEC064EED,
-    0xC38D26C4, 0x31E6A5C7, 0x22B65633, 0xD0DDD530, 0x0417B1DB, 0xF67C32D8, 0xE52CC12C, 0x1747422F,
-    0x49547E0B, 0xBB3FFD08, 0xA86F0EFC, 0x5A048DFF, 0x8ECEE914, 0x7CA56A17, 0x6FF599E3, 0x9D9E1AE0,
-    0xD3D3E1AB, 0x21B862A8, 0x32E8915C, 0xC083125F, 0x144976B4, 0xE622F5B7, 0xF5720643, 0x07198540,
-    0x590AB964, 0xAB613A67, 0xB831C993, 0x4A5A4A90, 0x9E902E7B, 0x6CFBAD78, 0x7FAB5E8C, 0x8DC0DD8F,
-    0xE330A81A, 0x115B2B19, 0x020BD8ED, 0xF0605BEE, 0x24AA3F05, 0xD6C1BC06, 0xC5914FF2, 0x37FACCF1,
-    0x69E9F0D5, 0x9B8273D6, 0x88D28022, 0x7AB90321, 0xAE7367CA, 0x5C18E4C9, 0x4F48173D, 0xBD23943E,
-    0xF36E6F75, 0x0105EC76, 0x12551F82, 0xE03E9C81, 0x34F4F86A, 0xC69F7B69, 0xD5CF889D, 0x27A40B9E,
-    0x79B737BA, 0x8BDCB4B9, 0x988C474D, 0x6AE7C44E, 0xBE2DA0A5, 0x4C4623A6, 0x5F16D052, 0xAD7D5351,
+    0x0000_0000,
+    0xF26B_8303,
+    0xE13B_70F7,
+    0x1350_F3F4,
+    0xC79A_971F,
+    0x35F1_141C,
+    0x26A1_E7E8,
+    0xD4CA_64EB,
+    0x8AD9_58CF,
+    0x78B2_DBCC,
+    0x6BE2_2838,
+    0x9989_AB3B,
+    0x4D43_CFD0,
+    0xBF28_4CD3,
+    0xAC78_BF27,
+    0x5E13_3C24,
+    0x105E_C76F,
+    0xE235_446C,
+    0xF165_B798,
+    0x030E_349B,
+    0xD7C4_5070,
+    0x25AF_D373,
+    0x36FF_2087,
+    0xC494_A384,
+    0x9A87_9FA0,
+    0x68EC_1CA3,
+    0x7BBC_EF57,
+    0x89D7_6C54,
+    0x5D1D_08BF,
+    0xAF76_8BBC,
+    0xBC26_7848,
+    0x4E4D_FB4B,
+    0x20BD_8EDE,
+    0xD2D6_0DDD,
+    0xC186_FE29,
+    0x33ED_7D2A,
+    0xE727_19C1,
+    0x154C_9AC2,
+    0x061C_6936,
+    0xF477_EA35,
+    0xAA64_D611,
+    0x580F_5512,
+    0x4B5F_A6E6,
+    0xB934_25E5,
+    0x6DFE_410E,
+    0x9F95_C20D,
+    0x8CC5_31F9,
+    0x7EAE_B2FA,
+    0x30E3_49B1,
+    0xC288_CAB2,
+    0xD1D8_3946,
+    0x23B3_BA45,
+    0xF779_DEAE,
+    0x0512_5DAD,
+    0x1642_AE59,
+    0xE429_2D5A,
+    0xBA3A_117E,
+    0x4851_927D,
+    0x5B01_6189,
+    0xA96A_E28A,
+    0x7DA0_8661,
+    0x8FCB_0562,
+    0x9C9B_F696,
+    0x6EF0_7595,
+    0x417B_1DBC,
+    0xB310_9EBF,
+    0xA040_6D4B,
+    0x522B_EE48,
+    0x86E1_8AA3,
+    0x748A_09A0,
+    0x67DA_FA54,
+    0x95B1_7957,
+    0xCBA2_4573,
+    0x39C9_C670,
+    0x2A99_3584,
+    0xD8F2_B687,
+    0x0C38_D26C,
+    0xFE53_516F,
+    0xED03_A29B,
+    0x1F68_2198,
+    0x5125_DAD3,
+    0xA34E_59D0,
+    0xB01E_AA24,
+    0x4275_2927,
+    0x96BF_4DCC,
+    0x64D4_CECF,
+    0x7784_3D3B,
+    0x85EF_BE38,
+    0xDBFC_821C,
+    0x2997_011F,
+    0x3AC7_F2EB,
+    0xC8AC_71E8,
+    0x1C66_1503,
+    0xEE0D_9600,
+    0xFD5D_65F4,
+    0x0F36_E6F7,
+    0x61C6_9362,
+    0x93AD_1061,
+    0x80FD_E395,
+    0x7296_6096,
+    0xA65C_047D,
+    0x5437_877E,
+    0x4767_748A,
+    0xB50C_F789,
+    0xEB1F_CBAD,
+    0x1974_48AE,
+    0x0A24_BB5A,
+    0xF84F_3859,
+    0x2C85_5CB2,
+    0xDEEE_DFB1,
+    0xCDBE_2C45,
+    0x3FD5_AF46,
+    0x7198_540D,
+    0x83F3_D70E,
+    0x90A3_24FA,
+    0x62C8_A7F9,
+    0xB602_C312,
+    0x4469_4011,
+    0x5739_B3E5,
+    0xA552_30E6,
+    0xFB41_0CC2,
+    0x092A_8FC1,
+    0x1A7A_7C35,
+    0xE811_FF36,
+    0x3CDB_9BDD,
+    0xCEB0_18DE,
+    0xDDE0_EB2A,
+    0x2F8B_6829,
+    0x82F6_3B78,
+    0x709D_B87B,
+    0x63CD_4B8F,
+    0x91A6_C88C,
+    0x456C_AC67,
+    0xB707_2F64,
+    0xA457_DC90,
+    0x563C_5F93,
+    0x082F_63B7,
+    0xFA44_E0B4,
+    0xE914_1340,
+    0x1B7F_9043,
+    0xCFB5_F4A8,
+    0x3DDE_77AB,
+    0x2E8E_845F,
+    0xDCE5_075C,
+    0x92A8_FC17,
+    0x60C3_7F14,
+    0x7393_8CE0,
+    0x81F8_0FE3,
+    0x5532_6B08,
+    0xA759_E80B,
+    0xB409_1BFF,
+    0x4662_98FC,
+    0x1871_A4D8,
+    0xEA1A_27DB,
+    0xF94A_D42F,
+    0x0B21_572C,
+    0xDFEB_33C7,
+    0x2D80_B0C4,
+    0x3ED0_4330,
+    0xCCBB_C033,
+    0xA24B_B5A6,
+    0x5020_36A5,
+    0x4370_C551,
+    0xB11B_4652,
+    0x65D1_22B9,
+    0x97BA_A1BA,
+    0x84EA_524E,
+    0x7681_D14D,
+    0x2892_ED69,
+    0xDAF9_6E6A,
+    0xC9A9_9D9E,
+    0x3BC2_1E9D,
+    0xEF08_7A76,
+    0x1D63_F975,
+    0x0E33_0A81,
+    0xFC58_8982,
+    0xB215_72C9,
+    0x407E_F1CA,
+    0x532E_023E,
+    0xA145_813D,
+    0x758F_E5D6,
+    0x87E4_66D5,
+    0x94B4_9521,
+    0x66DF_1622,
+    0x38CC_2A06,
+    0xCAA7_A905,
+    0xD9F7_5AF1,
+    0x2B9C_D9F2,
+    0xFF56_BD19,
+    0x0D3D_3E1A,
+    0x1E6D_CDEE,
+    0xEC06_4EED,
+    0xC38D_26C4,
+    0x31E6_A5C7,
+    0x22B6_5633,
+    0xD0DD_D530,
+    0x0417_B1DB,
+    0xF67C_32D8,
+    0xE52C_C12C,
+    0x1747_422F,
+    0x4954_7E0B,
+    0xBB3F_FD08,
+    0xA86F_0EFC,
+    0x5A04_8DFF,
+    0x8ECE_E914,
+    0x7CA5_6A17,
+    0x6FF5_99E3,
+    0x9D9E_1AE0,
+    0xD3D3_E1AB,
+    0x21B8_62A8,
+    0x32E8_915C,
+    0xC083_125F,
+    0x1449_76B4,
+    0xE622_F5B7,
+    0xF572_0643,
+    0x0719_8540,
+    0x590A_B964,
+    0xAB61_3A67,
+    0xB831_C993,
+    0x4A5A_4A90,
+    0x9E90_2E7B,
+    0x6CFB_AD78,
+    0x7FAB_5E8C,
+    0x8DC0_DD8F,
+    0xE330_A81A,
+    0x115B_2B19,
+    0x020B_D8ED,
+    0xF060_5BEE,
+    0x24AA_3F05,
+    0xD6C1_BC06,
+    0xC591_4FF2,
+    0x37FA_CCF1,
+    0x69E9_F0D5,
+    0x9B82_73D6,
+    0x88D2_8022,
+    0x7AB9_0321,
+    0xAE73_67CA,
+    0x5C18_E4C9,
+    0x4F48_173D,
+    0xBD23_943E,
+    0xF36E_6F75,
+    0x0105_EC76,
+    0x1255_1F82,
+    0xE03E_9C81,
+    0x34F4_F86A,
+    0xC69F_7B69,
+    0xD5CF_889D,
+    0x27A4_0B9E,
+    0x79B7_37BA,
+    0x8BDC_B4B9,
+    0x988C_474D,
+    0x6AE7_C44E,
+    0xBE2D_A0A5,
+    0x4C46_23A6,
+    0x5F16_D052,
+    0xAD7D_5351,
 ];
 
 fn crc32c_calc(buf: &[u8]) -> u32 {
-    let mut crc = 0xFFFFFFFF;
+    let mut crc = 0xFFFF_FFFF;
 
     for &b in buf {
-        crc = CRC32C_LO_TABLE[((crc ^ b as u32) & 0xff) as usize] ^ (crc >> 8);
+        crc = CRC32C_LO_TABLE
+            [usize::try_from((crc ^ u32::from(b)) & 0xff).expect("invalid chksum byte size")]
+            ^ (crc >> 8);
     }
 
     crc

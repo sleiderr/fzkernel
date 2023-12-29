@@ -13,14 +13,19 @@ use crate::fs::ext4::inode::{InodeCount, InodeCount16};
 use crate::fs::ext4::sb::{
     Ext4BlkCount, Ext4BlkCount16, Ext4FsUuid, Ext4Superblock, IncompatibleFeatureSet,
 };
-use crate::fs::ext4::{crc32c_calc, Ext4Fs};
+use crate::fs::ext4::{crc32c_calc, LockedExt4Fs, WeakLockedExt4Fs};
 use crate::fs::IOResult;
+use crate::time::{current_timestamp, UnixTimestamp};
 use crate::{error, ext4_flag_field, ext4_uint_field_range};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bytemuck::{bytes_of, cast, from_bytes, Pod, Zeroable};
 use core::cmp::Ordering;
 use core::mem;
 use core::ops::{Deref, DerefMut};
+use core::sync::atomic::AtomicU32;
+use hashbrown::HashMap;
+use spin::RwLock;
 
 /// A number representing a block group.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
@@ -105,13 +110,14 @@ impl GroupDescriptorChksum {
     pub(crate) const ERASE_CHKSUM: Self = Self(0);
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub(crate) struct GroupDescriptor {
     pub(crate) group_number: BlockGroupNumber,
     pub(crate) block_bitmap: Option<BlockBitmap>,
     pub(crate) inode_bitmap: Option<InodeBitmap>,
 
     descriptor: Ext4GroupDescriptor,
+    fs: LockedExt4Fs,
 }
 
 impl Deref for GroupDescriptor {
@@ -129,6 +135,23 @@ impl DerefMut for GroupDescriptor {
 }
 
 impl GroupDescriptor {
+    pub(crate) fn get_or_load_inode_bitmap(&mut self) -> &mut InodeBitmap {
+        if self.inode_bitmap.is_some() {
+            return self.inode_bitmap.as_mut().unwrap();
+        }
+
+        self.load_inode_bitmap();
+        self.inode_bitmap.as_mut().unwrap()
+    }
+
+    pub(crate) fn get_or_load_blk_bitmap(&mut self) -> &mut BlockBitmap {
+        if self.block_bitmap.is_some() {
+            return self.block_bitmap.as_mut().unwrap();
+        }
+
+        self.load_blk_bitmap();
+        self.block_bitmap.as_mut().unwrap()
+    }
     /// Compares the checksum of the `GroupDescriptor` to its on-disk value.
     ///
     /// The checksum of an [`Ext4GroupDescriptor`] can be computed (after having set the checksum field to 0) using:
@@ -136,8 +159,10 @@ impl GroupDescriptor {
     /// ```
     /// crc32c_calc(fs_uuid + group_number + group_descriptor)
     /// ```
-    pub(crate) fn validate_chksum(&self, fs_uuid: Ext4FsUuid) -> bool {
-        let comp_chksum = self.compute_chksum(fs_uuid);
+    pub(crate) fn validate_chksum(&self) -> bool {
+        let fs = self.fs.read();
+        let sb = fs.superblock.read();
+        let comp_chksum = self.compute_chksum(sb.uuid);
 
         if comp_chksum != self.checksum {
             error!(
@@ -155,9 +180,12 @@ impl GroupDescriptor {
     /// Loads a `GroupDescriptor` from disk, from its identifier ([`BlockGroupNumber`]).
     pub(super) fn load_descriptor(
         id: BlockGroupNumber,
-        superblock: &Ext4Superblock,
-        fs: &Ext4Fs,
+        locked_fs: &LockedExt4Fs,
     ) -> IOResult<Self> {
+        let fs = locked_fs.read();
+        let descriptor_fs_ptr = locked_fs.clone();
+        let superblock = fs.superblock.read();
+
         if id >= superblock.bg_count() {
             return Err(IOError::InvalidCommand);
         }
@@ -184,7 +212,7 @@ impl GroupDescriptor {
         let desc_idx_in_blk = id % descriptor_per_block;
 
         let mut desc_blk = fs.allocate_blk();
-        fs.__read_blk(Ext4RealBlkId::from(desc_blk_id), &mut desc_blk)?;
+        fs.read_blk_from_device(Ext4RealBlkId::from(desc_blk_id), &mut desc_blk)?;
 
         let raw_bg_descriptor = &desc_blk[usize::try_from(desc_idx_in_blk * descriptor_size)
             .expect("invalid group descriptor")
@@ -201,29 +229,28 @@ impl GroupDescriptor {
             descriptor: ext4_descriptor,
             block_bitmap: None,
             inode_bitmap: None,
+            fs: descriptor_fs_ptr,
         };
 
-        if descriptor.validate_chksum(superblock.uuid) {
-            Ok(descriptor)
-        } else {
-            Err(IOError::Unknown)
-        }
+        Ok(descriptor)
     }
 
     /// Loads the [`BlockBitmap`] associated to this block group.
     ///
     /// It verifies its checksum, and initializes it if need be during the process.
-    pub(crate) fn load_blk_bitmap(&mut self, fs: &Ext4Fs) {
+    pub(crate) fn load_blk_bitmap(&mut self) {
+        let fs = self.fs.read();
+        let sb = fs.superblock.read();
         let mut blk_bitmap_buf = fs.allocate_blk();
 
-        fs.__read_blk(self.block_bitmap_blk_addr(), &mut blk_bitmap_buf)
+        fs.read_blk_from_device(self.block_bitmap_blk_addr(), &mut blk_bitmap_buf)
             .unwrap();
         let bitmap = BlockBitmap::from_bytes(
-            &blk_bitmap_buf[..usize::try_from(fs.superblock.blocks_per_group / 8)
-                .expect("invalid block bitmap size")],
+            &blk_bitmap_buf
+                [..usize::try_from(sb.blocks_per_group / 8).expect("invalid block bitmap size")],
         );
         let chksum = self.block_bitmap_csum_lo + self.block_bitmap_csum_hi;
-        bitmap.validate_chksum(fs.superblock.uuid, cast(chksum));
+        bitmap.validate_chksum(sb.uuid, cast(chksum));
 
         self.block_bitmap = Some(bitmap);
     }
@@ -231,17 +258,19 @@ impl GroupDescriptor {
     /// Returns the [`InodeBitmap`] associated to this block group.
     ///
     /// It verifies its checksum, and initializes it if need be during the process.
-    pub(crate) fn load_inode_bitmap(&mut self, fs: &Ext4Fs) {
+    pub(crate) fn load_inode_bitmap(&mut self) {
+        let fs = self.fs.read();
+        let sb = fs.superblock.read();
         let mut inode_bitmap_buf = fs.allocate_blk();
 
-        fs.__read_blk(self.inode_bitmap_blk_addr(), &mut inode_bitmap_buf)
+        fs.read_blk_from_device(self.inode_bitmap_blk_addr(), &mut inode_bitmap_buf)
             .unwrap();
         let bitmap = InodeBitmap::from_bytes(
-            &inode_bitmap_buf[..usize::try_from(fs.superblock.inodes_per_group / 8)
-                .expect("invalid inode bitmap size")],
+            &inode_bitmap_buf
+                [..usize::try_from(sb.inodes_per_group / 8).expect("invalid inode bitmap size")],
         );
         let chksum = self.inode_bitmap_csum_lo + self.inode_bitmap_csum_hi;
-        bitmap.validate_chksum(fs.superblock.uuid, cast(chksum));
+        bitmap.validate_chksum(sb.uuid, cast(chksum));
 
         self.inode_bitmap = Some(bitmap);
     }
@@ -385,5 +414,88 @@ impl Ext4GroupDescriptor {
     /// Returns the number of unused [`Inode`] entries in the inode table for this block group.
     pub(crate) fn unused_inodes_count(&self) -> InodeCount {
         self.itable_unused_lo.add_high_bits(self.itable_unused_hi)
+    }
+}
+
+pub(super) type LockedGroupDescriptor = Arc<RwLock<GroupDescriptor>>;
+
+#[derive(Debug)]
+pub(super) struct GroupDescriptorCacheEntry {
+    /// Strong pointer to the [`GroupDescriptor`] corresponding to the entry.
+    pub(super) group_descriptor: LockedGroupDescriptor,
+
+    /// Number of times this cache entry was accessed.
+    pub(super) usage_count: AtomicU32,
+
+    /// First time this entry was accessed.
+    pub(super) first_access: UnixTimestamp,
+}
+
+#[derive(Debug)]
+pub(super) struct GroupDescriptorCache {
+    pub(super) descriptor_table: HashMap<BlockGroupNumber, GroupDescriptorCacheEntry>,
+
+    pub(super) fs: WeakLockedExt4Fs,
+}
+
+impl GroupDescriptorCache {
+    pub(super) fn load_cached_group_descriptor_or_insert(
+        &mut self,
+        bg_number: BlockGroupNumber,
+    ) -> Option<LockedGroupDescriptor> {
+        if let Some(bg_desc_cache_entry) = self.descriptor_table.get_mut(&bg_number) {
+            bg_desc_cache_entry
+                .usage_count
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            return Some(bg_desc_cache_entry.group_descriptor.clone());
+        }
+
+        let bg_desc = self.load_group_descriptor_from_raw(bg_number).ok()?;
+        let bg_desc_cache_entry = GroupDescriptorCacheEntry {
+            group_descriptor: bg_desc.clone(),
+            usage_count: AtomicU32::default(),
+            first_access: current_timestamp(),
+        };
+
+        self.descriptor_table.insert(bg_number, bg_desc_cache_entry);
+
+        Some(bg_desc)
+    }
+
+    /// Flushes the entire cache (removes every entry), without deallocating the underlying physical memory.
+    pub(super) fn flush_cache(&mut self) {
+        self.descriptor_table.clear();
+    }
+
+    /// Flushes the entire cache (removes every entry), and deallocates the underlying physical memory.
+    pub(super) fn flush_cache_and_deallocate(&mut self) {
+        self.descriptor_table.clear();
+        self.descriptor_table.shrink_to(0);
+    }
+
+    fn load_group_descriptor_from_raw(
+        &self,
+        bg_number: BlockGroupNumber,
+    ) -> IOResult<LockedGroupDescriptor> {
+        let bg_desc = GroupDescriptor::load_descriptor(
+            bg_number,
+            &self.fs.upgrade().ok_or(IOError::Unknown)?.clone(),
+        )?;
+
+        Ok(Arc::new(RwLock::new(bg_desc)))
+    }
+}
+
+impl Deref for GroupDescriptorCache {
+    type Target = HashMap<BlockGroupNumber, GroupDescriptorCacheEntry>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.descriptor_table
+    }
+}
+
+impl DerefMut for GroupDescriptorCache {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.descriptor_table
     }
 }

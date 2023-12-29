@@ -14,8 +14,11 @@ use crate::fs::ext4::extent::{Ext4RealBlkId, Ext4RealBlkId32};
 use crate::fs::ext4::inode::{InodeBlk, InodeCount, InodeNumber, InodeSizeHi, InodeSizeLo};
 use crate::time::UnixTimestamp32;
 use alloc::string::String;
+use alloc::sync::Arc;
 use bytemuck::{bytes_of, cast, Pod, Zeroable};
 use core::cmp::Ordering;
+use core::ops::{Deref, DerefMut};
+use spin::RwLock;
 
 /// Derives the [`core::fmt::Display`] Trait for tuple structs containing a single field.
 #[macro_export]
@@ -29,6 +32,7 @@ macro_rules! ext4_uint_field_derive_display {
     };
 }
 
+/// Derives a range type for custom types defined in `ext4` data structures.
 #[macro_export]
 macro_rules! ext4_uint_field_range {
     ($struct_name: tt, $field_name: tt, $desc: literal) => {
@@ -468,7 +472,7 @@ impl Ext4BlkCount32 {
 /// 64-bit encoded logical block count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct Ext4BlkCount(u64);
+pub(crate) struct Ext4BlkCount(pub(super) u64);
 
 ext4_uint_field_derive_display!(Ext4BlkCount);
 
@@ -658,10 +662,45 @@ ext4_sb_string_field!(Ext4SuperblockVolumeName, 16);
 ext4_sb_string_field!(Ext4SuperblockLastMountedPath, 64);
 ext4_sb_string_field!(Ext4SuperblockMountOptionsString, 64);
 
+/// Metadata checksum algorithm type
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub(crate) struct Ext4ChksumAlgorithm(u8);
+
+impl Ext4ChksumAlgorithm {
+    /// crc32c algorithm (only valid value for that field).
+    pub(crate) const CHKSUM_CRC32_C: Self = Self(0x1);
+}
+
 /// Checksum of the associated `Ext4Superblock` structure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct Ext4SuperblockChksum(u32);
+
+/// Smart pointer to a locked [`Superblock`].
+///
+/// Most `ext4` related data structures have their own copy of that pointer.
+pub(super) type LockedSuperblock = Arc<RwLock<Superblock>>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(C)]
+pub(crate) struct Superblock {
+    pub(crate) ext4_superblock: Ext4Superblock,
+}
+
+impl Deref for Superblock {
+    type Target = Ext4Superblock;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ext4_superblock
+    }
+}
+
+impl DerefMut for Superblock {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ext4_superblock
+    }
+}
 
 /// The ext4 `Superblock` hold useful information about the filesystem's characteristics and
 /// attributes (block count, sizes, required features, ...).
@@ -748,10 +787,10 @@ pub(crate) struct Ext4Superblock {
     pub(crate) rev_level: Ext4SuperblockRevision,
 
     /// Default user ID for reserved blocks
-    pub def_resuid: u16,
+    pub(crate) def_resuid: u16,
 
     /// Default group ID for reserved blocks
-    pub def_resgid: u16,
+    pub(crate) def_resgid: u16,
 
     /// First non-reserved inode in file system
     pub(crate) first_ino: InodeNumber,
@@ -760,7 +799,7 @@ pub(crate) struct Ext4Superblock {
     pub(crate) inode_size: u16,
 
     /// Block group number of this superblock
-    pub block_group_nr: u16,
+    pub(crate) block_group_nr: u16,
 
     /// Compatible feature set
     pub(crate) feature_compat: CompatibleFeatureSet,
@@ -818,7 +857,7 @@ pub(crate) struct Ext4Superblock {
     pub(crate) default_mount_options: Ext4SuperblockMountOptions,
 
     /// First metablock block group, if enabled
-    pub first_meta_bg: u32,
+    pub(crate) first_meta_bg: BlockGroupNumber,
 
     /// File system creation time
     pub(crate) mkfs_time: UnixTimestamp32,
@@ -843,10 +882,10 @@ pub(crate) struct Ext4Superblock {
     pub(crate) free_blocks_count_hi: Ext4BlkCount32,
 
     /// Minimum inode size (in bytes)
-    pub min_extra_isize: u16,
+    pub(crate) min_extra_isize: u16,
 
     /// Minimum inode reservation size (in bytes)
-    pub want_extra_isize: u16,
+    pub(crate) want_extra_isize: u16,
 
     /// Miscellaneous flags
     pub(crate) flags: Ext4SuperblockFlags,
@@ -867,10 +906,10 @@ pub(crate) struct Ext4Superblock {
     /// `FLEX_BG` group size
     ///
     /// Defined as `log_2(groups_per_flex) - 10`
-    pub log_groups_per_flex: u8,
+    pub(crate) log_groups_per_flex: u8,
 
     /// Metadata checksum algorithm used
-    pub checksum_type: u8,
+    pub(crate) checksum_type: Ext4ChksumAlgorithm,
 
     /// Padding to next 32 bits
     reserved_pad: u16,
@@ -893,7 +932,7 @@ pub(crate) struct Ext4Superblock {
     /// Number of filesystem errors
     pub(crate) error_count: u32,
 
-    /// First time an error occured
+    /// First time an error occurred
     pub(crate) first_error_time: UnixTimestamp32,
 
     /// Inode number in the first error
@@ -902,25 +941,25 @@ pub(crate) struct Ext4Superblock {
     /// Block number in the first error
     pub(crate) first_error_block: Ext4RealBlkId,
 
-    /// Function where the first error occured
+    /// Function where the first error occurred
     first_error_func: [u8; 32],
 
-    /// Line number where the first error occured
+    /// Line number where the first error occurred
     first_error_line: u32,
 
-    /// Last time an error occured
+    /// Last time an error occurred
     pub(crate) last_error_time: UnixTimestamp32,
 
     /// Inode number of the last error
     pub(crate) last_error_ino: InodeNumber,
 
-    /// Line number where the last error occured
+    /// Line number where the last error occurred
     last_error_line: u32,
 
     /// Block number in the last error
     pub(crate) last_error_block: Ext4RealBlkId,
 
-    /// Function where the last error occured
+    /// Function where the last error occurred
     last_error_func: [u8; 32],
 
     /// Mount options (C string)
@@ -936,7 +975,7 @@ pub(crate) struct Ext4Superblock {
     pub(crate) overhead_blocks: Ext4BlkCount32,
 
     /// Block groups with backup `Superblock`s if the sparse superblock is set
-    backup_bgs: [u32; 2],
+    backup_bgs: [BlockGroupNumber; 2],
 
     /// Encryption algorithm used
     encrypt_algos: [Ext4EncryptionAlgorithm; 4],
@@ -990,6 +1029,33 @@ pub(crate) struct Ext4Superblock {
 }
 
 impl Ext4Superblock {
+    /// Returns the [`BlockGroupNumber`] of the block group to which the given `Inode` belongs to.
+    ///
+    /// Does not check that the given [`InodeNumber`] is valid / in filesystem bounds.
+    pub(super) fn get_inode_blk_group(&self, inode_id: InodeNumber) -> BlockGroupNumber {
+        cast((inode_id - 1) / self.inodes_per_group)
+    }
+
+    /// Returns the position of the requested `Inode` on disk.
+    ///
+    /// The position is a tuple `(block_group_id, entry_block_offset_in_block_group, entry_byte_offset_in_block)`
+    pub(super) fn get_inode_entry_pos(
+        &self,
+        inode_id: InodeNumber,
+    ) -> (BlockGroupNumber, Ext4BlkCount, u64) {
+        let inode_bg_idx = (inode_id - 1) % self.inodes_per_group;
+        let inode_byte_idx = u64::from(inode_bg_idx) * u64::from(self.inode_size);
+
+        let inode_blk_offset: u64 = inode_byte_idx / self.blk_size();
+
+        let inode_bytes_idx_in_blk: u64 = inode_byte_idx % self.blk_size();
+
+        (
+            self.get_inode_blk_group(inode_id),
+            cast(inode_blk_offset),
+            inode_bytes_idx_in_blk,
+        )
+    }
     /// Compares the checksum of the `Ext4Superblock` to its on-disk value.
     ///
     /// The checksum of an `Ext4Superblock` can be computed (after having set the checksum field to 0) using:

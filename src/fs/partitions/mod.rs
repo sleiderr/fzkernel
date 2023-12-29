@@ -9,7 +9,7 @@ use crate::fs::{
         gpt::{GPTPartitionEntry, GUIDPartitionTable},
         mbr::{MBRPartitionEntry, MBRPartitionTable},
     },
-    PartFS,
+    Fs, PartFS,
 };
 
 pub mod gpt;
@@ -18,7 +18,7 @@ pub mod mbr;
 /// A partition structure, that does not depend on the partition format (_GPT_ or _MBR_).
 ///
 /// Offers several method needed when dealing with partitions.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Partition {
     id: usize,
     drive_id: usize,
@@ -85,7 +85,6 @@ impl Partition {
                     .map_err(|_| MountError::IOError)?
                 {
                     let fs = Ext4Fs::mount(self.drive_id, self.id, meta.start_lba())?;
-
                     PartFS::Ext4(alloc::boxed::Box::new(fs))
                 } else {
                     PartFS::Unknown

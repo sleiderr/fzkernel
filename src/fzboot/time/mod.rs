@@ -58,6 +58,11 @@ pub fn now() -> f64 {
     TSC_CLK.get().unwrap().tsc_time()
 }
 
+#[must_use]
+pub fn current_timestamp() -> UnixTimestamp {
+    UnixTimestamp(0)
+}
+
 /// Waits for a given amount of milliseconds.
 ///
 /// # Examples

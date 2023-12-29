@@ -1,3 +1,8 @@
+//! `ext4` bitmap-related structures
+//!
+//! Provides methods for loading and interacting with the various bitmaps used by the `ext4` filesystem ([`InodeBitmap`]
+//! and [`BlockBitmap`]).
+
 use crate::error;
 use crate::fs::ext4::crc32c_calc;
 use crate::fs::ext4::extent::Ext4RealBlkId;
@@ -6,6 +11,7 @@ use crate::fs::ext4::sb::Ext4FsUuid;
 use alloc::vec::Vec;
 use bytemuck::{bytes_of, cast, Pod, Zeroable};
 use core::ops::Range;
+
 use vob::Vob;
 
 /// Checksum of the [`BlockBitmap`] structure.

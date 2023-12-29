@@ -6,22 +6,23 @@ use core::{cmp::Ordering, mem};
 
 use alloc::vec::Vec;
 use bytemuck::{bytes_of, cast, from_bytes, Pod, Zeroable};
+use core::ops::Deref;
 
-use crate::fs::ext4::inode::InodeNumber;
+use crate::fs::ext4::inode::{Inode, InodeNumber, LockedInode, LockedInodeStrongRef};
 use crate::fs::ext4::sb::{Ext4BlkCount, Ext4FsUuid, IncompatibleFeatureSet};
+use crate::fs::ext4::LockedExt4Fs;
 use crate::{
     error,
     errors::{CanFail, IOError},
     ext4_uint_field_range,
-    fs::ext4::{crc32c_calc, inode::InodeGeneration, Ext4Fs, Inode},
+    fs::ext4::{crc32c_calc, inode::InodeGeneration, Ext4Fs, Ext4Inode},
 };
 
 /// Internal ext4 extent tree representation.
-#[derive(Default, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Clone)]
 pub(crate) struct ExtentTree {
     pub(crate) extents: Vec<Extent>,
-    inode_id: InodeNumber,
-    inode_gen: InodeGeneration,
+    locked_inode: LockedInodeStrongRef,
 }
 
 impl core::fmt::Debug for ExtentTree {
@@ -56,7 +57,7 @@ impl core::fmt::Debug for ExtentTree {
 /// │             │ Extent (leaf node) │                     │    (checksum of the block)  │
 /// └─────────────┴────────────────────┴─────────────────────┴─────────────────────────────┘
 ///
-/// Extent blocks are directly loaded from disk when parsing an [`Inode`] extent tree.
+/// Extent blocks are directly loaded from disk when parsing an [`Ext4Inode`] extent tree.
 ///
 /// # Checksum
 ///
@@ -155,9 +156,9 @@ fn traverse_extent_layer(
     fs: &Ext4Fs,
     ext_data: &ExtentBlock,
     extents: &mut Vec<Extent>,
-    inode_id: InodeNumber,
-    inode_gen: InodeGeneration,
+    inode: &Inode,
 ) -> Option<()> {
+    let sb = fs.superblock.read();
     let header = ext_data.get_header();
 
     // this extent points directly to data blocks
@@ -174,27 +175,28 @@ fn traverse_extent_layer(
     for entry in 0..cast::<Ext4ExtentHeaderEntriesCount, u16>(header.entries) {
         let extent_idx: ExtentIdx = ext_data.get_entry_bytes(entry)?.as_extent_idx();
 
-        let mut data = alloc::vec![0u8; usize::try_from(fs.superblock.blk_size()).ok()?];
+        let mut data = fs.allocate_blk();
 
-        fs.__read_blk(extent_idx.leaf(), &mut data).ok()?;
+        fs.read_blk_from_device(extent_idx.leaf(), &mut data).ok()?;
 
         let extent_blk = ExtentBlock(data);
-        extent_blk.validate_chksum(fs.superblock.uuid, inode_id, inode_gen);
-        traverse_extent_layer(fs, &extent_blk, extents, inode_id, inode_gen);
+        extent_blk.validate_chksum(sb.uuid, inode.number, inode.generation());
+        traverse_extent_layer(fs, &extent_blk, extents, inode);
     }
 
     Some(())
 }
 
 impl ExtentTree {
-    /// Loads an entire extent tree associated with an [`Inode`] to memory.
+    /// Loads an entire extent tree associated with an [`Ext4Inode`] to memory.
     pub(crate) fn load_extent_tree(
-        fs: &Ext4Fs,
-        inode: &Inode,
-        inode_id: InodeNumber,
+        locked_fs: LockedExt4Fs,
+        locked_inode: LockedInodeStrongRef,
     ) -> Option<Self> {
-        if !fs
-            .superblock
+        let fs = locked_fs.read();
+        let sb = fs.superblock.read();
+        let inode = locked_inode.read();
+        if !sb
             .feature_incompat
             .includes(IncompatibleFeatureSet::EXT4_FEATURE_INCOMPAT_EXTENTS)
             | !inode.uses_extent_tree()
@@ -203,24 +205,19 @@ impl ExtentTree {
         };
         let mut extents: Vec<Extent> = alloc::vec![];
         let extent_blk = inode.i_block.as_extent_block();
+        drop(sb);
 
-        traverse_extent_layer(
-            fs,
-            &extent_blk,
-            &mut extents,
-            inode_id,
-            cast(inode.i_generation),
-        );
+        traverse_extent_layer(fs.deref(), &extent_blk, &mut extents, inode.deref());
         extents.sort_unstable();
+        drop(inode);
 
         Some(Self {
             extents,
-            inode_id,
-            inode_gen: cast(inode.i_generation),
+            locked_inode,
         })
     }
 
-    /// Returns the physical block address corresponding to a logical block for this [`Inode`].
+    /// Returns the physical block address corresponding to a logical block for this [`Ext4Inode`].
     pub(crate) fn get_exact_blk_mapping(&self, blk_id: Ext4InodeRelBlkId) -> Option<Ext4RealBlkId> {
         let ext_id = self
             .extents
@@ -261,6 +258,14 @@ impl Ext4RealBlkId32 {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
 pub(crate) struct Ext4RealBlkId(u64);
+
+impl core::ops::Add<Ext4BlkCount> for Ext4RealBlkId {
+    type Output = Ext4RealBlkId;
+
+    fn add(self, rhs: Ext4BlkCount) -> Self::Output {
+        Self(self.0.saturating_add(rhs.0))
+    }
+}
 
 impl core::ops::Add<u64> for Ext4RealBlkId {
     type Output = Ext4RealBlkId;
@@ -324,7 +329,7 @@ impl core::ops::Add<Ext4InodeRelBlkId> for Ext4RealBlkId {
     }
 }
 
-/// A logical block address, relative to the beginning of this [`Inode`].
+/// A logical block address, relative to the beginning of this [`Ext4Inode`].
 ///
 /// Must be translated to a [`Ext4RealBlkId`] in order to be used to read valid data from the
 /// disk.
