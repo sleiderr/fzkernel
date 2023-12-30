@@ -26,6 +26,20 @@ license = "GPL-3.0-or-later"
 keywords = ["bootloader", "os"]
 categories = ["no-std", "embedded"]
 
+[dependencies]
+crossterm = "0.27"
+anyhow = "1.0"
+ratatui = { version = "0.22.0", features = ["all-widgets"]}
+argh = "0.1"
+crossbeam = "0.8"
+tokio = { version = "1.31.0", features = ["full"] }
+async-trait = "0.1"
+conquer-once = "0.4"
+futures = "0.3"
+llvm-tools = "0.1.1"
+rayon = "1.7"
+parking_lot = "0.12"
+
 [build-dependencies]
 llvm-tools = "0.1.1"
 

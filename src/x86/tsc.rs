@@ -32,6 +32,7 @@ use core::{arch::asm, hint};
 use conquer_once::spin::OnceCell;
 
 use crate::{
+    errors::{CanFail, ClockError},
     info,
     io::acpi::hpet::HPET_CLK,
     x86::{
@@ -63,10 +64,10 @@ impl TSCClock {
     ///
     /// Returns an error if there are no available calibration methods, or if `TSC` is not
     /// supported on the device.
-    pub fn init() -> Result<(), ()> {
-        if !cpu_feature_support(CPU_FEAT_TSC).ok_or(())? {
+    pub fn init() -> CanFail<ClockError> {
+        if !cpu_feature_support(CPU_FEAT_TSC).ok_or(ClockError::NotPresent)? {
             info!("tsc", "Time-Stamp Counter is not available on this CPU");
-            return Err(());
+            return Err(ClockError::NotPresent);
         }
 
         let invariant = __tsc_invariant_support();
@@ -121,7 +122,7 @@ impl TSCClock {
     ///
     /// In case of a non-invariant clock, it may be necessary to regularly recalibrate the clock,
     /// as the frequency might change over time.
-    pub fn tsc_recalibrate(&mut self) -> Result<f64, ()> {
+    pub fn tsc_recalibrate(&mut self) -> Result<f64, ClockError> {
         // No need to recalibrate it if invariant.
         if self.invariant {
             return Ok(self.tsc_freq);
@@ -163,8 +164,8 @@ impl TSCClock {
     /// Calibrates the TSC using the [`HPETClock`].
     ///
     /// Returns the frequency of the TSC, in Hz, or fails if there is no available [`HPETClock'].
-    fn __calibrate_tsc_with_hpet(&mut self) -> Result<f64, ()> {
-        let hpet = HPET_CLK.get().ok_or(())?;
+    fn __calibrate_tsc_with_hpet(&mut self) -> Result<f64, ClockError> {
+        let hpet = HPET_CLK.get().ok_or(ClockError::CalibrationError)?;
 
         let entry_tsc = self.tsc_read();
         let entry_us = hpet.clk_time();
@@ -193,12 +194,12 @@ impl TSCClock {
     ///
     /// If none of this worked, it uses the information contained in `MSR_PLATFORM_INFO` as a
     /// final attemps at retrieving the TSC frequency.
-    fn __calibrate_tsc_cpuid(&mut self) -> Result<f64, ()> {
+    fn __calibrate_tsc_cpuid(&mut self) -> Result<f64, ClockError> {
         // TSC and Crystal clock Information Leaf -> CPUID.15H
         // EAX : Denominator of TSC/"core crystal clock" ratio
         // EBX : Numerator of TSC/"core crystal clock" ratio
         // ECX : Nominal frequency of core crystal clock
-        let res = cpu_id(0x15).ok_or(())?;
+        let res = cpu_id(0x15).ok_or(ClockError::CalibrationError)?;
 
         if res[0] != 0 && res[1] != 0 {
             if res[2] != 0 {
@@ -257,7 +258,7 @@ impl TSCClock {
             }
         }
 
-        Err(())
+        Err(ClockError::CalibrationError)
     }
 }
 

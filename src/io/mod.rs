@@ -27,7 +27,7 @@ pub fn outw(port: u16, data: u16) {
     }
 }
 
-pub fn outd(port: u16, data: u32) {
+pub fn outl(port: u16, data: u32) {
     unsafe { asm!("pusha") }
     unsafe {
         asm!(
@@ -48,6 +48,19 @@ pub fn inb(port: u32) -> u8 {
         out("al") data
         );
     }
+    data
+}
+
+pub fn inl(port: u16) -> u32 {
+    let data: u32;
+    unsafe {
+        asm!(
+        "in eax, dx",
+        in("dx") port,
+        out("eax") data
+        );
+    }
+
     data
 }
 

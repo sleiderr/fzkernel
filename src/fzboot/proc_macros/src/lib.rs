@@ -3,8 +3,6 @@
 extern crate proc_macro2;
 
 use std::fs;
-use std::path;
-use std::path::PathBuf;
 
 use proc_macro2::{Literal, Span, TokenStream};
 use quote::quote;
@@ -27,32 +25,17 @@ pub fn interrupt_descriptor_table(
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     let offset = u32::from_str_radix(
-        &args
-            .to_string()
-            .split("x")
+        args.to_string()
+            .split('x')
             .collect::<Vec<&str>>()
             .get(1)
             .unwrap(),
         16,
     )
     .unwrap();
-    let item_2 = TokenStream::from(item.clone());
-    let item_1 = item;
-    let module = parse_macro_input!(item_1 as syn::ItemMod);
 
-    let mut mod_filename = format!(
-        "{}/handlers.rs",
-        proc_macro::Span::call_site()
-            .source_file()
-            .path()
-            .parent()
-            .unwrap()
-            .to_str()
-            .unwrap(),
-    );
-    let path = PathBuf::from(&mod_filename);
-    let file = fs::read_to_string(&path).unwrap();
-    let code = parse_file(&file).unwrap();
+    let item_2 = TokenStream::from(item.clone());
+
     let mut interrupts_token: Vec<TokenStream> = Vec::new();
     // Iterate over all 256 interrupts
     for i in 0..256 {
@@ -63,7 +46,7 @@ pub fn interrupt_descriptor_table(
             &format!("{}{}", "int", int_number),
             syn::__private::Span::mixed_site(),
         );
-        let fn_name = Ident::new(&title, Span::mixed_site());
+        let fn_name = Ident::new(title, Span::mixed_site());
         // Add statements to set handler's address for this entry in the IDT
         let code = quote! {
             let #ident = table.get_entry_mut(#int_number).unwrap();
@@ -106,6 +89,7 @@ pub fn interrupt_descriptor_table(
 ///
 /// This macro wraps the function in a naked wrapper function.
 /// The wrapper function is defined as follows :
+///
 /// ```rust
 /// use std::arch::asm;
 ///
@@ -121,52 +105,45 @@ pub fn interrupt_descriptor_table(
 /// ```
 #[proc_macro_attribute]
 pub fn interrupt(
-    args: proc_macro::TokenStream,
+    _args: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let arg = args.to_string();
-    let arg = arg.as_str();
-    let item_2 = TokenStream::from(item.clone());
     let func = parse_macro_input!(item as ItemFn);
     let ItemFn {
-        attrs,
-        vis,
+        attrs: _,
+        vis: _,
         sig,
         block,
     } = func;
 
-    match arg {
-        // Handle specific arg (not implemented yet)
-        _ => {
-            let name = sig.ident.to_string();
-            let wrapped_name = format!("_wrapped{}", name);
+    // Handle specific arg (not implemented yet)
+    let name = sig.ident.to_string();
+    let wrapped_name = format!("_wrapped{}", name);
 
-            /// Compute int number
-            let int_number: u32 =
-                u32::from_str_radix(name.split("x").collect::<Vec<&str>>().get(1).unwrap(), 16)
-                    .unwrap();
-            let default_ident = Ident::new(&"int_n", Span::mixed_site());
-            let body = &block.stmts;
-            let wrapped_ident = Ident::new(wrapped_name.as_str(), Span::mixed_site());
-            // Rename routine to wrap it
-            let wrapped = quote! {
-                #[no_mangle]
-                #[link_section = ".int"]
-                pub fn #wrapped_ident () {
-                    #(#body)*
-                }
-            };
+    // Compute int number
+    let body = &block.stmts;
+    let wrapped_ident = Ident::new(wrapped_name.as_str(), Span::mixed_site());
+    // Rename routine to wrap it
+    let wrapped = quote! {
+        #[no_mangle]
+        #[link_section = ".int"]
+        pub fn #wrapped_ident () {
+            #(#body)*
+        }
+    };
 
-            // Define wrapper assembly
-            let wrapper = format!(
-                "pushad
+    // Define wrapper assembly
+    let wrapper = format!(
+        "pushad
+                call _int_entry
                 call {}
+                call _pic_eoi
                 popad
                 iretd",
-                wrapped_name
-            );
+        wrapped_name
+    );
 
-            let wrapper_ident = Ident::new(&name, Span::mixed_site());
+    let wrapper_ident = Ident::new(&name, Span::mixed_site());
 
             let wrapper = quote! {
                 #[link_section = ".int"]
@@ -186,19 +163,24 @@ pub fn interrupt(
             };
             stream.into()
         }
-    }
+    };
+
+    let stream = quote! {
+        #wrapped
+        #wrapper
+    };
+    stream.into()
 }
 
 #[proc_macro_attribute]
 pub fn interrupt_default(
-    args: proc_macro::TokenStream,
+    _args: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let item_2 = TokenStream::from(item.clone());
     let default = parse_macro_input!(item as syn::ItemFn);
     let ItemFn {
-        attrs,
-        vis,
+        attrs: _,
+        vis: _,
         sig,
         block,
     } = default;
@@ -213,23 +195,20 @@ pub fn interrupt_default(
     let file = fs::read_to_string(&path).unwrap();
     let code = parse_file(&file).unwrap();
     for item in code.items {
-        match item {
-            Item::Fn(f) => {
-                if f.sig.ident != sig.ident {
-                    let title = f.sig.ident.to_string();
-                    // Ignore naked wrappers
-                    if title.find("naked").is_none() {
-                        let int_number: usize = usize::from_str_radix(
-                            title.split("x").collect::<Vec<&str>>().get(1).unwrap(),
-                            16,
-                        )
-                        .unwrap();
-                        // We compute interrupts number and append it to the int_defined list
-                        int_defined.push(int_number);
-                    }
+        if let Item::Fn(f) = item {
+            if f.sig.ident != sig.ident {
+                let title = f.sig.ident.to_string();
+                // Ignore naked wrappers
+                if !title.contains("naked") {
+                    let int_number: usize = usize::from_str_radix(
+                        title.split('x').collect::<Vec<&str>>().get(1).unwrap(),
+                        16,
+                    )
+                    .unwrap();
+                    // We compute interrupts number and append it to the int_defined list
+                    int_defined.push(int_number);
                 }
             }
-            _ => {}
         }
     }
 
@@ -254,7 +233,9 @@ pub fn interrupt_default(
             let naked_ident = Ident::new(naked_name.as_str(), Span::mixed_site());
             let wrapper = format!(
                 "pushad
+                call _int_entry
                 call {}
+                call _pic_eoi
                 popad
                 iretd",
                 name
