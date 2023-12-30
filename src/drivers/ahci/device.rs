@@ -39,13 +39,12 @@ use crate::{
 /// let mut buffer = [0u8; 1024];
 /// drive.read(0, 2, &mut buffer);
 /// ```
-#[derive(Debug)]
 pub struct SATADrive {
-    id: usize,
+    pub id: usize,
     device_info: [u16; 256],
     ahci_data: AHCIDriveInfo,
-    partition_table: PartitionTable,
-    partitions: Vec<Partition>,
+    pub partition_table: PartitionTable,
+    pub partitions: Vec<Partition>,
 }
 
 #[derive(Debug)]
@@ -80,6 +79,11 @@ impl SATADrive {
             if let Some(gpt) = gpt {
                 self.partitions = gpt.get_partitions();
                 self.partition_table = PartitionTable::GPT(gpt);
+
+                for partition in &mut self.partitions {
+                    partition.load_fs().unwrap();
+                }
+
                 return;
             }
         }
@@ -104,8 +108,10 @@ impl SATADrive {
 
                         ext_part.set_start_lba(ext_part.start_lba() + meta.start_lba());
 
-                        self.partitions
-                            .push(Partition::from_metadata(PartitionMetadata::MBR(ext_part)));
+                        self.partitions.push(
+                            Partition::from_metadata(0, self.id, PartitionMetadata::MBR(ext_part))
+                                .unwrap(),
+                        );
                         meta = partitions[1];
                     }
                 }

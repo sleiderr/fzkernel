@@ -86,7 +86,7 @@ pub fn load_drive_gpt(drive: &mut SATADrive) -> Option<GUIDPartitionTable> {
         "loading disk guid partition table ({} partitions found)",
         partitions.len()
     );
-    let gpt = Box::new(GPT::new(gpt_header, partitions));
+    let gpt = Box::new(GPT::new(drive.id, gpt_header, partitions));
     Some(gpt)
 }
 
@@ -97,23 +97,32 @@ pub type GUIDPartitionTable = Box<GPT>;
 /// Contains a GPT Header, as well as the list of all used partitions described in the table.
 #[derive(Debug)]
 pub struct GPT {
+    drive_id: usize,
     header: GPTHeader,
     partitions: Vec<GPTPartitionEntry>,
 }
 
 impl GPT {
-    pub fn new(header: GPTHeader, partitions: Vec<GPTPartitionEntry>) -> Self {
-        Self { header, partitions }
+    pub fn new(drive_id: usize, header: GPTHeader, partitions: Vec<GPTPartitionEntry>) -> Self {
+        Self {
+            drive_id,
+            header,
+            partitions,
+        }
     }
 
     /// Returns a [`Partition`] structure for each valid partition entry in this `GPT`.
     pub fn get_partitions(&self) -> Vec<Partition> {
         let mut partitions = alloc::vec![];
 
-        for partition in &self.partitions {
-            partitions.push(Partition::from_metadata(super::PartitionMetadata::GPT(
-                *partition,
-            )));
+        for (i, partition) in self.partitions.iter().enumerate() {
+            let mut part = Partition::from_metadata(
+                i,
+                self.drive_id,
+                super::PartitionMetadata::GPT(*partition),
+            )
+            .unwrap();
+            partitions.push(part);
         }
 
         partitions
@@ -393,7 +402,7 @@ const CRC_32_ANSI_TAB: [u32; 256] = [
     0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94, 0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d,
 ];
 
-fn crc32_calc(buf: &[u8]) -> u32 {
+pub fn crc32_calc(buf: &[u8]) -> u32 {
     let mut crc_32: u32 = 0xFFFFFFFF;
 
     for &b in buf {
@@ -401,4 +410,32 @@ fn crc32_calc(buf: &[u8]) -> u32 {
     }
 
     !crc_32
+}
+
+/// Defines usual `GPT Partition Type` field values.
+macro_rules! gpt_part_type {
+    ($([$name: tt, $id: literal]), *) => {
+        pub enum GPTPartType {
+            $($name,)*
+            Unknown
+        }
+
+        impl From<u128> for GPTPartType {
+            fn from(value: u128) -> GPTPartType {
+                match value {
+                    $($id => Self::$name,)*
+                    _ => Self::Unknown
+                }
+            }
+        }
+
+        impl From<GPTPartType> for u128 {
+            fn from(value: GPTPartType) -> u128 {
+                match value {
+                    $(GPTPartType::$name => $id,)*
+                    GPTPartType::Unknown => 0,
+                }
+            }
+        }
+    };
 }

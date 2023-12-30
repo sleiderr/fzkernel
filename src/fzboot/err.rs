@@ -68,6 +68,9 @@ pub enum IOError {
     /// Invalid I/O command
     InvalidCommand,
 
+    /// Invalid device identifier supplied
+    InvalidDevice,
+
     #[cfg(feature = "alloc")]
     /// Generic error.
     Exception(Box<dyn BaseError>),
@@ -102,12 +105,22 @@ pub enum ClockError {
 }
 
 #[derive(Debug)]
+pub enum MountError {
+    Unknown,
+    InvalidChecksum,
+    BadSuperblock,
+    IOError,
+}
+
+#[derive(Debug)]
 pub struct E820Error {}
 impl E820Error {
     pub fn new() -> Self {
         Self {}
     }
 }
+
+impl BaseError for MountError {}
 
 impl BaseError for E820Error {}
 
