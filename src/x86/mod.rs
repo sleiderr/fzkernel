@@ -6,6 +6,9 @@ pub mod tsc;
 #[cfg(feature = "alloc")]
 pub mod idt;
 
+#[cfg(feature = "alloc")]
+pub mod apic;
+
 pub mod int {
     use core::arch::asm;
     pub fn interrupts_disabled() -> bool {
