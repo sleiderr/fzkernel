@@ -7,13 +7,6 @@
 //!
 //! Follows the _Intel 1.4 MultiProcessor Specification_
 
-#![allow(unreachable_pub)]
-#![allow(trivial_casts)]
-#![allow(clippy::no_effect_underscore_binding)]
-#![allow(clippy::map_unwrap_or)]
-#![allow(clippy::identity_op)]
-#![allow(clippy::semicolon_if_nothing_returned)]
-
 use crate::mem::PhyAddr32;
 use crate::x86::apic::local_apic::ProcLocalApicID;
 use alloc::string::String;
@@ -342,7 +335,7 @@ pub(crate) struct MPLocalInterruptEntry {
 pub(crate) struct MPTable {
     floating_ptr: MPFloatingPointer,
     header: MPConfigurationTableHeader,
-    entries: Vec<MPConfigurationEntry>,
+    pub entries: Vec<MPConfigurationEntry>,
 }
 
 impl MPTable {
@@ -434,6 +427,7 @@ impl MPTable {
             .map(Option::unwrap)
             .collect()
     }
+
     /// Returns the I/O Interrupt entry connected to a pin of a given I/O APIC.
     ///
     /// The pin is identified by its number (as a [`MPIOApicIntPin`]), and the I/O APIC by its unique
@@ -475,7 +469,10 @@ impl MPTable {
     ) -> Option<MPLocalInterruptEntry> {
         let int = self.entries.iter().find(|entry| {
             if let MPConfigurationEntry::LocalInterrupt(int) = entry {
-                if int.dest_lapic_id == lapic_id && int.dest_lapic_lintin == pin {
+                if (int.dest_lapic_id == lapic_id
+                    || int.dest_lapic_id == ProcLocalApicID::ALL_LAPIC)
+                    && int.dest_lapic_lintin == pin
+                {
                     return true;
                 }
             }
@@ -551,6 +548,10 @@ impl MPTable {
         } else {
             None
         }
+    }
+
+    pub(super) fn imcr_present(&self) -> bool {
+        self.floating_ptr.feature_information.imcr_presence()
     }
 
     /// Verifies that the structure's checksum (sum of all bits being null) is valid.

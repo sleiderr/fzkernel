@@ -5,8 +5,7 @@
 //! Usually there are 2 PICs configured as master/slave.
 //! Slave interrupts are thus be redirected to the master through one single IRQ.
 
-use crate::io::{io_delay, outb};
-use core::arch::asm;
+use crate::io::{io_delay, outb, IOPort};
 
 /// Initialization is made by sending ICW (Initialization Command Words)
 /// to both Master and Slave controllers.
@@ -139,49 +138,49 @@ impl PIC {
     /// Remap `PIC` IRQs by setting new offset vectors.
     pub fn remap(&self, master_offset: u8, slave_offset: u8) {
         // Start init sequence
-        outb(self.master_cmd_port, DEFAULT_ICW1);
+        outb(self.master_cmd_port.into(), DEFAULT_ICW1);
         io_delay();
-        outb(self.slave_cmd_port, DEFAULT_ICW1);
+        outb(self.slave_cmd_port.into(), DEFAULT_ICW1);
         io_delay();
 
         // Set vector offset
-        outb(self.master_data_port, master_offset);
+        outb(self.master_data_port.into(), master_offset);
         io_delay();
-        outb(self.slave_data_port, slave_offset);
+        outb(self.slave_data_port.into(), slave_offset);
         io_delay();
 
         // Master PIC has slave at IRQ2
-        outb(self.master_data_port, DEFAULT_MASTER_ICW3);
+        outb(self.master_data_port.into(), DEFAULT_MASTER_ICW3);
         io_delay();
-        outb(self.slave_data_port, DEFAULT_SLAVE_ICW3);
+        outb(self.slave_data_port.into(), DEFAULT_SLAVE_ICW3);
         io_delay();
 
         //
-        outb(self.master_data_port, DEFAULT_ICW4);
+        outb(self.master_data_port.into(), DEFAULT_ICW4);
         io_delay();
-        outb(self.slave_data_port, DEFAULT_ICW4);
+        outb(self.slave_data_port.into(), DEFAULT_ICW4);
     }
 
     // Mask utilities are used to enable/disable interrupts on a given controller
 
     /// Masks slave PIC with given bitmask.
     pub fn mask_slave(&self, bitmask: u8) {
-        outb(self.slave_data_port, bitmask);
+        outb(self.slave_data_port.into(), bitmask);
     }
 
     /// Masks master PIC with given bitmask.
     pub fn mask_master(&self, bitmask: u8) {
-        outb(self.master_data_port, bitmask);
+        outb(self.master_data_port.into(), bitmask);
     }
 
     /// Acknowledges master
     pub fn acknowledge_master(&self) {
-        outb(self.master_cmd_port, 0x20)
+        outb(self.master_cmd_port.into(), 0x20)
     }
 
     /// Acknowledges slave
     pub fn acknowledge_slave(&self) {
-        outb(self.slave_cmd_port, 0x20)
+        outb(self.slave_cmd_port.into(), 0x20)
     }
 
     /// Acknowledges both master and slave

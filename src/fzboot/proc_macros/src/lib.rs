@@ -145,23 +145,15 @@ pub fn interrupt(
 
     let wrapper_ident = Ident::new(&name, Span::mixed_site());
 
-            let wrapper = quote! {
-                #[link_section = ".int"]
-                #[naked]
-                pub fn #wrapper_ident () {
-                    unsafe {
-                        asm!(
-                            #wrapper
-                        , options(noreturn))
-                    }
-                }
-            };
-
-            let stream = quote! {
-                #wrapped
-                #wrapper
-            };
-            stream.into()
+    let wrapper = quote! {
+        #[link_section = ".int"]
+        #[naked]
+        pub fn #wrapper_ident () {
+            unsafe {
+                asm!(
+                    #wrapper
+                , options(noreturn))
+            }
         }
     };
 

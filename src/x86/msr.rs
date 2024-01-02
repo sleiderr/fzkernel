@@ -102,13 +102,27 @@ pub unsafe fn msr_write(msr: u32, value: u64) {
 
 pub(crate) const IA32_APIC_BASE: u32 = 0x1B;
 
+/// `IA32_APIC_BASE` structure.
+///
+/// It has the following structure :
+///
+/// ```plaintext
+/// 63                           36 35                   12 11  10  9  8          0
+///  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+/// | //////////////////////////// |    APIC BASE >> 12    |   | /// |   | ////// |
+///  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+///                                                          |         |
+///                                                          |          - - - - BSP flag
+///                                                           - - - - - - - - - Enable/Disable flag
+///```
+///
 #[bitfield]
 #[derive(Clone, Copy, Debug)]
 #[repr(u64)]
 pub(crate) struct Ia32ApicBase {
     #[skip]
     __: B8,
-    is_bsp: bool,
+    pub(crate) is_bsp: bool,
     #[skip]
     __: B2,
     global_enable_flag: bool,
