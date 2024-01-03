@@ -1,3 +1,4 @@
+use bytemuck::{Pod, Zeroable};
 use core::arch::asm;
 
 pub mod acpi;
@@ -5,11 +6,33 @@ pub mod disk;
 pub mod pic;
 pub mod ps2;
 
-pub fn outb(port: u16, data: u8) {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct IOPort(u16);
+
+impl IOPort {
+    pub(crate) const IMCR_ADDR: Self = Self(0x22);
+
+    pub(crate) const IMCR_DATA: Self = Self(0x23);
+}
+
+impl From<u16> for IOPort {
+    fn from(value: u16) -> Self {
+        Self(value)
+    }
+}
+
+impl From<IOPort> for u16 {
+    fn from(value: IOPort) -> Self {
+        value.0
+    }
+}
+
+pub fn outb(port: IOPort, data: u8) {
     unsafe {
         asm!(
         "out dx, al",
-        in("dx") port,
+        in("dx") u16::from(port),
         in("al") data
         )
     }

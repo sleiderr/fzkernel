@@ -427,6 +427,7 @@ dependencies = [
  "modular-bitfield",
  "noto-sans-mono-bitmap",
  "numtoa",
+ "pod-enum",
  "rlibc",
  "spin 0.9.8",
  "vob",
@@ -674,6 +675,23 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pod-enum"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "pod-enum-macros",
+]
+
+[[package]]
+name = "pod-enum-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.32",
+]
 
 [[package]]
 name = "powerfmt"

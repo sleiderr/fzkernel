@@ -1,0 +1,16 @@
+[package]
+name = "pod-enum"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jarred Allen <jarredallen73@gmail.com>"]
+description = "An enum which is also plain-old-data"
+repository = "https://github.com/JarredAllen/pod-enum"
+documentation = "https://docs.rs/crate/pod-enum/latest"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["no-std", "enums"]
+categories = ["no-std", "rust-patterns"]
+
+[dependencies]
+bytemuck = { version = "1.13.1", default-features = false }
+pod-enum-macros = { path = "macros", version = "0.1.0" }

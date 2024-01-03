@@ -6,6 +6,8 @@ use std::fs;
 
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
+use syn;
+use syn::parse::Parser;
 use syn::{parse_file, parse_macro_input, Ident, Item, ItemFn};
 
 /// This procedural macro will generate a function that will build the IDT from
@@ -142,6 +144,7 @@ pub fn interrupt(
     let wrapper_ident = Ident::new(&name, Span::mixed_site());
 
     let wrapper = quote! {
+        #[link_section = ".int"]
         #[naked]
         pub fn #wrapper_ident () {
             unsafe {

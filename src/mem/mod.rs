@@ -1,5 +1,8 @@
 //! Memory related utilities module.
 
+use bytemuck::{Pod, Zeroable};
+use core::cell::UnsafeCell;
+use core::ops::{Add, AddAssign, BitAnd, Shr};
 use core::ptr;
 
 use conquer_once::spin::OnceCell;
@@ -9,6 +12,81 @@ pub mod e820;
 pub mod gdt;
 
 pub static MEM_STRUCTURE: OnceCell<MemoryStructure> = OnceCell::uninit();
+
+pub struct LocklessCell<T> {
+    data: UnsafeCell<T>,
+}
+
+impl<T> LocklessCell<T> {
+    pub fn new(data: T) -> Self {
+        Self {
+            data: UnsafeCell::new(data),
+        }
+    }
+
+    pub fn get(&self) -> &mut T {
+        unsafe { &mut *self.data.get() }
+    }
+}
+
+unsafe impl<T> Send for LocklessCell<T> {}
+unsafe impl<T> Sync for LocklessCell<T> {}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Pod, Zeroable)]
+#[repr(transparent)]
+pub struct PhyAddr32(u32);
+
+impl PhyAddr32 {
+    pub fn as_ptr<T>(&self) -> *const T {
+        self.0 as *const T
+    }
+
+    pub fn as_mut_ptr<T>(&mut self) -> *mut T {
+        self.0 as *mut T
+    }
+}
+
+impl From<u32> for PhyAddr32 {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<PhyAddr32> for u32 {
+    fn from(value: PhyAddr32) -> Self {
+        value.0
+    }
+}
+
+impl AddAssign<u32> for PhyAddr32 {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs;
+    }
+}
+
+impl Add<u32> for PhyAddr32 {
+    type Output = Self;
+
+    fn add(self, rhs: u32) -> Self::Output {
+        Self(self.0.saturating_add(rhs))
+    }
+}
+
+impl BitAnd<u32> for PhyAddr32 {
+    type Output = u32;
+
+    fn bitand(self, rhs: u32) -> Self::Output {
+        self.0 & rhs
+    }
+}
+
+impl Shr<u32> for PhyAddr32 {
+    type Output = u32;
+
+    fn shr(self, rhs: u32) -> Self::Output {
+        self.0 >> rhs
+    }
+}
 
 pub struct MemoryStructure {
     pub heap_addr: usize,
