@@ -1,4 +1,5 @@
 use crate::io::pic::PIC;
+use crate::x86::apic::local_apic;
 use core::arch::asm;
 use fzproc_macros::{interrupt, interrupt_default};
 
@@ -73,7 +74,7 @@ const CONTROLLER: PIC = PIC {
 };
 
 #[interrupt]
-pub fn _int0x73() {
+pub fn _int0x2b() {
     crate::drivers::ahci::irq_entry();
 }
 
@@ -81,4 +82,8 @@ pub fn _int0x73() {
 pub fn _int_default() {
     CONTROLLER.acknowledge_master();
     CONTROLLER.acknowledge_slave();
+
+    if let Some(apic) = local_apic() {
+        apic.send_eoi();
+    }
 }

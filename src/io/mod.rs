@@ -2,8 +2,6 @@ use bytemuck::{Pod, Zeroable};
 use core::arch::asm;
 
 pub mod acpi;
-#[cfg(feature = "alloc")]
-pub mod apic;
 pub mod disk;
 pub mod pic;
 pub mod ps2;
