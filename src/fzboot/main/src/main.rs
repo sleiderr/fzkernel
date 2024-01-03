@@ -12,6 +12,7 @@ use core::{
     ptr,
 };
 use core::{panic::PanicInfo, ptr::NonNull};
+use fzboot::x86::apic::local_apic;
 use fzboot::{
     drivers::pci::pci_devices_init,
     mem::{
@@ -73,6 +74,7 @@ pub fn boot_main() -> ! {
     interrupts_init();
     pci_enumerate();
     pci_devices_init();
+    local_apic();
 
     info!(
         "mem",

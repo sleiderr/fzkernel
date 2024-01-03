@@ -8,15 +8,15 @@
 //! Follows the _Intel 1.4 MultiProcessor Specification_
 
 use crate::mem::PhyAddr32;
-use crate::x86::apic::local_apic::ProcLocalApicID;
+use crate::x86::apic::local_apic::{DeliveryMode, PinPolarity, ProcLocalApicID, TriggerMode};
 use alloc::string::String;
 use alloc::vec::Vec;
 use bytemuck::{bytes_of, from_bytes, try_from_bytes, Pod, Zeroable};
 use core::fmt::{Debug, Formatter};
 use core::mem::size_of;
 use core::slice;
-use modular_bitfield::bitfield;
-use modular_bitfield::prelude::{B22, B24, B6, B7};
+use modular_bitfield::prelude::{B22, B24, B4, B6, B7};
+use modular_bitfield::{bitfield, BitfieldSpecifier};
 use pod_enum::pod_enum;
 
 /// Header of the `MP Configuration Table` ([`MPTable`]).
@@ -211,12 +211,30 @@ impl MPIOApicId {
     pub(crate) const ALL_IO_APIC: Self = Self(0xFF);
 }
 
+impl From<MPIOApicId> for ProcLocalApicID {
+    fn from(value: MPIOApicId) -> Self {
+        Self::from(value.0)
+    }
+}
+
 /// Identifier for a _INTIN_ pin on the I/O APIC.
 ///
 /// Used to link IRQs to physical pin on the chip.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct MPIOApicIntPin(pub(super) u8);
+pub(crate) struct IOApicIntPin(pub(super) u8);
+
+impl From<IOApicIntPin> for u8 {
+    fn from(value: IOApicIntPin) -> Self {
+        value.0
+    }
+}
+
+impl From<u8> for IOApicIntPin {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
 
 /// Identifier for a _INTIN_ pin on the Local APIC.
 ///
@@ -251,7 +269,8 @@ pub(crate) struct MPIOInterruptEntry {
 
     /// Interrupt type (_INT_, _NMI_, _SMI_, external).
     pub(crate) int_type: MPInterruptType,
-    int_mode: u8,
+
+    pub(crate) int_mode: MPInterruptFlags,
     reserved: u8,
 
     /// Bus ID ([`MPBusId`]) from which the interrupt signal comes from.
@@ -266,7 +285,7 @@ pub(crate) struct MPIOInterruptEntry {
     pub(crate) dest_ioapic_id: MPIOApicId,
 
     /// Identifies the _INTINn_ pin to which the signal is connected.
-    pub(crate) dest_ioapic_intin: MPIOApicIntPin,
+    pub(crate) dest_ioapic_intin: IOApicIntPin,
 }
 
 /// Used to identify the interrupt signal from the source bus.
@@ -291,6 +310,68 @@ pub(crate) enum MPInterruptType {
     External = 3,
 }
 
+impl From<MPInterruptType> for DeliveryMode {
+    fn from(value: MPInterruptType) -> Self {
+        match value {
+            MPInterruptType::NonMaskable => DeliveryMode::NonMaskableInterrupt,
+            MPInterruptType::SystemManagement => DeliveryMode::SystemManagementInterrupt,
+            MPInterruptType::External => DeliveryMode::ExternalInterrupt,
+            _ => DeliveryMode::Fixed,
+        }
+    }
+}
+
+/// Used to specify the polarity of the corresponding interrupt pin.
+#[derive(BitfieldSpecifier, Clone, Copy, Debug)]
+#[bits = 2]
+#[repr(C)]
+pub(crate) enum MPPinPolarity {
+    BusSpec = 0,
+    ActiveHigh = 1,
+    ActiveLow = 3,
+}
+
+impl From<MPPinPolarity> for PinPolarity {
+    fn from(value: MPPinPolarity) -> Self {
+        match value {
+            MPPinPolarity::ActiveLow => Self::ActiveLow,
+            // should depend on the bus
+            _ => Self::ActiveHigh,
+        }
+    }
+}
+
+/// Used to select the trigger mode for the corresponding interrupt (edge sensitive or level sensitive).
+#[derive(BitfieldSpecifier)]
+#[bits = 2]
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub(crate) enum MPTriggerMode {
+    BusSpec = 0,
+    Edge = 1,
+    Level = 3,
+}
+
+impl From<MPTriggerMode> for TriggerMode {
+    fn from(value: MPTriggerMode) -> Self {
+        match value {
+            MPTriggerMode::Level => Self::Level,
+            _ => Self::Edge,
+        }
+    }
+}
+
+/// Interrupt mode for an int entry in the `MPTable`.
+#[bitfield]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[repr(C)]
+pub(crate) struct MPInterruptFlags {
+    pub(crate) polarity: MPPinPolarity,
+    pub(crate) trigger_mode: MPTriggerMode,
+    #[skip]
+    __: B4,
+}
+
 /// Local Interrupt Assignment entry in the _MP Configuration Table_ ([`MPTable`]).
 ///
 /// These entries indicate which interrupt source is connected to each local APIC interrupt input.
@@ -302,7 +383,7 @@ pub(crate) struct MPLocalInterruptEntry {
 
     /// Interrupt type (_INT_, _NMI_, _SMI_, external).
     pub(crate) int_type: MPInterruptType,
-    int_mode: u8,
+    pub(crate) int_mode: MPInterruptFlags,
     reserved: u8,
 
     /// Bus ID ([`MPBusId`]) from which the interrupt signal comes from.
@@ -378,6 +459,50 @@ impl MPTable {
         Some(mp_table)
     }
 
+    /// Returns all `I/O APIC` entries in the `MPTable`.
+    pub(crate) fn get_io_apic(&self) -> Vec<MPIOApicEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                if let MPConfigurationEntry::IOApic(io_apic) = entry {
+                    return true;
+                }
+
+                false
+            })
+            .map(|entry| {
+                if let MPConfigurationEntry::IOApic(io_apic) = entry {
+                    return Some(*io_apic);
+                }
+
+                None
+            })
+            .map(Option::unwrap)
+            .collect()
+    }
+
+    /// Returns all processors entries in the `MPTable`.
+    pub(crate) fn get_processors(&self) -> Vec<MPProcessorEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                if let MPConfigurationEntry::Processor(_) = entry {
+                    return true;
+                }
+
+                false
+            })
+            .map(|entry| {
+                if let MPConfigurationEntry::Processor(proc) = entry {
+                    return Some(*proc);
+                }
+
+                None
+            })
+            .map(Option::unwrap)
+            .collect()
+    }
+
     /// Returns all Local interrupt that are connected to a given Local APIC.
     ///
     /// The Local APIC is identified by its unique identifier ([`ProcLocalApicID`]).
@@ -430,14 +555,14 @@ impl MPTable {
 
     /// Returns the I/O Interrupt entry connected to a pin of a given I/O APIC.
     ///
-    /// The pin is identified by its number (as a [`MPIOApicIntPin`]), and the I/O APIC by its unique
+    /// The pin is identified by its number (as a [`IOApicIntPin`]), and the I/O APIC by its unique
     /// identifier ([`MPIOApicId`]).
     ///
     /// Returns [`None`] if there is no interrupt connected to that pin.
     pub(crate) fn get_io_int_connected_to_pin(
         &self,
         io_apic_id: MPIOApicId,
-        pin: MPIOApicIntPin,
+        pin: IOApicIntPin,
     ) -> Option<MPIOInterruptEntry> {
         let int = self.entries.iter().find(|entry| {
             if let MPConfigurationEntry::IOInterrupt(int) = entry {

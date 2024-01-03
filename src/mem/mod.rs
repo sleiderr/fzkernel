@@ -1,6 +1,7 @@
 //! Memory related utilities module.
 
 use bytemuck::{Pod, Zeroable};
+use core::cell::UnsafeCell;
 use core::ops::{Add, AddAssign, BitAnd, Shr};
 use core::ptr;
 
@@ -11,6 +12,25 @@ pub mod e820;
 pub mod gdt;
 
 pub static MEM_STRUCTURE: OnceCell<MemoryStructure> = OnceCell::uninit();
+
+pub struct LocklessCell<T> {
+    data: UnsafeCell<T>,
+}
+
+impl<T> LocklessCell<T> {
+    pub fn new(data: T) -> Self {
+        Self {
+            data: UnsafeCell::new(data),
+        }
+    }
+
+    pub fn get(&self) -> &mut T {
+        unsafe { &mut *self.data.get() }
+    }
+}
+
+unsafe impl<T> Send for LocklessCell<T> {}
+unsafe impl<T> Sync for LocklessCell<T> {}
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Pod, Zeroable)]
 #[repr(transparent)]

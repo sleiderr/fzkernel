@@ -1,4 +1,5 @@
 use crate::io::IOPort;
+use crate::x86::apic::local_apic::local_apic;
 use crate::{
     io::outb,
     video::vesa::TEXT_BUFFER,
@@ -25,4 +26,8 @@ pub unsafe fn _int_entry() {
 pub fn _pic_eoi() {
     outb(IOPort::from(0x20), 0x20);
     outb(IOPort::from(0xA0), 0x20);
+
+    if let Some(lapic) = local_apic() {
+        lapic.send_eoi();
+    }
 }

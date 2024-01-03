@@ -8,17 +8,46 @@
 #![allow(clippy::as_conversions)]
 
 use crate::io::{outb, IOPort};
-use crate::mem::PhyAddr32;
+use crate::mem::{LocklessCell, PhyAddr32};
+use crate::x86::apic::io_apic::IOApic;
 use crate::x86::apic::mp_table::{MPInterruptType, MPLocalApicIntPin, MPTable};
 use crate::x86::cpuid::cpu_id;
 use crate::x86::int::{disable_interrupts, enable_interrupts};
 use crate::x86::msr::Ia32ApicBase;
 use bytemuck::{Contiguous, Pod, Zeroable};
+use conquer_once::spin::OnceCell;
 use core::ops::Add;
 use core::ptr::{read_volatile, write_volatile};
+use hashbrown::HashMap;
 use modular_bitfield::error::{InvalidBitPattern, OutOfBounds};
 use modular_bitfield::prelude::{B1, B13, B15, B19, B2, B24, B3, B36, B4, B7};
 use modular_bitfield::{bitfield, BitfieldSpecifier, Specifier};
+
+/// Contains all `LocalAPIC` already initialized.
+static LOCAL_APICS: OnceCell<LocklessCell<HashMap<ProcLocalApicID, LocklessCell<LocalAPIC>>>> =
+    OnceCell::uninit();
+
+/// Returns the [`LocalAPIC`] associated with the current processor, if available.
+///
+/// The underlying structure is lock-free, as it can only be accessed by one processor at a time, as this can
+/// only return the local apic of the current CPU.
+/// Initializes the [`LocalAPIC`] if that was not done already.
+#[allow(clippy::missing_panics_doc)]
+pub fn local_apic() -> Option<&'static mut LocalAPIC> {
+    let apics = LOCAL_APICS
+        .try_get_or_init(|| LocklessCell::new(HashMap::new()))
+        .ok()?;
+
+    if let Some(lapic) = apics.get().get(&ProcLocalApicID::get()) {
+        Some(lapic.get())
+    } else {
+        apics.get().insert(
+            ProcLocalApicID::get(),
+            LocklessCell::new(LocalAPIC::init().ok()?),
+        );
+        Some(apics.get().get(&ProcLocalApicID::get()).unwrap().get())
+    }
+}
 
 /// Local APIC unique identifier.
 ///
@@ -34,14 +63,26 @@ impl ProcLocalApicID {
     pub(crate) const ALL_LAPIC: Self = Self(0xFF);
 
     /// Returns the `LocalAPIC` identifier fo the current processor, using the _CPUID_ instruction.
-    pub(crate) fn get() -> Option<Self> {
-        Some(Self(cpu_id(0x1)?[1].to_le_bytes()[3]))
+    pub(crate) fn get() -> Self {
+        Self(cpu_id(0x1).unwrap()[1].to_le_bytes()[3])
     }
 }
 
 impl From<ProcLocalApicID> for u8 {
     fn from(value: ProcLocalApicID) -> Self {
         value.0
+    }
+}
+
+impl From<u8> for ProcLocalApicID {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl core::ops::AddAssign<u8> for ProcLocalApicID {
+    fn add_assign(&mut self, rhs: u8) {
+        self.0 += rhs;
     }
 }
 
@@ -52,6 +93,8 @@ pub(crate) struct LocalAPICRegisterOffset(u32);
 
 impl LocalAPICRegisterOffset {
     const VERSION_REGISTER: Self = Self(0x30);
+
+    const EOI_REGISTER: Self = Self(0xB0);
 
     const ERROR_REGISTER: Self = Self(0x280);
 
@@ -100,10 +143,6 @@ pub(crate) struct LocalAPICVersionRegister {
     __: B7,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-#[repr(transparent)]
-pub(crate) struct LocalAPICEndOfIntRegister(u32);
-
 /// `SVR` (_Spurious Vector Register_) structure.
 ///
 /// Indicates the vector number to be delivered to the processor when the `LocalAPIC` generates a spurious vector.
@@ -123,7 +162,7 @@ pub(crate) struct LocalAPICSpuriousVectorRegister {
 }
 
 #[repr(u8)]
-#[derive(BitfieldSpecifier)]
+#[derive(BitfieldSpecifier, Debug)]
 #[bits = 2]
 pub(crate) enum LVTTimerMode {
     OneShot = 0,
@@ -133,9 +172,9 @@ pub(crate) enum LVTTimerMode {
 
 /// Used to specify the type of interrupt to be sent to the processor for an [`ApicLVT`] entry.
 #[repr(u8)]
-#[derive(BitfieldSpecifier)]
+#[derive(BitfieldSpecifier, Copy, Clone, Debug)]
 #[bits = 3]
-pub(crate) enum LVTEntryDeliveryMode {
+pub(crate) enum DeliveryMode {
     /// Delivers the interrupt specified in the `vector` field.
     Fixed = 0,
 
@@ -161,7 +200,7 @@ pub(crate) enum LVTEntryDeliveryMode {
 
 /// Indicates the interrupt source delivery status.
 #[repr(u8)]
-#[derive(BitfieldSpecifier)]
+#[derive(BitfieldSpecifier, Copy, Clone, Debug)]
 pub(super) enum DeliveryStatus {
     /// No current activity for this interrupt source.
     Idle = 0,
@@ -174,8 +213,8 @@ pub(super) enum DeliveryStatus {
 ///
 /// _LINT1_ does not support level sensitive interrupts.
 #[repr(u8)]
-#[derive(BitfieldSpecifier)]
-pub(crate) enum LVTEntryTriggerMode {
+#[derive(BitfieldSpecifier, Copy, Clone, Debug)]
+pub(crate) enum TriggerMode {
     /// Edge-triggered interrupt
     Edge = 0,
 
@@ -185,7 +224,7 @@ pub(crate) enum LVTEntryTriggerMode {
 
 /// Used to specify the polarity of the corresponding interrupt pin.
 #[repr(u8)]
-#[derive(BitfieldSpecifier)]
+#[derive(BitfieldSpecifier, Copy, Clone, Debug)]
 pub(crate) enum PinPolarity {
     /// Active-high interrupt.
     ActiveHigh = 0,
@@ -221,6 +260,18 @@ pub(crate) struct InterruptVector(u8);
 impl InterruptVector {
     /// Spurious vector interrupt vector.
     pub(super) const SPURIOUS_VECTOR: Self = Self(0xFF);
+}
+
+impl From<u8> for InterruptVector {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl From<InterruptVector> for u8 {
+    fn from(value: InterruptVector) -> Self {
+        value.0
+    }
 }
 
 impl InterruptVector {
@@ -284,11 +335,11 @@ impl Specifier for InterruptVector {
 ///
 /// To learn more about how to configure each kind of entry, refer to Intel documentation.
 #[bitfield]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 #[repr(u32)]
 pub(crate) struct LVTCMCIEntry {
     vector: InterruptVector,
-    delivery_mode: LVTEntryDeliveryMode,
+    delivery_mode: DeliveryMode,
     #[skip]
     __: B1,
     delivery_status: DeliveryStatus,
@@ -300,11 +351,11 @@ pub(crate) struct LVTCMCIEntry {
 }
 
 #[bitfield]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 #[repr(u32)]
 pub(crate) struct LVTTimerEntry {
     vector: InterruptVector,
-    delivery_mode: LVTEntryDeliveryMode,
+    delivery_mode: DeliveryMode,
     #[skip]
     __: B1,
     delivery_status: DeliveryStatus,
@@ -336,11 +387,11 @@ pub(crate) struct LVTTimerEntry {
 ///
 /// To learn more about how to configure each kind of entry, refer to Intel documentation.
 #[bitfield]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(u32)]
 pub(crate) struct LVTThermalMonitorEntry {
     vector: InterruptVector,
-    delivery_mode: LVTEntryDeliveryMode,
+    delivery_mode: DeliveryMode,
     #[skip]
     __: B1,
     delivery_status: DeliveryStatus,
@@ -374,11 +425,11 @@ pub(crate) struct LVTThermalMonitorEntry {
 ///
 /// To learn more about how to configure each kind of entry, refer to Intel documentation.
 #[bitfield]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(u32)]
 pub(crate) struct LVTPerformanceCounterEntry {
     vector: InterruptVector,
-    delivery_mode: LVTEntryDeliveryMode,
+    delivery_mode: DeliveryMode,
     #[skip]
     __: B1,
     delivery_status: DeliveryStatus,
@@ -410,17 +461,17 @@ pub(crate) struct LVTPerformanceCounterEntry {
 ///                                   - - - - - - - - - - - - - - - - - - - - - Mask
 ///```
 #[bitfield]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(u32)]
 pub(crate) struct LVTLINTEntry {
     vector: InterruptVector,
-    delivery_mode: LVTEntryDeliveryMode,
+    delivery_mode: DeliveryMode,
     #[skip]
     __: B1,
     delivery_status: DeliveryStatus,
     pin_polarity: PinPolarity,
     remote_irr: bool,
-    trigger_mode: LVTEntryTriggerMode,
+    trigger_mode: TriggerMode,
     masked: bool,
     #[skip]
     __: B15,
@@ -446,7 +497,7 @@ pub(crate) struct LVTLINTEntry {
 ///
 /// To learn more about how to configure each kind of entry, refer to Intel documentation.
 #[bitfield]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 #[repr(u32)]
 pub(crate) struct LVTErrorEntry {
     vector: InterruptVector,
@@ -467,7 +518,7 @@ pub(crate) struct LVTErrorEntry {
 ///
 /// It contains up to 7 different registers, for various types of interrupt source, but all may not be available on
 /// every platform.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct ApicLVT {
     cmci: LVTCMCIEntry,
     timer: LVTTimerEntry,
@@ -517,6 +568,7 @@ pub(crate) struct LocalAPICErrorRegister {
 ///
 /// The system may run in different interrupt mode, each one using the [`LocalAPIC`] differently.
 #[allow(clippy::upper_case_acronyms)]
+#[derive(Debug)]
 pub(crate) enum APICOperatingMode {
     /// Bypasses all _APIC_ components.
     PIC,
@@ -538,7 +590,8 @@ pub(crate) enum APICOperatingMode {
 /// _IPIs_ (Interprocessor interrupts).
 ///                                                                                                     
 /// There is one _Local APIC_ per CPU, each is assigned a ID unique for a given system.
-pub(crate) struct LocalAPIC {
+#[derive(Debug)]
+pub struct LocalAPIC {
     apic_id: ProcLocalApicID,
     msr_register: Ia32ApicBase,
     version_register: LocalAPICVersionRegister,
@@ -561,7 +614,7 @@ impl LocalAPIC {
         };
 
         let mut local_apic = Self {
-            apic_id: ProcLocalApicID::get().ok_or(())?,
+            apic_id: ProcLocalApicID::get(),
             msr_register: Ia32ApicBase::read().ok_or(())?,
             version_register: LocalAPICVersionRegister::from(0),
             lvt: ApicLVT::default(),
@@ -575,6 +628,13 @@ impl LocalAPIC {
         local_apic.load_version_register();
         local_apic.load_lvt();
         local_apic.set_spurious_vector();
+
+        // setup I/O APIC if this processor is the BSP
+        if local_apic.msr_register.is_bsp() {
+            for io_apic in local_apic.mp_table.get_io_apic() {
+                IOApic::init(io_apic, &local_apic.mp_table);
+            }
+        }
 
         enable_interrupts();
 
@@ -613,6 +673,11 @@ impl LocalAPIC {
     /// On some systems, the `APIC` cannot be enabled after hard disabling it once.
     pub(crate) fn enable_apic(&mut self) {
         self.msr_register.global_disable();
+    }
+
+    /// Updates the `EOI` (_End of Interrupt_) register upon interrupt completion.
+    pub(crate) fn send_eoi(&self) {
+        self.write_reg(LocalAPICRegisterOffset::EOI_REGISTER, 0);
     }
 
     /// Reads the [`LocalAPICErrorRegister`] from the corresponding _APIC_ register.
@@ -681,9 +746,9 @@ impl LocalAPIC {
     fn switch_to_virtual_wire_mode(&mut self) {
         if self.msr_register.is_bsp() {
             self.lvt.lint0 = LVTLINTEntry::new()
-                .with_delivery_mode(LVTEntryDeliveryMode::ExternalInterrupt)
+                .with_delivery_mode(DeliveryMode::ExternalInterrupt)
                 .with_pin_polarity(PinPolarity::ActiveHigh)
-                .with_trigger_mode(LVTEntryTriggerMode::Edge)
+                .with_trigger_mode(TriggerMode::Edge)
                 .with_masked(false)
                 .with_vector(InterruptVector(0));
             self.write_lvt();
@@ -719,21 +784,21 @@ impl LocalAPIC {
     /// Sets up default entries, based on data provided from _MP Tables_ or the ACPI _MADT_.
     fn load_lvt(&mut self) {
         let cmci = LVTCMCIEntry::new()
-            .with_delivery_mode(LVTEntryDeliveryMode::Fixed)
+            .with_delivery_mode(DeliveryMode::Fixed)
             .with_masked(true)
             .with_vector(InterruptVector(0xF8));
 
         let mut lint0 = LVTLINTEntry::new()
-            .with_delivery_mode(LVTEntryDeliveryMode::ExternalInterrupt)
+            .with_delivery_mode(DeliveryMode::ExternalInterrupt)
             .with_pin_polarity(PinPolarity::ActiveHigh)
-            .with_trigger_mode(LVTEntryTriggerMode::Edge)
+            .with_trigger_mode(TriggerMode::Edge)
             .with_masked(true)
             .with_vector(InterruptVector(0xFC));
 
         let mut lint1 = LVTLINTEntry::new()
-            .with_delivery_mode(LVTEntryDeliveryMode::NonMaskableInterrupt)
+            .with_delivery_mode(DeliveryMode::NonMaskableInterrupt)
             .with_pin_polarity(PinPolarity::ActiveHigh)
-            .with_trigger_mode(LVTEntryTriggerMode::Edge)
+            .with_trigger_mode(TriggerMode::Edge)
             .with_masked(true)
             .with_vector(InterruptVector(0xFD));
 
@@ -748,15 +813,15 @@ impl LocalAPIC {
         if let (Some(lintin0_int), Some(lintin1_int)) = (lapic_lintin0_entry, lapic_lintin1_entry) {
             match (lintin0_int.int_type, lintin1_int.int_type) {
                 (MPInterruptType::External, MPInterruptType::NonMaskable) => {
-                    lint0.set_delivery_mode(LVTEntryDeliveryMode::ExternalInterrupt);
-                    lint1.set_delivery_mode(LVTEntryDeliveryMode::NonMaskableInterrupt);
+                    lint0.set_delivery_mode(DeliveryMode::ExternalInterrupt);
+                    lint1.set_delivery_mode(DeliveryMode::NonMaskableInterrupt);
                 }
                 (MPInterruptType::Vectored, MPInterruptType::NonMaskable) => {
-                    lint1.set_delivery_mode(LVTEntryDeliveryMode::NonMaskableInterrupt);
+                    lint1.set_delivery_mode(DeliveryMode::NonMaskableInterrupt);
                 }
                 (MPInterruptType::NonMaskable, MPInterruptType::External) => {
-                    lint0.set_delivery_mode(LVTEntryDeliveryMode::NonMaskableInterrupt);
-                    lint1.set_delivery_mode(LVTEntryDeliveryMode::ExternalInterrupt);
+                    lint0.set_delivery_mode(DeliveryMode::NonMaskableInterrupt);
+                    lint1.set_delivery_mode(DeliveryMode::ExternalInterrupt);
                 }
                 _ => {}
             }
@@ -767,17 +832,17 @@ impl LocalAPIC {
             .with_vector(InterruptVector(0xFE));
 
         let perf_count = LVTPerformanceCounterEntry::new()
-            .with_delivery_mode(LVTEntryDeliveryMode::Fixed)
+            .with_delivery_mode(DeliveryMode::Fixed)
             .with_masked(true)
             .with_vector(InterruptVector(0xFB));
 
         let thermal_mon = LVTThermalMonitorEntry::new()
-            .with_delivery_mode(LVTEntryDeliveryMode::Fixed)
+            .with_delivery_mode(DeliveryMode::Fixed)
             .with_masked(true)
             .with_vector(InterruptVector(0xFA));
 
         let timer = LVTTimerEntry::new()
-            .with_delivery_mode(LVTEntryDeliveryMode::Fixed)
+            .with_delivery_mode(DeliveryMode::Fixed)
             .with_timer_mode(LVTTimerMode::Periodic)
             .with_masked(true)
             .with_vector(InterruptVector(0xF9));
@@ -886,16 +951,16 @@ impl LocalAPIC {
 /// Writing to the low doubleword of the `ICR` causes the _IPI_ to be sent.
 #[bitfield]
 #[repr(u64)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct LocalAPICInterruptCmdRegister {
     vector: InterruptVector,
     delivery_mode: IPIDeliveryMode,
-    destination_mode: IPIDestinationMode,
+    destination_mode: DestinationMode,
     delivery_status: DeliveryStatus,
     #[skip]
     __: bool,
     level: IPILevel,
-    trigger_mode: LVTEntryTriggerMode,
+    trigger_mode: TriggerMode,
     #[skip]
     __: B2,
     destination_shorthand: IPIDestinationShorthand,
@@ -906,7 +971,7 @@ struct LocalAPICInterruptCmdRegister {
 
 /// Used to specify the type of [`IPI`] to be sent (message type).
 #[repr(u8)]
-#[derive(BitfieldSpecifier)]
+#[derive(BitfieldSpecifier, Debug)]
 #[bits = 3]
 pub(crate) enum IPIDeliveryMode {
     /// Delivers the interrupt specified in the _vector_ field to the target processor(s).
@@ -936,7 +1001,7 @@ pub(crate) enum IPIDeliveryMode {
 
 /// Used to select between _INIT level de-assert_ or standard _INIT_ when creating such type of `IPI` message
 #[repr(u8)]
-#[derive(BitfieldSpecifier)]
+#[derive(BitfieldSpecifier, Debug)]
 pub(crate) enum IPILevel {
     /// `Level` field must be set to _De-assert_ to perform a _INIT level de-assert_.
     DeAssert = 0,
@@ -947,8 +1012,8 @@ pub(crate) enum IPILevel {
 
 /// Used to select either _Physical_ or _Logical_ addressing mode.
 #[repr(u8)]
-#[derive(BitfieldSpecifier)]
-pub(crate) enum IPIDestinationMode {
+#[derive(BitfieldSpecifier, Copy, Clone, Debug)]
+pub(crate) enum DestinationMode {
     /// Physical destination mode.
     Physical = 0,
 
@@ -959,7 +1024,7 @@ pub(crate) enum IPIDestinationMode {
 /// Used to send the `IPI` to special destination, overrides the `destination` field is set.
 /// Necessary when issuing self-interrupts or to broadcast interrupts.
 #[repr(u8)]
-#[derive(BitfieldSpecifier)]
+#[derive(BitfieldSpecifier, Debug)]
 pub(crate) enum IPIDestinationShorthand {
     /// Indicates that the destination is contained in the `destination` field.
     NoShorthand = 0,
@@ -995,14 +1060,14 @@ pub(crate) struct IPI {
     pub(crate) delivery_mode: IPIDeliveryMode,
 
     /// Used to select either _Physical_ or _Logical_ addressing mode.
-    pub(crate) destination_mode: IPIDestinationMode,
+    pub(crate) destination_mode: DestinationMode,
 
     /// Used to select between _INIT level de-assert_ or standard _INIT_, in all other cases that should be set
     /// to [`IPILevel::Assert`].
     pub(crate) level: IPILevel,
 
     /// Selects the trigger mode when using the _INIT level de-assert_ `IPI` (either edge or level).
-    pub(crate) trigger_mode: LVTEntryTriggerMode,
+    pub(crate) trigger_mode: TriggerMode,
 
     /// Used to send the `IPI` to special destination, overrides the `destination` field is set.
     /// Necessary when issuing self-interrupts or to broadcast interrupts.
@@ -1025,9 +1090,9 @@ impl IPI {
         Self {
             vector,
             delivery_mode: IPIDeliveryMode::Fixed,
-            destination_mode: IPIDestinationMode::Physical,
+            destination_mode: DestinationMode::Physical,
             level: IPILevel::Assert,
-            trigger_mode: LVTEntryTriggerMode::Edge,
+            trigger_mode: TriggerMode::Edge,
             destination_shorthand,
             destination,
         }
@@ -1040,9 +1105,9 @@ impl IPI {
         Self {
             vector,
             delivery_mode: IPIDeliveryMode::Fixed,
-            destination_mode: IPIDestinationMode::Physical,
+            destination_mode: DestinationMode::Physical,
             level: IPILevel::Assert,
-            trigger_mode: LVTEntryTriggerMode::Edge,
+            trigger_mode: TriggerMode::Edge,
             destination_shorthand: IPIDestinationShorthand::All,
             destination: 0,
         }
@@ -1055,9 +1120,9 @@ impl IPI {
         Self {
             vector,
             delivery_mode: IPIDeliveryMode::Fixed,
-            destination_mode: IPIDestinationMode::Physical,
+            destination_mode: DestinationMode::Physical,
             level: IPILevel::Assert,
-            trigger_mode: LVTEntryTriggerMode::Edge,
+            trigger_mode: TriggerMode::Edge,
             destination_shorthand: IPIDestinationShorthand::AllButSelf,
             destination: 0,
         }
@@ -1070,9 +1135,9 @@ impl IPI {
         Self {
             vector: InterruptVector(0),
             delivery_mode: IPIDeliveryMode::NonMaskable,
-            destination_mode: IPIDestinationMode::Physical,
+            destination_mode: DestinationMode::Physical,
             level: IPILevel::Assert,
-            trigger_mode: LVTEntryTriggerMode::Edge,
+            trigger_mode: TriggerMode::Edge,
             destination_shorthand: IPIDestinationShorthand::NoShorthand,
             destination: u8::from(destination),
         }
@@ -1085,9 +1150,9 @@ impl IPI {
         Self {
             vector: InterruptVector(0),
             delivery_mode: IPIDeliveryMode::Fixed,
-            destination_mode: IPIDestinationMode::Physical,
+            destination_mode: DestinationMode::Physical,
             level: IPILevel::Assert,
-            trigger_mode: LVTEntryTriggerMode::Edge,
+            trigger_mode: TriggerMode::Edge,
             destination_shorthand: IPIDestinationShorthand::All,
             destination: 0,
         }
@@ -1100,9 +1165,9 @@ impl IPI {
         Self {
             vector: InterruptVector(0),
             delivery_mode: IPIDeliveryMode::Init,
-            destination_mode: IPIDestinationMode::Physical,
+            destination_mode: DestinationMode::Physical,
             level: IPILevel::Assert,
-            trigger_mode: LVTEntryTriggerMode::Edge,
+            trigger_mode: TriggerMode::Edge,
             destination_shorthand: IPIDestinationShorthand::NoShorthand,
             destination: u8::from(destination),
         }
@@ -1115,9 +1180,9 @@ impl IPI {
         Self {
             vector: InterruptVector(0),
             delivery_mode: IPIDeliveryMode::Init,
-            destination_mode: IPIDestinationMode::Physical,
+            destination_mode: DestinationMode::Physical,
             level: IPILevel::Assert,
-            trigger_mode: LVTEntryTriggerMode::Edge,
+            trigger_mode: TriggerMode::Edge,
             destination_shorthand: IPIDestinationShorthand::AllButSelf,
             destination: 0,
         }

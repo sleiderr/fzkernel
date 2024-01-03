@@ -11,5 +11,8 @@
 //! - _I/O APIC_: one or more for each system, it contains a redirection table to route the interrupts received from
 //! external buses (_ISA_, _PCI_) to one or more _Local APICs_
 
-pub mod local_apic;
-pub mod mp_table;
+pub(crate) mod io_apic;
+pub(crate) mod local_apic;
+pub(crate) mod mp_table;
+
+pub use local_apic::local_apic;
