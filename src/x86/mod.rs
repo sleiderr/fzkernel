@@ -16,6 +16,8 @@ pub mod idt;
 #[cfg(feature = "alloc")]
 pub mod apic;
 
+pub mod registers;
+
 pub mod int {
     use core::arch::asm;
     pub fn interrupts_disabled() -> bool {

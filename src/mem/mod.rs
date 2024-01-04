@@ -32,6 +32,76 @@ impl<T> LocklessCell<T> {
 unsafe impl<T> Send for LocklessCell<T> {}
 unsafe impl<T> Sync for LocklessCell<T> {}
 
+#[derive(Clone, Copy, Debug)]
+pub struct Alignment(u64);
+
+impl Alignment {
+    pub const ALIGN_4KB: Self = Self(1 << 12);
+}
+
+#[derive(Clone, Copy)]
+pub struct VirtAddr(u64);
+
+impl VirtAddr {
+    pub const fn new(addr: u64) -> Self {
+        Self(addr % (1 << 48))
+    }
+
+    pub fn as_ptr<T>(&self) -> *const T {
+        self.0 as *const T
+    }
+
+    pub fn as_mut_ptr<T>(&mut self) -> *mut T {
+        self.0 as *mut T
+    }
+
+    pub const fn to_mut_ptr<T>(self) -> *mut T {
+        self.0 as *mut T
+    }
+
+    pub fn is_aligned_with(&self, align: Alignment) -> bool {
+        self.0 % align.0 == 0
+    }
+}
+
+impl From<VirtAddr> for u64 {
+    fn from(value: VirtAddr) -> Self {
+        value.0
+    }
+}
+impl From<PhyAddr> for u64 {
+    fn from(value: PhyAddr) -> Self {
+        value.0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct PhyAddr(u64);
+
+impl PhyAddr {
+    pub const fn new(addr: u64) -> Self {
+        Self(addr % (1 << 52))
+    }
+
+    pub fn as_ptr<T>(&self) -> *const T {
+        self.0 as *const T
+    }
+
+    pub fn as_mut_ptr<T>(&mut self) -> *mut T {
+        self.0 as *mut T
+    }
+
+    pub fn is_aligned_with(&self, align: Alignment) -> bool {
+        self.0 % align.0 == 0
+    }
+}
+
+impl<T> From<*mut T> for PhyAddr {
+    fn from(value: *mut T) -> Self {
+        Self(value as u64)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct PhyAddr32(u32);
@@ -43,6 +113,10 @@ impl PhyAddr32 {
 
     pub fn as_mut_ptr<T>(&mut self) -> *mut T {
         self.0 as *mut T
+    }
+
+    pub fn is_aligned_with(&self, align: Alignment) -> bool {
+        self.0 % u32::try_from(align.0).unwrap() == 0
     }
 }
 
