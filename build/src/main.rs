@@ -23,8 +23,8 @@ use crate::{
 };
 
 pub mod cli;
-pub mod errors;
 pub mod components;
+pub mod errors;
 pub mod ui;
 
 pub static BOOTLOADER_BUILD: OnceCell<Arc<Mutex<BootloaderBuild>>> = OnceCell::uninit();
@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if app.standalone && app.fast {
         drop(app);
         let boot_img = String::from("boot.img");
-        let parts = vec!["mbr", "real", "main"];
+        let parts = vec!["main"];
         let cfg = BootloaderBuildConfig::new(
             boot_img,
             String::from("src/fzboot/$name"),

@@ -2,15 +2,16 @@
 
 .global _start
 _start:
+xor ax, ax
+mov es, ax
 lea si, [entry_str]
 call boot_log
 call enable_a20
 lea si, [a20_enable_str]
 call boot_log
-call setup_gdt
 call setup_vesa
-loop: hlt
-jmp loop
+call setup_gdt
+call pm_jump
 
 boot_log:
     push si
@@ -58,4 +59,5 @@ entry_str:
 
 .code32
 .globl pm_entry
-pm_entry: jmp pm_entry
+pm_entry: push 0x30000
+ret

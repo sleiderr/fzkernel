@@ -141,6 +141,11 @@ impl BuildStep for BootloaderBuild {
             .await
             .map_err(|_| BuildError(None))?;
 
+        Command::new("make")
+            .current_dir("../src/x86/real")
+            .output()
+            .unwrap();
+
         self.config
             .src_parts_path
             .par_iter()
@@ -160,11 +165,17 @@ impl BuildStep for BootloaderBuild {
             .map_err(|err| self.build_fail(master.clone(), err.0))?;
 
         let start = SystemTime::now();
+
+        self.write_part_to_img(&mut build_img, Path::new("boot.bin"))
+            .await
+            .map_err(|_| self.build_fail(master.clone(), None))?;
+
         for part in self.config.bin_parts_path.iter() {
             self.write_part_to_img(&mut build_img, part)
                 .await
                 .map_err(|_| self.build_fail(master.clone(), None))?;
         }
+
         let duration: Duration = start
             .elapsed()
             .map_err(|_| self.build_fail(master.clone(), None))?;

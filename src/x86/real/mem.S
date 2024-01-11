@@ -27,13 +27,13 @@ setup_gdt:
     mov bx, GDT_SIZE
     call memcpy
 
-    lgdt es:[GDT_BASE_ADDR]
     ret
 
 pm_jump:
     lea si, [pm_enter]
     call boot_log
     cli
+    lgdt es:[GDT_BASE_ADDR]
     mov eax, cr0
     or eax, 1
     mov cr0, eax

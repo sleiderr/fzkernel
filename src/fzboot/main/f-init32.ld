@@ -1,8 +1,8 @@
-ENTRY(_entry32)
+ENTRY(_start)
 
 SECTIONS {
 
-    . = 0x5f00 + 0x7c00;
+    . = 0x30000;
 
     .start : {
         *(.start)

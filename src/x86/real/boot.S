@@ -1,8 +1,10 @@
-#define BOOT_RM_SECTORS_COUNT 0x4
-#define MAX_SECTORS_PER_READ 0x7F
+#define BOOT_SECTORS_COUNT 0xA00
+#define BOOTSTRAP_SECTORS_COUNT 0x4
+#define MAX_SECTORS_PER_READ 0x80
 #define MAX_DISK_OP_RETRIES 5
 
-#define POST_MBR_LOAD_SEG 0x0B00
+#define POST_MBR_LOAD_SEG 0x3000
+#define BOOTSTRAP_SEG 0x0B00
 
 .code16
 ljmp 0x07c0, offset stack_setup
@@ -19,12 +21,21 @@ _boot:
     call check_edd_support
     jc io_error
 
-ext_load_boot:
+ext_load_bootstrap:
     mov ah, 0x42
+    mov WORD PTR dap_sectors_count, BOOTSTRAP_SECTORS_COUNT
+    mov WORD PTR dap_lba_lo, 1
+    lea si, [dap]
+    int 0x13
+    jc io_error
+
+ext_load_boot:
+    mov WORD PTR dap_segment, POST_MBR_LOAD_SEG
     xor al, al
-    mov cx, 1
+    mov cx, BOOTSTRAP_SECTORS_COUNT
     mov bx, BOOT_SECTORS_COUNT
     read_loop: test bx, bx
+    jz read_complete
     inc al
     cmp al, MAX_DISK_OP_RETRIES
     jg io_error
@@ -35,16 +46,17 @@ ext_load_boot:
     jmp issue_read
     non_max_count: mov dap_sectors_count, bx
     issue_read: mov dap_lba_lo, cx
-    lea si, [dap]
+    mov ah, 0x42
     int 0x13
     jc read_loop
     sub bx, dap_sectors_count
-    add WORD PTR dap_segment, 0xfe0
+    add cx, MAX_SECTORS_PER_READ
+    add WORD PTR dap_segment, MAX_SECTORS_PER_READ * 0x20
     jmp read_loop
     read_complete:
-    mov ax, POST_MBR_LOAD_SEG
+    mov ax, BOOTSTRAP_SEG
     mov ds, ax
-    ljmp POST_MBR_LOAD_SEG, 0x0
+    ljmp BOOTSTRAP_SEG, 0x0
     jmp boot_fail
 
 check_edd_support:
@@ -90,7 +102,7 @@ dap:
     .byte 0x00
     dap_sectors_count: .word 0x0000
     dap_offset:        .word 0x0000
-    dap_segment:       .word POST_MBR_LOAD_SEG
+    dap_segment:       .word BOOTSTRAP_SEG
     dap_lba_lo:        .word 0x0000
     dap_lba_hi:        .word 0x0000
     .word 0x00

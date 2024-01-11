@@ -1,4 +1,6 @@
 target*
-build/boot.img
 .idea
 .DS_STORE
+*.bin
+*.dd
+*.img
