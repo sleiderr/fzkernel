@@ -6,6 +6,7 @@ xor ax, ax
 mov es, ax
 lea si, [entry_str]
 call boot_log
+call e820_map
 call enable_a20
 lea si, [a20_enable_str]
 call boot_log

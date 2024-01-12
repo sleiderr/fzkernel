@@ -1,5 +1,7 @@
 #define GDT_SIZE 0x18
 #define GDT_BASE_ADDR 0x00005DA0
+#define E820_MEM_BUFFER 0x00004804
+#define E820_MAGIC 0x534D4150
 
 # Copy a buffer into another
 # DS:SI -> source buffer
@@ -16,6 +18,38 @@ memcpy:
         jnz .mcpy_loop
     sub di, bx
     ret
+
+e820_map:
+xor bx, bx
+mov si, bx
+lea di, [E820_MEM_BUFFER]
+entry_loop: mov eax, 0xE820
+mov ecx, 0x18
+mov edx, E820_MAGIC
+mov LONG PTR es:[di + 20], 1
+int 0x15
+jc map_exit
+test ebx, ebx
+jz map_exit
+cmp eax, E820_MAGIC
+jne map_exit
+
+cmp cl, 20
+jle acpi_ext
+mov ecx, es:[di + 8]
+or ecx,  es:[di + 12]
+jz entry_loop
+
+acpi_ext: test BYTE PTR es:[di + 20], 1
+jz entry_loop
+
+add di, 24
+inc si
+jmp entry_loop
+map_exit: mov es:[E820_MEM_BUFFER - 0x4], si
+ret
+
+
 
 setup_gdt:
     lea si, [gdt_load_str]

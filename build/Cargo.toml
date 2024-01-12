@@ -12,8 +12,6 @@ categories = ["no-std", "embedded"]
 [workspace]
 members = [
     "../",
-    "../src/fzboot/mbr",
-    "../src/fzboot/real",
     "../src/fzboot/main",
     "../src/fzboot/proc_macros"
 ]
@@ -42,21 +40,6 @@ parking_lot = "0.12"
 
 [build-dependencies]
 llvm-tools = "0.1.1"
-
-[profile.mbr]
-inherits = "release"
-opt-level = "z"
-codegen-units = 1
-lto = true
-debug = false
-panic = "abort"
-overflow-checks = false
-
-[profile.real]
-inherits = "release"
-opt-level = "s"
-panic = "abort"
-codegen-units = 1
 
 [profile.main]
 inherits = "release"
