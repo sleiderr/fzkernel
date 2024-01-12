@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use llvm_tools::{exe, LlvmTools};
 use rayon::prelude::*;
+use std::ops::Add;
+use std::process::ExitStatus;
 use std::{
     env,
     io::{self, Write},
@@ -141,10 +143,20 @@ impl BuildStep for BootloaderBuild {
             .await
             .map_err(|_| BuildError(None))?;
 
-        Command::new("make")
+        let make = Command::new("make")
             .current_dir("../src/x86/real")
             .output()
             .unwrap();
+
+        if !make.status.success() {
+            let make_output = String::from_utf8(make.stderr).unwrap();
+            master
+                .send(BuildEvent::StepFailed(
+                    make_output.clone(),
+                    String::from_utf8(make.stdout).unwrap().add(&make_output),
+                ))
+                .map_err(|_| self.build_fail(master.clone(), None))?;
+        }
 
         self.config
             .src_parts_path
