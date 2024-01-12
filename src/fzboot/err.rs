@@ -113,6 +113,13 @@ pub enum MountError {
 }
 
 #[derive(Debug)]
+pub enum InvalidAddress {
+    InvalidAlignment,
+}
+
+impl BaseError for InvalidAddress {}
+
+#[derive(Debug)]
 pub struct E820Error {}
 impl E820Error {
     pub fn new() -> Self {
