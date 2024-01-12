@@ -1,8 +1,8 @@
 use crate::io::IOPort;
+use crate::video::vesa::text_buffer;
 use crate::x86::apic::local_apic::local_apic;
 use crate::{
     io::outb,
-    video::vesa::TEXT_BUFFER,
     x86::idt::{GateDescriptor, GateType, SegmentSelector, Table},
 };
 
@@ -12,9 +12,7 @@ pub mod handlers;
 
 // todo: restore locks afterwards
 unsafe fn release_locks() {
-    if let Some(text_buffer) = TEXT_BUFFER.get() {
-        text_buffer.buffer.force_unlock();
-    }
+    text_buffer().buffer.force_unlock();
 }
 
 #[no_mangle]

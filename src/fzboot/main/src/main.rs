@@ -7,12 +7,10 @@
 
 extern crate alloc;
 
-use core::{
-    arch::{asm, global_asm},
-    ptr,
-};
+use core::arch::asm;
 use core::{panic::PanicInfo, ptr::NonNull};
-use fzboot::x86::apic::local_apic;
+use fzboot::println;
+use fzboot::video::vesa::text_buffer;
 use fzboot::{
     drivers::pci::pci_devices_init,
     mem::{
@@ -27,19 +25,8 @@ use fzboot::{
     io::acpi::{acpi_init, hpet::hpet_clk_init},
     mem::bmalloc::heap::LockedBuddyAllocator,
     time,
-    video::vesa::video_mode::ModeInfoBlock,
     x86::tsc::TSCClock,
 };
-use fzboot::{
-    println,
-    video::vesa::{
-        framebuffer::{LockedTextFrameBuffer, TextFrameBuffer},
-        video_mode::VESA_MODE_BUFFER,
-        TEXT_BUFFER,
-    },
-};
-
-global_asm!(include_str!("arch/x86/setup.S"));
 
 static mut DEFAULT_HEAP_ADDR: usize = 0x5000000;
 const DEFAULT_HEAP_SIZE: usize = 0x1000000;
@@ -67,30 +54,14 @@ pub extern "C" fn _start() -> ! {
 
 pub fn boot_main() -> ! {
     fzboot::mem::zero_bss();
-    init_framebuffer();
     heap_init();
     acpi_init();
     clock_init();
     interrupts_init();
     pci_enumerate();
     pci_devices_init();
-    local_apic();
-
-    info!(
-        "mem",
-        "relocated heap (addr = {:#x}    size = {:#x})",
-        MEM_STRUCTURE.get().unwrap().heap_addr,
-        MEM_STRUCTURE.get().unwrap().heap_size
-    );
 
     loop {}
-}
-
-pub fn init_framebuffer() {
-    let vesamode_info_ptr = VESA_MODE_BUFFER as *mut ModeInfoBlock;
-    let vesamode_info = unsafe { ptr::read(vesamode_info_ptr) };
-    let mut framebuffer = TextFrameBuffer::from_vesamode_info(&vesamode_info);
-    TEXT_BUFFER.init_once(|| LockedTextFrameBuffer::new(framebuffer));
 }
 
 pub fn clock_init() {
@@ -151,6 +122,10 @@ pub fn heap_init() {
         heap_addr: heap_addr as usize,
         heap_size,
     };
+    info!(
+        "mem",
+        "relocated heap (addr = {:#x}    size = {:#x})", heap_addr as u64, heap_size
+    );
 
     MEM_STRUCTURE.init_once(|| mem_struct);
 
@@ -169,7 +144,7 @@ pub fn heap_init() {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     unsafe {
-        TEXT_BUFFER.get().unwrap().buffer.force_unlock();
+        text_buffer().buffer.force_unlock();
     }
     println!("fatal: {info}");
     loop {}

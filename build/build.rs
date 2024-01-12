@@ -18,28 +18,6 @@ fn main() {
     let target_dir_rel = manifest_dir.join("target");
     let target_dir = current_dir.join(target_dir_rel);
 
-    let stage_1st_dir = manifest_dir.join("../src/fzboot/mbr");
-    let stage_1st_triple = stage_1st_dir.join("x86_64-fbios.json");
-    build_subproject(
-        &stage_1st_dir,
-        &stage_1st_triple,
-        &target_dir,
-        &objcopy,
-        cargo,
-        "mbr",
-    );
-
-    let stage_2_dir = manifest_dir.join("../src/fzboot/real");
-    let stage_2_triple = stage_2_dir.join("x86_64-fbios.json");
-    build_subproject(
-        &stage_2_dir,
-        &stage_2_triple,
-        &target_dir,
-        &objcopy,
-        cargo,
-        "real",
-    );
-
     let stage_3_dir = manifest_dir.join("../src/fzboot/main");
     let stage_3_triple = stage_3_dir.join("x86_64-fbios.json");
     build_subproject(

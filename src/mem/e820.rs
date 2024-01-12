@@ -4,8 +4,8 @@ use bitfield::bitfield;
 
 use crate::{errors::E820Error, hex_print, video::io::cprint_info};
 
-pub const E820_MAP_ADDR: u16 = 0x4002;
-pub static mut E820_MAP_LENGTH: u16 = 0;
+pub const E820_MAP_ADDR: u32 = 0x4804;
+pub static mut E820_MAP_LENGTH: u32 = 0;
 
 #[cfg(feature = "alloc")]
 /// Returns the list of memory entries returned by BIOS 0xE820 function.
@@ -15,7 +15,7 @@ pub fn e820_entries() -> alloc::vec::Vec<AddressRangeDescriptor> {
 }
 
 pub struct E820MemoryMap {
-    cursor: u16,
+    cursor: u32,
 }
 
 impl E820MemoryMap {
@@ -34,7 +34,7 @@ impl Iterator for E820MemoryMap {
     type Item = AddressRangeDescriptor;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let map_len = unsafe { ptr::read((E820_MAP_ADDR - 0x2) as *mut u16) };
+        let map_len = unsafe { ptr::read((E820_MAP_ADDR - 0x4) as *mut u32) };
         assert_ne!(map_len, 0);
 
         if map_len <= self.cursor {
@@ -108,7 +108,7 @@ bitfield! {
     non_volatile, _: 1, 1;
 }
 
-fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, E820Error> {
+fn __mem_entry_e820(mut ebx: u32, buffer: u32) -> Result<u32, E820Error> {
     let cf: u32;
 
     unsafe {
@@ -179,7 +179,7 @@ fn e820_type_print(descriptor: &AddressRangeDescriptor) {
 pub fn memory_map() {
     use crate::rinfo;
 
-    let mut entry_count: u16 = 0;
+    let mut entry_count: u32 = 0;
     let mut ebx: u32 = 0;
 
     while let Ok(result) = __mem_entry_e820(ebx, E820_MAP_ADDR + entry_count * 24) {
@@ -200,5 +200,5 @@ pub fn memory_map() {
         e820_type_print(descriptor);
     }
 
-    unsafe { ptr::write((E820_MAP_ADDR - 0x2) as *mut u16, entry_count) }
+    unsafe { ptr::write((E820_MAP_ADDR - 0x2) as *mut u32, entry_count) }
 }

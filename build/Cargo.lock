@@ -517,13 +517,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mbr"
-version = "0.1.0"
-dependencies = [
- "fzboot",
-]
-
-[[package]]
 name = "memchr"
 version = "2.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -751,13 +744,6 @@ checksum = "5ce3fb6ad83f861aac485e76e1985cd109d9a3713802152be56c3b1f0e0658ed"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
-]
-
-[[package]]
-name = "real"
-version = "0.1.0"
-dependencies = [
- "fzboot",
 ]
 
 [[package]]
