@@ -90,6 +90,7 @@ The repository is built with the following file structure:
     - `...`: feature-specific source files (`time`, `irq`)
   - `io/`: Input-output device management code
   - `mem/`: contains memory-management related code
+  - `network/`: contains network management code
   - `video/`: contains FrozenBoot's graphic code.
   - `x86/`: architecture-specific code
 
