@@ -39,7 +39,7 @@ impl Alignment {
     pub const ALIGN_4KB: Self = Self(1 << 12);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct VirtAddr(u64);
 
 impl VirtAddr {
@@ -64,18 +64,27 @@ impl VirtAddr {
     }
 }
 
+impl Add for VirtAddr {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        VirtAddr::new(self.0 + rhs.0)
+    }
+}
+
 impl From<VirtAddr> for u64 {
     fn from(value: VirtAddr) -> Self {
         value.0
     }
 }
+
 impl From<PhyAddr> for u64 {
     fn from(value: PhyAddr) -> Self {
         value.0
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PhyAddr(u64);
 
 impl PhyAddr {
@@ -96,6 +105,14 @@ impl PhyAddr {
     }
 }
 
+impl Add<u64> for PhyAddr {
+    type Output = PhyAddr;
+
+    fn add(self, rhs: u64) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
 impl<T> From<*mut T> for PhyAddr {
     fn from(value: *mut T) -> Self {
         Self(value as u64)
@@ -107,6 +124,10 @@ impl<T> From<*mut T> for PhyAddr {
 pub struct PhyAddr32(u32);
 
 impl PhyAddr32 {
+    pub const fn new(addr: u32) -> Self {
+        Self(addr)
+    }
+
     pub fn as_ptr<T>(&self) -> *const T {
         self.0 as *const T
     }

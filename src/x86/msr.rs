@@ -32,7 +32,7 @@
 use crate::mem::PhyAddr32;
 use core::arch::asm;
 use modular_bitfield::bitfield;
-use modular_bitfield::prelude::{B1, B2, B23, B24, B27, B28, B8};
+use modular_bitfield::prelude::{B2, B24, B28, B52, B7, B8};
 
 use crate::x86::cpuid::{cpu_feature_support, CPU_FEAT_MSR};
 
@@ -91,12 +91,46 @@ pub unsafe fn msr_write(msr: u32, value: u64) {
     let hi_val = ((value >> 32) & 0xffffffff) as u32;
     let lo_val = (value & 0xffffffff) as u32;
 
+    /*
     if cpu_feature_support(CPU_FEAT_MSR).is_none() || !cpu_feature_support(CPU_FEAT_MSR).unwrap() {
         return;
-    }
+    }*/
 
     unsafe {
         asm!("wrmsr", in("ecx") msr, in("edx") hi_val, in("eax") lo_val, options(nostack, nomem));
+    }
+}
+
+pub trait ModelSpecificRegister: Sized {
+    fn read() -> Option<Self>;
+    fn write(self);
+}
+
+pub(crate) const IA32_EFER: u32 = 0xC000_0080;
+
+#[bitfield]
+#[derive(Clone, Copy, Debug)]
+#[repr(u64)]
+pub struct Ia32ExtendedFeature {
+    pub syscall_enable: bool,
+    #[skip]
+    __: B7,
+    pub ia32e_enable: bool,
+    #[skip]
+    __: bool,
+    pub ia32e_active: bool,
+    pub nxe: bool,
+    #[skip]
+    __: B52,
+}
+
+impl ModelSpecificRegister for Ia32ExtendedFeature {
+    fn read() -> Option<Self> {
+        Some(Self::from(msr_read(IA32_EFER)?))
+    }
+
+    fn write(self) {
+        unsafe { msr_write(IA32_EFER, u64::from(self)) }
     }
 }
 

@@ -14,7 +14,7 @@ use core::{
     ptr::{self, NonNull},
 };
 
-const MIN_HEAP_ALIGN: usize = 4096;
+const MIN_HEAP_ALIGN: usize = 8192;
 
 /// Locked version of the [`BuddyAllocator`].
 ///
@@ -357,7 +357,12 @@ impl<const N: usize> BuddyAllocator<N> {
     /// Buddy: 1100
     pub fn buddy(&self, block: *mut u8, level: u8) -> Option<*mut u8> {
         // Make sure the block is in our bounds.
-        assert!(block >= self.base_addr.inner);
+        assert!(
+            block >= self.base_addr.inner,
+            "{:#x} : {:#x}",
+            block as u64,
+            self.base_addr.inner as u64
+        );
         assert!(unsafe { block <= self.base_addr.inner.add(self.max_blk_size) });
 
         // The entire heap does not have a buddy
