@@ -16,6 +16,8 @@ pub mod idt;
 #[cfg(feature = "alloc")]
 pub mod apic;
 
+#[cfg(feature = "alloc")]
+pub mod paging;
 pub mod registers;
 
 pub mod int {

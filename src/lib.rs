@@ -6,6 +6,7 @@
 #![feature(allocator_api)]
 #![feature(const_nonnull_new)]
 #![feature(const_option)]
+#![feature(strict_provenance)]
 #![warn(missing_copy_implementations)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]

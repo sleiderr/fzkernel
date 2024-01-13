@@ -11,6 +11,7 @@ use core::arch::asm;
 use core::{panic::PanicInfo, ptr::NonNull};
 use fzboot::println;
 use fzboot::video::vesa::text_buffer;
+use fzboot::x86::paging::bootinit_paging;
 use fzboot::{
     drivers::pci::pci_devices_init,
     mem::{
@@ -60,6 +61,8 @@ pub fn boot_main() -> ! {
     interrupts_init();
     pci_enumerate();
     pci_devices_init();
+
+    bootinit_paging::init_paging();
 
     loop {}
 }
