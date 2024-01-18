@@ -9,7 +9,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::errors::InvalidAddress;
-use crate::mem::{Alignment, PhyAddr, PhyAddr32};
+use crate::mem::{Alignment, MemoryAddress, PhyAddr, PhyAddr32};
 use core::arch::asm;
 use modular_bitfield::bitfield;
 use modular_bitfield::prelude::{B10, B20, B3, B32, B39, B52, B7};
@@ -204,7 +204,7 @@ impl Cr3 {
     /// Returns [`InvalidAddress::InvalidAlignment`] if the given address is not page-aligned (4KB aligned).
     #[cfg(not(feature = "x86_64"))]
     pub fn set_page_table_addr(self, addr: PhyAddr32) -> Result<Self, InvalidAddress> {
-        if !addr.is_aligned_with(Alignment::ALIGN_4KB) {
+        if !addr.is_aligned_with(Alignment::ALIGN_4KB).unwrap() {
             return Err(InvalidAddress::InvalidAlignment);
         }
         Ok(self.with_pdt_addr(u32::from(addr) >> 12))

@@ -7,7 +7,7 @@
 use crate::errors::BaseError;
 use crate::mem::{PhyAddr, VirtAddr};
 
-pub mod page_table;
+pub(crate) mod page_table;
 
 pub use page_table::{PageTable, PageTableFlags};
 
@@ -48,7 +48,7 @@ impl Frame {
 
 /// Routines to enable paging at the pre-kernel init stage.
 pub mod bootinit_paging {
-    use crate::mem::{PhyAddr, PhyAddr32, VirtAddr};
+    use crate::mem::{MemoryAddress, PhyAddr, PhyAddr32, VirtAddr};
     use crate::x86::int::disable_interrupts;
     use crate::x86::msr::{Ia32ExtendedFeature, ModelSpecificRegister};
     use crate::x86::paging::page_table::translate::{PageAddressTranslator, Translator};

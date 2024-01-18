@@ -1,15 +1,19 @@
 //! Memory related utilities module.
 
+use alloc::format;
 use bytemuck::{Pod, Zeroable};
 use core::cell::UnsafeCell;
-use core::ops::{Add, AddAssign, BitAnd, Shr};
+use core::fmt::{Display, Formatter};
+use core::ops::{Add, AddAssign, BitAnd, Rem, Shr};
 use core::ptr;
+use core::ptr::NonNull;
 
+use crate::Convertible;
 use conquer_once::spin::OnceCell;
 
 pub mod bmalloc;
 pub mod e820;
-pub mod gdt;
+pub mod utils;
 
 pub static MEM_STRUCTURE: OnceCell<MemoryStructure> = OnceCell::uninit();
 
@@ -37,6 +41,34 @@ pub struct Alignment(u64);
 
 impl Alignment {
     pub const ALIGN_4KB: Self = Self(1 << 12);
+}
+
+impl TryFrom<Alignment> for u32 {
+    type Error = MemoryError;
+
+    fn try_from(value: Alignment) -> Result<Self, Self::Error> {
+        u32::try_from(value.0).map_err(|_| MemoryError::InvalidAlignment)
+    }
+}
+
+impl From<u32> for Alignment {
+    fn from(value: u32) -> Self {
+        Self(u64::from(value))
+    }
+}
+
+impl From<u64> for Alignment {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+impl TryFrom<Alignment> for u64 {
+    type Error = MemoryError;
+
+    fn try_from(value: Alignment) -> Result<Self, Self::Error> {
+        Ok(value.0)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -84,24 +116,51 @@ impl From<PhyAddr> for u64 {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub struct PhyAddr(u64);
 
 impl PhyAddr {
+    pub const MAX_32: Self = Self(0xFFFF_FFFF);
+
     pub const fn new(addr: u64) -> Self {
         Self(addr % (1 << 52))
     }
+}
 
-    pub fn as_ptr<T>(&self) -> *const T {
+impl Display for PhyAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.pad(&format!("{:#018x}", self.0))
+    }
+}
+
+impl MemoryAddress for PhyAddr {
+    const WIDTH: u64 = 8;
+    type AsPrimitive = u64;
+
+    fn as_ptr<T>(&self) -> *const T {
         self.0 as *const T
     }
 
-    pub fn as_mut_ptr<T>(&mut self) -> *mut T {
+    fn as_mut_ptr<T>(&self) -> *mut T {
         self.0 as *mut T
     }
 
-    pub fn is_aligned_with(&self, align: Alignment) -> bool {
-        self.0 % align.0 == 0
+    fn is_null(&self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl From<u64> for PhyAddr {
+    fn from(value: u64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl Add<usize> for PhyAddr {
+    type Output = PhyAddr;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        Self(self.0 + u64::try_from(rhs).expect("invalid offset"))
     }
 }
 
@@ -126,18 +185,6 @@ pub struct PhyAddr32(u32);
 impl PhyAddr32 {
     pub const fn new(addr: u32) -> Self {
         Self(addr)
-    }
-
-    pub fn as_ptr<T>(&self) -> *const T {
-        self.0 as *const T
-    }
-
-    pub fn as_mut_ptr<T>(&mut self) -> *mut T {
-        self.0 as *mut T
-    }
-
-    pub fn is_aligned_with(&self, align: Alignment) -> bool {
-        self.0 % u32::try_from(align.0).unwrap() == 0
     }
 }
 
@@ -183,9 +230,81 @@ impl Shr<u32> for PhyAddr32 {
     }
 }
 
+impl Add<usize> for PhyAddr32 {
+    type Output = PhyAddr32;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        Self(
+            self.0
+                .saturating_add(u32::try_from(rhs).expect("invalid address")),
+        )
+    }
+}
+
+impl Display for PhyAddr32 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.pad(&format!("{:#010x}", self.0))
+    }
+}
+
+pub trait MemoryAddress:
+    Display + Sized + Clone + Copy + Add<usize, Output = Self> + PartialEq + PartialOrd
+{
+    const WIDTH: u64;
+
+    type AsPrimitive: Into<Self>
+        + From<Self>
+        + TryFrom<u128>
+        + TryFrom<Alignment, Error = MemoryError>
+        + Rem<Output = Self::AsPrimitive>;
+
+    fn as_ptr<T>(&self) -> *const T;
+
+    fn as_mut_ptr<T>(&self) -> *mut T;
+
+    fn as_nonnull_ptr<T>(&self) -> Result<NonNull<T>, MemoryError> {
+        NonNull::new(self.as_mut_ptr()).ok_or(MemoryError::NullPointer)
+    }
+
+    fn is_null(&self) -> bool;
+
+    fn is_aligned_with(&self, align: Alignment) -> Result<bool, MemoryError> {
+        Ok(
+            Into::<Self>::into(
+                Self::AsPrimitive::from(*self) % Self::AsPrimitive::try_from(align)?,
+            )
+            .is_null(),
+        )
+    }
+}
+
+impl MemoryAddress for PhyAddr32 {
+    const WIDTH: u64 = 4;
+
+    type AsPrimitive = u32;
+
+    fn as_ptr<T>(&self) -> *const T {
+        Self::AsPrimitive::from(*self) as *const T
+    }
+
+    fn as_mut_ptr<T>(&self) -> *mut T {
+        Self::AsPrimitive::from(*self) as *mut T
+    }
+
+    fn is_null(&self) -> bool {
+        self.0 == 0
+    }
+}
+
 pub struct MemoryStructure {
     pub heap_addr: usize,
     pub heap_size: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum MemoryError {
+    InvalidAlignment,
+    NullPointer,
 }
 
 /// Zeroise the .bss segment when entering the program.
