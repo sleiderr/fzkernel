@@ -22,6 +22,39 @@ use core::ptr::{read, NonNull};
 use modular_bitfield::prelude::{B24, B4, B40, B5};
 use modular_bitfield::{bitfield, BitfieldSpecifier};
 
+pub const LONG_GDT_ADDR: u64 = 0x4000;
+
+/// Initializes the long mode [`GlobalDescriptorTable`], with long code segment.
+///
+/// # Safety
+///
+/// Overwrites anything in memory at [`LONG_GDT_ADDR`].
+#[allow(clippy::missing_panics_doc)]
+pub unsafe fn long_init_gdt() {
+    let mut gdt = GlobalDescriptorTable::new(PhyAddr::new(LONG_GDT_ADDR));
+    gdt.add_entry::<DataSegmentType>(
+        SegmentDescriptor::new_segment::<DataSegmentType>(DataSegmentType::ReadWrite)
+            .with_present(true)
+            .with_base(PhyAddr::new(0))
+            .unwrap()
+            .with_limit(0xFF_FFF)
+            .unwrap(),
+    )
+    .unwrap();
+    gdt.add_entry::<CodeSegmentType>(
+        SegmentDescriptor::new_segment::<CodeSegmentType>(CodeSegmentType::ExecuteRead)
+            .with_present(true)
+            .with_base(PhyAddr::new(0))
+            .unwrap()
+            .with_limit(0xFF_FFF)
+            .unwrap()
+            .enable_long()
+            .unwrap(),
+    )
+    .unwrap();
+    gdt.update();
+}
+
 /// _Global Descriptor Table_ (`GDT`) structure.
 ///
 /// This table contains the `segment descriptors`, that contains information about memory segments, and are cached
