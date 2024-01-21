@@ -1,5 +1,5 @@
 #define BOOT_SECTORS_COUNT 0xA00
-#define BOOTSTRAP_SECTORS_COUNT 0x4
+#define BOOTSTRAP_SECTORS_COUNT 0x3
 #define MAX_SECTORS_PER_READ 0x80
 #define MAX_DISK_OP_RETRIES 5
 
@@ -24,7 +24,7 @@ _boot:
 ext_load_bootstrap:
     mov ah, 0x42
     mov WORD PTR dap_sectors_count, BOOTSTRAP_SECTORS_COUNT
-    mov WORD PTR dap_lba_lo, 1
+    mov WORD PTR dap_lba_lo, 0x80
     lea si, [dap]
     int 0x13
     jc io_error
@@ -33,6 +33,7 @@ ext_load_boot:
     mov WORD PTR dap_segment, POST_MBR_LOAD_SEG
     xor al, al
     mov cx, BOOTSTRAP_SECTORS_COUNT
+    add cx, 0x80
     mov bx, BOOT_SECTORS_COUNT
     read_loop: test bx, bx
     jz read_complete
