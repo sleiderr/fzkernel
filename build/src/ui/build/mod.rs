@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_lines)]
 use std::{error::Error, io, thread};
 
 use crossterm::{
@@ -16,7 +17,7 @@ use ratatui::{
 use crate::{
     components::build::{BuildBlueprint, BuildEvent},
     errors::BuildError,
-    APP, BOOTLOADER_BUILD, TERMINAL,
+    APP, BOOTLOADER_BUILD, IMAGE_DISK_BUILD, TERMINAL,
 };
 
 #[derive(Default)]
@@ -31,7 +32,9 @@ impl BuildUI {
 
         let mut blueprint = BuildBlueprint::default();
         let mut boot_step = BOOTLOADER_BUILD.get().ok_or(BuildError(None))?.lock();
+        let mut image_disk_step = IMAGE_DISK_BUILD.get().ok_or(BuildError(None))?.lock();
         blueprint.steps.push(&mut *boot_step);
+        blueprint.steps.push(&mut *image_disk_step);
         self.steps_count = blueprint.steps_count();
 
         let receiver = blueprint.incoming.clone();
@@ -51,7 +54,7 @@ impl BuildUI {
                                 Span::from("] "),
                                 Span::styled(
                                     format!(
-                                        "Building bootloader {} / {}",
+                                        "Building {msg} {} / {}",
                                         self.steps_finished, self.steps_count
                                     ),
                                     Style::default().add_modifier(Modifier::BOLD),
@@ -114,7 +117,6 @@ impl BuildUI {
                                 })?;
                             }
                         };
-
                         break;
                     }
                     BuildEvent::Finished(_, _) => break,
