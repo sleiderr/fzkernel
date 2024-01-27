@@ -2,14 +2,14 @@ use crate::drivers::ahci::device::{ATAMediaRotationRate, SizeFormat};
 use crate::drivers::generics::dev_disk::DiskDevice;
 use crate::drivers::ide::ata_command::AtaCommand;
 use crate::errors::CanFail;
-use crate::io::{inb, inw, outb, IOPort};
+use crate::io::{inb, inw, outb, outw, IOPort};
 use crate::mem::utils::Convertible;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use conquer_once::spin::OnceCell;
-use core::cell::RefCell;
+use core::cell::{RefCell, UnsafeCell};
 use core::hint;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use modular_bitfield::bitfield;
@@ -30,8 +30,9 @@ pub(super) struct AtaDevice {
     ctrl_base: IOPort,
     is_slave: bool,
     busy: AtomicBool,
+    sector_sz: UnsafeCell<usize>,
     command_queue: RefCell<Option<AtaCommandRequest>>,
-    identify_data: RefCell<AtaIdentify>,
+    identify_data: UnsafeCell<AtaIdentify>,
 }
 
 #[derive(Debug)]
@@ -51,6 +52,10 @@ struct AtaIoRequestInner {
 }
 
 impl AtaIoRequest {
+    /// Creates a new `I/O` request.
+    ///
+    /// It is associated with a [`AtaCommandRequest`], and indicates the current state of that
+    /// command request, and contains its result when it has been fully processed.
     pub(super) fn new(has_completed: AtomicBool) -> Self {
         AtaIoRequest {
             inner: Arc::new(AtaIoRequestInner {
@@ -60,7 +65,12 @@ impl AtaIoRequest {
         }
     }
 
-    pub(super) fn finish(self) -> AtaIoResult {
+    /// Waits until the `I/O` operation completes, and returns its result.
+    ///
+    /// `I/O` operations are processed as soon as the [`AtaCommandRequest`] is dispatched to the
+    /// device. That process is asynchronous, and therefore to get the result of the operation you
+    /// must make sure it has been fully processed by the device.
+    pub(super) fn complete(self) -> AtaIoResult {
         while !self.inner.has_completed.load(Ordering::Relaxed) {
             hint::spin_loop();
         }
@@ -83,10 +93,39 @@ impl DiskDevice for AtaDevice {
             AtaCommandRequest::new(
                 AtaCommand::AtaReadSectorsExt,
                 u64::from(sectors_count)
-                    * u64::from(self.identify_data.borrow().logical_sector_size()),
+                    * u64::try_from(self.sector_size()).expect("invalid sector size"),
             )
             .with_data_buffer(alloc::vec![]),
         )
+    }
+
+    fn write(&self, start_lba: u64, sectors_count: u16, mut data: Vec<u8>) -> AtaIoRequest {
+        self.set_lba(start_lba);
+        self.set_sectors_count(sectors_count);
+
+        let initial_write_sz = data.len().min(self.sector_size());
+        let mut initial_sector: Vec<u8> = data.drain(..initial_write_sz).collect();
+        initial_sector.resize(self.sector_size(), 0);
+        let mut initial_sector_iter = initial_sector.iter();
+        let request = self.send_ata_command(
+            AtaCommandRequest::new(
+                AtaCommand::AtaWriteSectorsExt,
+                u64::from(sectors_count)
+                    * u64::try_from(self.sector_size()).expect("invalid sector size"),
+            )
+            .with_data_buffer(data)
+            .with_direction(AtaTransferDirection::Write),
+        );
+
+        for _ in 0..(self.sector_size() >> 1) {
+            let wd_to_wr = u16::from_le_bytes([
+                *initial_sector_iter.next().expect("invalid buffer size"),
+                *initial_sector_iter.next().expect("invalid buffer size"),
+            ]);
+            self.write_data_port(wd_to_wr);
+        }
+
+        request
     }
 }
 
@@ -103,15 +142,26 @@ impl AtaDevice {
             is_slave,
             busy: AtomicBool::default(),
             command_queue: RefCell::new(None),
-            identify_data: RefCell::new(AtaIdentify([0u16; 256])),
+            identify_data: UnsafeCell::new(AtaIdentify([0u16; 256])),
+            sector_sz: 0.into(),
         };
         ata_devices().write().push(device);
         let dev_list = ata_devices().read();
 
         let dev = dev_list.last().ok_or(AtaError::DriveNotPresent)?;
         dev.identify();
+        dev.read(0, 1);
+        let cmd = dev.write(0, 2, alloc::vec![0xffu8; 1024]);
 
         Ok(())
+    }
+
+    pub(super) fn sector_size(&self) -> usize {
+        unsafe { *(self.sector_sz.get() as *const usize) }
+    }
+
+    pub(super) fn identify_data(&self) -> &AtaIdentify {
+        unsafe { &*(self.identify_data.get() as *const AtaIdentify) }
     }
 
     pub(super) fn handle_irq(&self) {
@@ -124,27 +174,51 @@ impl AtaDevice {
             }
             let transfer_size = queued_cmd.data_size.min(0x200);
             queued_cmd.data_size -= transfer_size;
-            match queued_cmd.direction {
-                AtaTransferDirection::Read => {
-                    if let Some(buffer) = &mut queued_cmd.buffer {
-                        buffer.reserve_exact(
-                            usize::try_from(transfer_size).expect("invalid transfer size"),
-                        );
-                        for _ in 0..(transfer_size >> 1) {
-                            let w = self.read_data_port();
-                            buffer.push(w.low_bits());
-                            buffer.push(w.high_bits());
+            let status = StatusRegister::read_alternate(self.ctrl_base);
+            if status.drq() {
+                match queued_cmd.direction {
+                    AtaTransferDirection::Read => {
+                        if let Some(buffer) = &mut queued_cmd.buffer {
+                            buffer.reserve_exact(
+                                usize::try_from(transfer_size).expect("invalid transfer size"),
+                            );
+                            for _ in 0..(transfer_size >> 1) {
+                                let w = self.read_data_port();
+                                buffer.push(w.low_bits());
+                                buffer.push(w.high_bits());
+                            }
+                        }
+                    }
+                    AtaTransferDirection::Write => {
+                        if let Some(buffer) = &mut queued_cmd.buffer {
+                            // todo: replace asserts with better error handling
+                            assert!(
+                                u64::try_from(buffer.len()).expect("invalid buffer length")
+                                    >= transfer_size
+                            );
+                            let mut data_to_write = buffer.drain(
+                                0..usize::try_from(transfer_size).expect("invalid transfer size"),
+                            );
+                            for _ in 0..(transfer_size >> 1) {
+                                let wd_to_wr = u16::from_le_bytes([
+                                    data_to_write.next().expect("invalid buffer size"),
+                                    data_to_write.next().expect("invalid buffer size"),
+                                ]);
+                                self.write_data_port(wd_to_wr);
+                            }
                         }
                     }
                 }
-                AtaTransferDirection::Write => {}
             }
         }
 
         if has_cmd_queued {
             let status = StatusRegister::read_alternate(self.ctrl_base);
             if !status.bsy() && !status.drq() {
-                let mut queued_cmd = self.command_queue.replace(None).expect("an ATA command should be queued");
+                let mut queued_cmd = self
+                    .command_queue
+                    .replace(None)
+                    .expect("an ATA command should be queued");
                 let mut ata_result = AtaIoResult {
                     result: AtaResult::Success,
                     command: queued_cmd.command,
@@ -189,7 +263,12 @@ impl AtaDevice {
                         let high_byte = buffer.remove(0);
                         *w = u16::from_le_bytes([low_byte, high_byte]);
                     }
-                    dev.identify_data.borrow_mut().0 = identify_data;
+                    unsafe { (*dev.identify_data.get()).0 = identify_data }
+                    unsafe {
+                        *dev.sector_sz.get() =
+                            usize::try_from(dev.identify_data().logical_sector_size())
+                                .expect("invalid sector size")
+                    }
 
                     Ok(())
                 })),
@@ -198,6 +277,10 @@ impl AtaDevice {
 
     fn read_data_port(&self) -> u16 {
         inw(self.io_base)
+    }
+
+    fn write_data_port(&self, data: u16) {
+        outw(self.io_base, data)
     }
 
     fn send_ata_command(&self, command: AtaCommandRequest) -> AtaIoRequest {
@@ -217,7 +300,7 @@ impl AtaDevice {
     }
 
     fn set_sectors_count(&self, count: u16) {
-        match self.identify_data.borrow().addressing_mode() {
+        match self.identify_data().addressing_mode() {
             AtaAddressingMode::Lba24 => outb(self.io_base + 0x2, count.low_bits()),
             AtaAddressingMode::Lba48 => {
                 outb(self.io_base + 0x2, count.high_bits());
@@ -227,7 +310,7 @@ impl AtaDevice {
     }
 
     fn set_lba(&self, lba: u64) {
-        match self.identify_data.borrow().addressing_mode() {
+        match self.identify_data().addressing_mode() {
             AtaAddressingMode::Lba24 => {
                 outb(self.io_base + 0x3, lba.low_bits());
                 outb(self.io_base + 0x4, (lba >> 8).low_bits());
