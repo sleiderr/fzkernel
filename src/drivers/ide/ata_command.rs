@@ -36,7 +36,10 @@ pub(crate) enum AtaCommand {
     AtaReadMultipleExt = 0x29,
     AtaReadSectors = 0x20,
     AtaReadSectorsExt = 0x24,
+    AtaWriteSectors = 0x30,
     AtaWriteSectorsExt = 0x34,
+    AtaWriteMultipleExt = 0x39,
+    AtaSetMultipleMode = 0xC6,
 }
 
 impl AtaCommand {
