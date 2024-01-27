@@ -19,7 +19,7 @@ fn __cmos_read(registry: u8) -> u8 {
     io_delay();
 
     // Read the value of the registry.
-    inb(0x71)
+    inb(IOPort::from(0x71))
 }
 
 /// Checks if the RTC value is being updated (rolls over).

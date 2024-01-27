@@ -185,9 +185,9 @@ impl Ext4Fs {
             .ok_or(IOError::Unknown)?
             .start_lba();
 
-        let sectors_count = sb.blk_size() / u64::from(drive.logical_sector_size());
-        let start_lba =
-            partition_data + (blk_id * sb.blk_size()) / u64::from(drive.logical_sector_size());
+        let sectors_count = sb.blk_size() / u64::from(drive.device_info.logical_sector_size());
+        let start_lba = partition_data
+            + (blk_id * sb.blk_size()) / u64::from(drive.device_info.logical_sector_size());
 
         drive.read(
             start_lba,
@@ -205,10 +205,11 @@ impl Fs for Ext4Fs {
     ) -> Result<LockedExt4Fs, MountError> {
         let mut drive = get_sata_drive(drive_id).lock();
 
-        let sb_start_lba = (1024 / u64::from(drive.logical_sector_size())) + partition_data;
+        let sb_start_lba =
+            (1024 / u64::from(drive.device_info.logical_sector_size())) + partition_data;
         let sb_size_in_lba = u32::try_from(mem::size_of::<Ext4Superblock>())
             .expect("invalid superblock size")
-            / drive.logical_sector_size();
+            / drive.device_info.logical_sector_size();
 
         let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
         drive
@@ -271,10 +272,11 @@ impl Fs for Ext4Fs {
     fn identify(drive_id: usize, partition_data: u64) -> Result<bool, IOError> {
         let mut drive = get_sata_drive(drive_id).lock();
 
-        let sb_start_lba = (1024 / u64::from(drive.logical_sector_size())) + partition_data;
+        let sb_start_lba =
+            (1024 / u64::from(drive.device_info.logical_sector_size())) + partition_data;
         let sb_size_in_lba = u32::try_from(mem::size_of::<Ext4Superblock>())
             .expect("invalid superblock size")
-            / drive.logical_sector_size();
+            / drive.device_info.logical_sector_size();
 
         let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
         drive.read(

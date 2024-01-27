@@ -1,5 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 use core::arch::asm;
+use core::ops::Add;
 
 pub mod acpi;
 pub mod disk;
@@ -28,6 +29,14 @@ impl From<IOPort> for u16 {
     }
 }
 
+impl Add<u16> for IOPort {
+    type Output = IOPort;
+
+    fn add(self, rhs: u16) -> Self::Output {
+        Self(self.0.saturating_add(rhs))
+    }
+}
+
 pub fn outb(port: IOPort, data: u8) {
     unsafe {
         asm!(
@@ -38,11 +47,11 @@ pub fn outb(port: IOPort, data: u8) {
     }
 }
 
-pub fn outw(port: u16, data: u16) {
+pub fn outw(port: IOPort, data: u16) {
     unsafe {
         asm!(
         "out dx, ax",
-        in("dx") port,
+        in("dx") u16::from(port),
         in("ax") data
         )
     }
@@ -60,13 +69,25 @@ pub fn outl(port: u16, data: u32) {
     unsafe { asm!("popa") }
 }
 
-pub fn inb(port: u32) -> u8 {
+pub fn inb(port: IOPort) -> u8 {
     let data: u8;
     unsafe {
         asm!(
         "in al, dx",
-        in("dx") port,
+        in("dx") u16::from(port),
         out("al") data
+        );
+    }
+    data
+}
+
+pub fn inw(port: IOPort) -> u16 {
+    let data: u16;
+    unsafe {
+        asm!(
+        "in ax, dx",
+        in("dx") u16::from(port),
+        out("ax") data
         );
     }
     data

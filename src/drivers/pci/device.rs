@@ -42,6 +42,7 @@ impl PCIDevices {
     /// Retrieve the PCI devices corresponding to a given [`DeviceClass`].
     ///
     /// Returns a new `PCIDevices` containing all devices matching the provided [`DeviceClass`].
+    #[must_use]
     pub fn get_by_class(&self, class: DeviceClass) -> PCIDevices {
         PCIDevices::from_devices(
             self.devices

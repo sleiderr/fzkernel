@@ -1,7 +1,47 @@
+use modular_bitfield::BitfieldSpecifier;
 macro_rules! define_ata_cmd {
     ($name: tt, $code: literal) => {
         pub const $name: u8 = $code;
     };
+}
+
+#[derive(Clone, Copy, Debug, BitfieldSpecifier)]
+#[bits = 8]
+#[repr(u8)]
+pub(crate) enum AtaCommand {
+    AtaCheckPowerMode = 0xE5,
+    AtaConfigureStream = 0x51,
+    AtaDataSetMgmt = 0x06,
+    AtaDeviceReset = 0x08,
+    AtaDownloadMicrocode = 0x92,
+    AtaDownloadMicrocodeDma = 0x93,
+    AtaExecuteDeviceDiagnostic = 0x90,
+    AtaFlushCache = 0xE7,
+    AtaFlushCacheExt = 0xEA,
+    AtaIdentifyDevice = 0xEC,
+    AtaIdentifyPacket = 0xA1,
+    AtaIdle = 0xE3,
+    AtaIdleImmediate = 0xE1,
+    AtaNcqQueueMgmt = 0x63,
+    AtaNop = 0x00,
+    AtaPacket = 0xA0,
+    AtaReadBuffer = 0xE4,
+    AtaReadBufferDma = 0xE9,
+    AtaReadDma = 0xC8,
+    AtaReadDmaExt = 0x25,
+    AtaReadFpdmaQueued = 0x60,
+    AtaReadLogExt = 0x2F,
+    AtaReadLogDmaExt = 0x47,
+    AtaReadMultiple = 0xC4,
+    AtaReadMultipleExt = 0x29,
+    AtaReadSectors = 0x20,
+    AtaReadSectorsExt = 0x24,
+}
+
+impl AtaCommand {
+    pub(super) fn discriminant(&self) -> u8 {
+        unsafe { *<*const _>::from(self).cast::<u8>() }
+    }
 }
 
 define_ata_cmd!(ATA_CHECK_POWER_MODE, 0xE5);
