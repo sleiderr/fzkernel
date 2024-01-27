@@ -1,4 +1,5 @@
 target*
+artifacts*
 .idea
 .DS_STORE
 *.bin

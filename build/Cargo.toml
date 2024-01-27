@@ -13,6 +13,7 @@ categories = ["no-std", "embedded"]
 members = [
     "../",
     "../src/fzboot/main",
+    "../src/fzboot/kernel",
     "../src/fzboot/proc_macros"
 ]
 
@@ -26,11 +27,13 @@ categories = ["no-std", "embedded"]
 
 [dependencies]
 crossterm = "0.27"
+config = "0.13"
 anyhow = "1.0"
 ratatui = { version = "0.22.0", features = ["all-widgets"]}
 argh = "0.1"
 crossbeam = "0.8"
 tokio = { version = "1.31.0", features = ["full"] }
+gpt = "3.1"
 async-trait = "0.1"
 conquer-once = "0.4"
 futures = "0.3"

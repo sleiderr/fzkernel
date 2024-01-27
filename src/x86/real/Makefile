@@ -6,13 +6,14 @@ ASMFLAGS = -target i386-unknown-none -masm=intel -march=i386 -c
 LDFLAGS = -m elf_i386
 ASM_SOURCES := boot.S real.S
 ASM_OBJ := boot.o real.o
-ASM_OBJ_OUT := build/boot.o build/real.o
-BUILD_DIR := ../../../build
-OUTPUT_DIR := ../../../build/asm
+ASM_OBJ_OUT := build/artifacts/boot.o build/artifacts/real.o
+BUILD_DIR := ../../../build/artifacts
+OUTPUT_DIR := ../../../build/artifacts/asm
 
 all: $(ASM_OBJ) boot image
 
 %.o:%.S
+	mkdir -p $(OUTPUT_DIR)
 	$(CC) $(CFLAGS) $(ASMFLAGS) $< -o $(OUTPUT_DIR)/$@
 	x86_64-unknown-linux-gnu-ld $(LDFLAGS) -v -T $(patsubst %.o,%.ld,$@) -o $(OUTPUT_DIR)/$(patsubst %.o,%.out,$@) $(OUTPUT_DIR)/$@
 	x86_64-unknown-linux-gnu-objcopy -I elf32-i386 -O binary $(OUTPUT_DIR)/$(patsubst %.o,%.out,$@) $(OUTPUT_DIR)/$(patsubst %.o,%.bin,$@)
