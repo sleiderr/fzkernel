@@ -4,6 +4,7 @@ use crate::drivers::ide::ata_command::AtaCommand;
 use crate::errors::CanFail;
 use crate::io::{inb, inw, outb, outw, IOPort};
 use crate::mem::utils::Convertible;
+use crate::{println, wait};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -13,6 +14,7 @@ use core::cell::{RefCell, UnsafeCell};
 use core::hint;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use modular_bitfield::bitfield;
+use modular_bitfield::specifiers::{B4, B5};
 use spin::{Mutex, RwLock};
 
 static LAST_ATA_DEVICE: AtomicU8 = AtomicU8::new(0);
@@ -96,9 +98,9 @@ impl DiskDevice for AtaDevice {
             AtaAddressingMode::Lba24 => {
                 let mut remaining_sectors = sectors_count;
                 let mut buffer = alloc::vec![];
-                let mut read_succ = true;
+                let mut read_err = None;
 
-                while sectors_count != 0 {
+                while remaining_sectors != 0 {
                     let sectors_to_read = u16::min(0xff, remaining_sectors);
                     self.set_lba(start_lba + u64::from(sectors_count - remaining_sectors));
                     self.set_sectors_count(sectors_to_read);
@@ -114,15 +116,15 @@ impl DiskDevice for AtaDevice {
                         )
                         .complete();
 
-                    if !matches!(cmd_result.result, AtaResult::Success) {
-                        read_succ = false;
+                    if let AtaResult::Error(err) = cmd_result.result {
+                        read_err = Some(err);
                         break;
                     }
 
                     if let Some(req_buf) = cmd_result.data {
                         buffer.extend(&req_buf);
                     } else {
-                        read_succ = false;
+                        read_err = Some(AtaError::new(AtaErrorCode::InvalidBufferSize, self.read_lba()));
                         break;
                     }
 
@@ -131,10 +133,9 @@ impl DiskDevice for AtaDevice {
 
                 let io_req = AtaIoRequest::new(AtomicBool::new(true));
                 let mut io_res = io_req.inner.result.lock();
-                let io_res_code = if read_succ {
-                    AtaResult::Success
-                } else {
-                    AtaResult::Error
+                let io_res_code = match read_err {
+                    Some(err) => AtaResult::Error(err),
+                    None => AtaResult::Success,
                 };
 
                 *io_res = Some(AtaIoResult {
@@ -186,17 +187,19 @@ impl DiskDevice for AtaDevice {
             AtaAddressingMode::Lba24 => {
                 let mut remaining_sectors = sectors_count;
                 let mut buffer = alloc::vec![];
-                let mut read_succ = true;
+                let mut read_err = None;
 
-                while sectors_count != 0 {
+                while remaining_sectors != 0 {
                     let sectors_to_read = u16::min(0xff, remaining_sectors);
                     self.set_lba(start_lba + u64::from(sectors_count - remaining_sectors));
                     self.set_sectors_count(sectors_to_read);
-                    let data_to_write: Vec<u8> =
-                        data.drain((usize::from(sectors_count - remaining_sectors) * self.sector_size())
-                            ..(usize::from(sectors_count + 1 - remaining_sectors)
-                                * self.sector_size())
-                    ).collect();
+                    let data_to_write: Vec<u8> = data
+                        .drain(
+                            (usize::from(sectors_count - remaining_sectors) * self.sector_size())
+                                ..(usize::from(sectors_count + 1 - remaining_sectors)
+                                    * self.sector_size()),
+                        )
+                        .collect();
                     let cmd_result = self
                         .send_ata_command(
                             AtaCommandRequest::new(
@@ -210,8 +213,8 @@ impl DiskDevice for AtaDevice {
                         )
                         .complete();
 
-                    if !matches!(cmd_result.result, AtaResult::Success) {
-                        read_succ = false;
+                    if let AtaResult::Error(err) = cmd_result.result {
+                        read_err = Some(err);
                         break;
                     }
 
@@ -220,10 +223,9 @@ impl DiskDevice for AtaDevice {
 
                 let io_req = AtaIoRequest::new(AtomicBool::new(true));
                 let mut io_res = io_req.inner.result.lock();
-                let io_res_code = if read_succ {
-                    AtaResult::Success
-                } else {
-                    AtaResult::Error
+                let io_res_code = match read_err {
+                    Some(err) => AtaResult::Error(err),
+                    None => AtaResult::Success,
                 };
 
                 *io_res = Some(AtaIoResult {
@@ -273,10 +275,10 @@ impl DiskDevice for AtaDevice {
 }
 
 impl AtaDevice {
-    pub(super) fn init(io_base: IOPort, ctrl_base: IOPort, is_slave: bool) -> CanFail<AtaError> {
+    pub(super) fn init(io_base: IOPort, ctrl_base: IOPort, is_slave: bool) -> CanFail<AtaErrorCode> {
         let status = StatusRegister::read_byte(io_base);
         if status == 0xFF || status == 0 {
-            return Err(AtaError::DriveNotPresent);
+            return Err(AtaErrorCode::DriveNotPresent);
         }
 
         let device = AtaDevice {
@@ -292,13 +294,40 @@ impl AtaDevice {
         ata_devices().write().push(device);
         let dev_list = ata_devices().read();
 
-        let dev = dev_list.last().ok_or(AtaError::DriveNotPresent)?;
+        let dev = dev_list.last().ok_or(AtaErrorCode::DriveNotPresent)?;
+        dev.enable_irq();
         dev.identify();
 
-        let cmd = dev.write(0, 2, alloc::vec![0xffu8; 1024]);
-        dev.set_sectors_per_drq(8);
-
         Ok(())
+    }
+
+    pub(super) fn enable_irq(&self) {
+        ControlRegister::new().write(self.ctrl_base);
+    }
+
+    pub(super) fn disable_irq(&self) {
+        ControlRegister::new()
+            .with_int_disabled(true)
+            .write(self.ctrl_base);
+    }
+
+    pub(super) fn soft_reset(&self) {
+        // todo: also check the busy flag of the other atadevice on that bus
+        while self
+            .busy
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            hint::spin_loop();
+        }
+        ControlRegister::new()
+            .with_soft_reset(true)
+            .write(self.ctrl_base);
+        wait!(0.005);
+        ControlRegister::new()
+            .with_soft_reset(false)
+            .write(self.ctrl_base);
+        self.busy.store(false, Ordering::Release);
     }
 
     pub(super) fn sector_size(&self) -> usize {
@@ -334,7 +363,10 @@ impl AtaDevice {
         if let Some(queued_cmd) = self.command_queue.borrow_mut().as_mut() {
             has_cmd_queued = true;
             if let Some(callback) = &queued_cmd.callback {
-                callback(self, queued_cmd.buffer.as_mut());
+                match callback(self, queued_cmd.buffer.as_mut()) {
+                    Ok(_) => (),
+                    Err(err) => queued_cmd.err = Some(AtaError::new(err, self.read_lba())),
+                }
             }
             let transfer_size = queued_cmd
                 .data_size
@@ -390,10 +422,37 @@ impl AtaDevice {
                     command: queued_cmd.command,
                     data: None,
                 };
-                if let Some(on_completion) = &queued_cmd.on_completion {
-                    on_completion(self, queued_cmd.buffer.as_mut());
+
+                if status.err() {
+                    let err_reg = ErrorRegister::read(self.io_base);
+                    let lba_first_err = self.read_lba();
+
+                    let err_code = if err_reg.abrt() {
+                        AtaErrorCode::CommandAbort
+                    } else if err_reg.bbk() {
+                        AtaErrorCode::BadBlock
+                    } else {
+                        AtaErrorCode::Generic
+                    };
+
+                    queued_cmd.err = Some(AtaError::new(err_code, lba_first_err));
                 }
 
+                if status.drive_fault() {
+                    queued_cmd.err = Some(AtaError::new(AtaErrorCode::DriveFault, self.read_lba()));
+                }
+
+                if let Some(on_completion) = &queued_cmd.on_completion {
+                    match on_completion(self, queued_cmd.buffer.as_mut()) {
+                        Ok(_) => (),
+                        Err(err) => queued_cmd.err = Some(AtaError::new(err, self.read_lba())),
+                    }
+                }
+
+                ata_result.result = match queued_cmd.err {
+                    Some(err) => AtaResult::Error(err),
+                    None => AtaResult::Success,
+                };
                 ata_result.data = queued_cmd.buffer;
                 if let Some(io_req) = &queued_cmd.io_req {
                     while io_req
@@ -427,7 +486,7 @@ impl AtaDevice {
                 .with_data_buffer(alloc::vec![])
                 .on_completion(Box::new(|dev, buffer| {
                     let mut identify_data = [0u16; 256];
-                    let buffer = buffer.ok_or(AtaError::InvalidCommand)?;
+                    let buffer = buffer.ok_or(AtaErrorCode::InvalidCommand)?;
                     for w in &mut identify_data {
                         let low_byte = buffer.remove(0);
                         let high_byte = buffer.remove(0);
@@ -498,12 +557,37 @@ impl AtaDevice {
             }
         }
     }
+
+    fn read_lba(&self) -> u64 {
+        match self.identify_data().addressing_mode() {
+            AtaAddressingMode::Lba24 => {
+                let low_b = inb(self.io_base);
+                let mid_b = inb(self.io_base);
+                let high_b = inb(self.io_base);
+
+                u64::from(low_b) | (u64::from(low_b) << 8) | (u64::from(low_b) << 16)
+            }
+            AtaAddressingMode::Lba48 => {
+                outb(self.io_base + 0x6, 0x40);
+                let b1 = inb(self.io_base + 0x3);
+                let b2 = inb(self.io_base + 0x4);
+                let b3 = inb(self.io_base + 0x5);
+                ControlRegister::new().with_read_high(true).write(self.ctrl_base);
+                let b4 = inb(self.io_base + 0x3);
+                let b5 = inb(self.io_base + 0x4);
+                let b6 = inb(self.io_base + 0x5);
+                ControlRegister::new().write(self.ctrl_base);
+
+                u64::from_le_bytes([b1, b2, b3, b4, b5, b6, 0, 0])
+            }
+        }
+    }
 }
 
 unsafe impl Sync for AtaDevice {}
 
 type AtaCommandCallback =
-    Box<dyn Fn(&AtaDevice, Option<&mut Vec<u8>>) -> CanFail<AtaError> + Send + Sync>;
+    Box<dyn Fn(&AtaDevice, Option<&mut Vec<u8>>) -> CanFail<AtaErrorCode> + Send + Sync>;
 
 pub(crate) struct AtaIdentify([u16; 256]);
 
@@ -680,7 +764,8 @@ impl AtaIdentify {
 #[derive(Debug)]
 pub(super) enum AtaResult {
     Success,
-    Error,
+
+    Error(AtaError),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -710,6 +795,7 @@ pub(super) struct AtaCommandRequest {
     on_completion: Option<AtaCommandCallback>,
     buffer: Option<Vec<u8>>,
     io_req: Option<Arc<AtaIoRequestInner>>,
+    err: Option<AtaError>,
 }
 
 impl AtaCommandRequest {
@@ -723,6 +809,7 @@ impl AtaCommandRequest {
             on_completion: None,
             buffer: None,
             io_req: None,
+            err: None,
         }
     }
 
@@ -736,6 +823,7 @@ impl AtaCommandRequest {
             on_completion: self.on_completion,
             buffer: self.buffer,
             io_req: None,
+            err: None,
         }
     }
 
@@ -749,6 +837,7 @@ impl AtaCommandRequest {
             on_completion: self.on_completion,
             buffer: Some(buffer),
             io_req: None,
+            err: None,
         }
     }
 
@@ -762,6 +851,7 @@ impl AtaCommandRequest {
             on_completion: self.on_completion,
             buffer: self.buffer,
             io_req: None,
+            err: None,
         }
     }
 
@@ -775,6 +865,7 @@ impl AtaCommandRequest {
             on_completion: self.on_completion,
             buffer: self.buffer,
             io_req: None,
+            err: None,
         }
     }
 
@@ -788,6 +879,7 @@ impl AtaCommandRequest {
             on_completion: Some(callback),
             buffer: self.buffer,
             io_req: None,
+            err: None,
         }
     }
 
@@ -801,8 +893,59 @@ impl AtaCommandRequest {
             on_completion: self.on_completion,
             buffer: self.buffer,
             io_req: Some(io_req),
+            err: None,
         }
     }
+}
+
+#[bitfield]
+#[repr(u8)]
+#[derive(Debug)]
+pub(super) struct ErrorRegister {
+    /// Address mark not found
+    am_nf: bool,
+
+    /// Track zero not found
+    tkz_nf: bool,
+
+    /// Aborted command
+    abrt: bool,
+
+    /// Media change request
+    mcr: bool,
+
+    /// ID not found
+    id_nf: bool,
+
+    /// Media changed
+    mc: bool,
+
+    /// Uncorrectable date error
+    unc: bool,
+
+    /// Bad Block detected
+    bbk: bool,
+}
+
+impl AtaRegister for ErrorRegister {
+    const BASE_OFFSET: u16 = 1;
+}
+
+#[bitfield]
+#[repr(u8)]
+#[derive(Debug)]
+pub(super) struct ControlRegister {
+    #[skip]
+    __: bool,
+    int_disabled: bool,
+    soft_reset: bool,
+    #[skip]
+    __: B4,
+    read_high: bool,
+}
+
+impl AtaRegister for ControlRegister {
+    const BASE_OFFSET: u16 = 0;
 }
 
 #[bitfield]
@@ -823,7 +966,7 @@ impl AtaRegister for StatusRegister {
     const BASE_OFFSET: u16 = 7;
 }
 
-pub(super) trait AtaRegister: From<u8> {
+pub(super) trait AtaRegister: From<u8> + Into<u8> {
     const BASE_OFFSET: u16;
 
     #[inline(always)]
@@ -845,11 +988,30 @@ pub(super) trait AtaRegister: From<u8> {
     fn read_byte(io_base: IOPort) -> u8 {
         inb(io_base + Self::BASE_OFFSET)
     }
+
+    #[inline(always)]
+    fn write(self, io_base: IOPort) {
+        outb(io_base + Self::BASE_OFFSET, self.into());
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct AtaError {
+    pub(super) code: AtaErrorCode,
+    pub(super) lba: u64,
+}
+
+impl AtaError {
+    pub(super) fn new(code: AtaErrorCode, lba: u64) -> Self { Self { code, lba } }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum AtaError {
+pub(super) enum AtaErrorCode {
+    CommandAbort,
     DriveNotPresent,
     InvalidBufferSize,
     InvalidCommand,
+    BadBlock,
+    Generic,
+    DriveFault,
 }
