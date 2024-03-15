@@ -5,9 +5,7 @@ mod frame_alloc;
 pub mod translate;
 
 use crate::errors::CanFail;
-use crate::mem::{Alignment, PhyAddr, VirtAddr};
-use crate::println;
-use crate::x86::paging::page_table::translate::{PageAddressTranslator, Translator};
+use crate::mem::{Alignment, MemoryAddress, PhyAddr};
 use crate::x86::paging::{Frame, PageMappingError};
 use core::ops::BitOr;
 use modular_bitfield::bitfield;
@@ -88,7 +86,7 @@ impl PageTableEntry {
         addr: PhyAddr,
         flags: PageTableFlags,
     ) -> CanFail<PageMappingError> {
-        if !addr.is_aligned_with(Alignment::ALIGN_4KB) {
+        if !addr.is_aligned_with(Alignment::ALIGN_4KB).unwrap() {
             return Err(PageMappingError::BadAlignment);
         }
         self.entry = u64::from(addr) | u64::from(flags);

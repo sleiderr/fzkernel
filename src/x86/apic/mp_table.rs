@@ -7,7 +7,7 @@
 //!
 //! Follows the _Intel 1.4 MultiProcessor Specification_
 
-use crate::mem::PhyAddr32;
+use crate::mem::{MemoryAddress, PhyAddr32};
 use crate::x86::apic::local_apic::{DeliveryMode, PinPolarity, ProcLocalApicID, TriggerMode};
 use alloc::string::String;
 use alloc::vec::Vec;

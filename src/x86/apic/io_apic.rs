@@ -3,7 +3,7 @@
 //! With the [`LocalAPIC`], they are an evolution of the old `PIC` chip. It manages the interrupt issued by I/O devices.
 //! It also provides multiprocessor interrupt management through 24 programmable interrupts (_ISA_, _PCI_, ...)
 
-use crate::mem::{LocklessCell, PhyAddr32};
+use crate::mem::{LocklessCell, MemoryAddress, PhyAddr32};
 use crate::x86::apic::local_apic::{
     DeliveryMode, DeliveryStatus, DestinationMode, InterruptVector, PinPolarity, ProcLocalApicID,
     TriggerMode,
@@ -182,7 +182,7 @@ impl IOApic {
             id: entry.ioapic_id.into(),
             base_addr: entry.addr,
             ioregsel: MMIOApicRegister(entry.addr),
-            iowin: MMIOApicRegister(entry.addr + 0x10),
+            iowin: MMIOApicRegister(entry.addr + 0x10_usize),
             mp_int_entries: table.get_int_to_io_apic(entry.ioapic_id),
             i8259_pin: None,
         };

@@ -131,11 +131,12 @@ impl<const N: usize> BuddyAllocator<N> {
     /// Resizes or translates the heap.
     ///
     /// Can be used to dynamically set up the heap depending on available physical memory.
-    pub fn resize(&mut self, base_addr: NonNull<u8>, max_blk_size: usize) {
+    pub fn resize(&mut self, base_addr: NonNull<u8>, mut max_blk_size: usize) {
         let min_blk_size = max_blk_size >> (N - 1);
 
         assert!(min_blk_size >= core::mem::size_of::<FreeBlock>());
 
+        max_blk_size &= !(MIN_HEAP_ALIGN - 1);
         assert!(max_blk_size & (MIN_HEAP_ALIGN - 1) == 0);
 
         let base_addr_ptr = base_addr.as_ptr();

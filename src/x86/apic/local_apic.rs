@@ -8,7 +8,7 @@
 #![allow(clippy::as_conversions)]
 
 use crate::io::{outb, IOPort};
-use crate::mem::{LocklessCell, PhyAddr32};
+use crate::mem::{LocklessCell, MemoryAddress, PhyAddr32};
 use crate::x86::apic::io_apic::IOApic;
 use crate::x86::apic::mp_table::{MPInterruptType, MPLocalApicIntPin, MPTable};
 use crate::x86::cpuid::cpu_id;
