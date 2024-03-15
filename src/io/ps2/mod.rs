@@ -8,7 +8,7 @@ pub fn send_data(data: u8) {
 }
 
 pub fn read_ps2() -> u8 {
-    inb(0x60)
+    inb(IOPort::from(0x60))
 }
 
 pub fn send_ps2(cmd: u8) {

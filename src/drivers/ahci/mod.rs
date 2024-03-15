@@ -20,7 +20,6 @@ use crate::{
 
 pub mod device;
 
-mod ata_command;
 mod command;
 mod fis;
 mod port;

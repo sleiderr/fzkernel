@@ -1,3 +1,4 @@
+use crate::drivers::ide::ata_irq_entry;
 use crate::io::pic::PIC;
 use crate::x86::apic::local_apic;
 use core::arch::asm;
@@ -72,6 +73,11 @@ const CONTROLLER: PIC = PIC {
     slave_cmd_port: 0xA0,
     slave_data_port: 0xA1,
 };
+
+#[interrupt]
+pub fn _int0x76() {
+    ata_irq_entry();
+}
 
 #[interrupt]
 pub fn _int0x2b() {

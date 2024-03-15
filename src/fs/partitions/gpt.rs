@@ -21,7 +21,7 @@ pub fn load_drive_gpt(drive: &mut SATADrive) -> Option<GUIDPartitionTable> {
         return None;
     }
 
-    let mut gpt_header_bytes = alloc::vec![0u8; drive.logical_sector_size() as usize];
+    let mut gpt_header_bytes = alloc::vec![0u8; drive.device_info.logical_sector_size() as usize];
     drive.read(1, 1, &mut gpt_header_bytes).ok()?;
     let mut gpt_header = unsafe { core::ptr::read(gpt_header_bytes.as_ptr() as *mut GPTHeader) };
 
@@ -30,7 +30,7 @@ pub fn load_drive_gpt(drive: &mut SATADrive) -> Option<GUIDPartitionTable> {
         error!("gpt", "invalid primary gpt header");
         drive
             .read(
-                drive.maximum_addressable_lba() as u64 - 1,
+                drive.device_info.maximum_addressable_lba() as u64 - 1,
                 1,
                 &mut gpt_header_bytes,
             )
