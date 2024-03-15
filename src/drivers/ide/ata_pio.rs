@@ -124,7 +124,10 @@ impl DiskDevice for AtaDevice {
                     if let Some(req_buf) = cmd_result.data {
                         buffer.extend(&req_buf);
                     } else {
-                        read_err = Some(AtaError::new(AtaErrorCode::InvalidBufferSize, self.read_lba()));
+                        read_err = Some(AtaError::new(
+                            AtaErrorCode::InvalidBufferSize,
+                            self.read_lba(),
+                        ));
                         break;
                     }
 
@@ -186,7 +189,7 @@ impl DiskDevice for AtaDevice {
         let request = match self.identify_data().addressing_mode() {
             AtaAddressingMode::Lba24 => {
                 let mut remaining_sectors = sectors_count;
-                let mut buffer = alloc::vec![];
+                let buffer = alloc::vec![];
                 let mut read_err = None;
 
                 while remaining_sectors != 0 {
@@ -275,7 +278,14 @@ impl DiskDevice for AtaDevice {
 }
 
 impl AtaDevice {
-    pub(super) fn init(io_base: IOPort, ctrl_base: IOPort, is_slave: bool) -> CanFail<AtaErrorCode> {
+    pub(super) fn init(
+        io_base: IOPort,
+        ctrl_base: IOPort,
+        is_slave: bool,
+    ) -> Result<usize, AtaErrorCode> {
+        if is_slave {
+            outb(io_base + 0x6, 1 << 4);
+        }
         let status = StatusRegister::read_byte(io_base);
         if status == 0xFF || status == 0 {
             return Err(AtaErrorCode::DriveNotPresent);
@@ -291,6 +301,7 @@ impl AtaDevice {
             sector_sz: UnsafeCell::new(0),
             sectors_per_drq: UnsafeCell::new(0),
         };
+        let device_id = ata_devices().read().len();
         ata_devices().write().push(device);
         let dev_list = ata_devices().read();
 
@@ -298,7 +309,7 @@ impl AtaDevice {
         dev.enable_irq();
         dev.identify();
 
-        Ok(())
+        Ok(device_id)
     }
 
     pub(super) fn enable_irq(&self) {
@@ -524,6 +535,11 @@ impl AtaDevice {
         let io_req = AtaIoRequest::new(AtomicBool::default());
         let command_byte = command.command.discriminant();
         *self.command_queue.borrow_mut() = Some(command.link_to_ioreq(io_req.inner.clone()));
+        let mut drive_reg = inb(self.io_base + 0x6);
+        if self.is_slave {
+            drive_reg |= 1 << 4;
+        }
+        outb(self.io_base + 0x6, drive_reg);
         outb(self.io_base + 0x7, command_byte);
 
         io_req
@@ -572,7 +588,9 @@ impl AtaDevice {
                 let b1 = inb(self.io_base + 0x3);
                 let b2 = inb(self.io_base + 0x4);
                 let b3 = inb(self.io_base + 0x5);
-                ControlRegister::new().with_read_high(true).write(self.ctrl_base);
+                ControlRegister::new()
+                    .with_read_high(true)
+                    .write(self.ctrl_base);
                 let b4 = inb(self.io_base + 0x3);
                 let b5 = inb(self.io_base + 0x4);
                 let b6 = inb(self.io_base + 0x5);
@@ -1002,7 +1020,9 @@ pub(super) struct AtaError {
 }
 
 impl AtaError {
-    pub(super) fn new(code: AtaErrorCode, lba: u64) -> Self { Self { code, lba } }
+    pub(super) fn new(code: AtaErrorCode, lba: u64) -> Self {
+        Self { code, lba }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

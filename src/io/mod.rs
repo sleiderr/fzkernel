@@ -15,6 +15,14 @@ impl IOPort {
     pub(crate) const IMCR_ADDR: Self = Self(0x22);
 
     pub(crate) const IMCR_DATA: Self = Self(0x23);
+
+    pub(crate) const PRIM_ATA: Self = Self(0x1F0);
+
+    pub(crate) const PRIM_ATA_CTRL: Self = Self(0x3F6);
+
+    pub(crate) const SEC_ATA: Self = Self(0x170);
+
+    pub(crate) const SEC_ATA_CTRL: Self = Self(0x376);
 }
 
 impl From<u16> for IOPort {
