@@ -22,7 +22,7 @@ pub enum BuildEvent {
     StepFailed(String, String),
 }
 
-const DEFAULT_DISK_IMAGE_SIZE: u32 = 256 * 1024 * 1024;
+const DEFAULT_DISK_IMAGE_SIZE: u32 = 5 * 1024 * 1024;
 
 pub type BuildResult = Result<(), BuildError>;
 
@@ -108,7 +108,7 @@ impl BuildStep for ImageDiskBuild {
         gpt_disk
             .add_partition(
                 "kernelfs",
-                1024 * 1024 * 62,
+                1024 * 1024 * 1,
                 gpt::partition_types::BASIC,
                 0,
                 None,
@@ -118,7 +118,7 @@ impl BuildStep for ImageDiskBuild {
         gpt_disk
             .add_partition(
                 "rootfs",
-                1024 * 1024 * 128,
+                1024 * 1024 * 2,
                 gpt::partition_types::LINUX_FS,
                 0,
                 None,
