@@ -2,6 +2,7 @@
 //!
 //! Contains the implementation of the two standards partition scheme, _GPT_ and _MBR_.
 
+use crate::drivers::ide::AtaDeviceIdentifier;
 use crate::errors::{CanFail, MountError};
 use crate::fs::{
     ext4::Ext4Fs,
@@ -21,7 +22,7 @@ pub mod mbr;
 #[derive(Clone)]
 pub struct Partition {
     id: usize,
-    drive_id: usize,
+    drive_id: AtaDeviceIdentifier,
     metadata: PartitionMetadata,
     pub fs: PartFS,
 }
@@ -30,7 +31,7 @@ impl Partition {
     /// Loads a `Partition` from a _MBR_ partition table entry.
     pub fn from_metadata(
         part_id: usize,
-        drive_id: usize,
+        drive_id: AtaDeviceIdentifier,
         metadata: PartitionMetadata,
     ) -> Option<Self> {
         Some(Self {

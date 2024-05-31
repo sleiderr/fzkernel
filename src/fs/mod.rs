@@ -12,6 +12,7 @@
 
 use core::{fmt::Debug, slice};
 
+use crate::drivers::ide::AtaDeviceIdentifier;
 use alloc::sync::Arc;
 use alloc::{boxed::Box, string::String, vec::Vec};
 use spin::RwLock;
@@ -46,7 +47,7 @@ pub(crate) trait Fs {
     ///
     /// - Disk I/O error
     fn mount(
-        drive_id: usize,
+        drive_id: AtaDeviceIdentifier,
         partition_id: usize,
         partition_data: u64,
     ) -> Result<Arc<RwLock<Self>>, MountError>;
@@ -59,7 +60,7 @@ pub(crate) trait Fs {
     ///
     /// May return any variant of [`IOError`] in case of failure.
     /// Usually, errors are caused by disk / driver failures.
-    fn identify(drive_id: usize, partition_data: u64) -> IOResult<bool>;
+    fn identify(drive_id: AtaDeviceIdentifier, partition_data: u64) -> IOResult<bool>;
 }
 
 /// A file-system independent file. This provides a basic set of functionalities when working with

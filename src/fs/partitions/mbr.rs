@@ -7,18 +7,20 @@
 
 use alloc::vec::Vec;
 
-use crate::{
-    drivers::ahci::device::SATADrive,
-    fs::partitions::{Partition, PartitionMetadata},
-};
+use crate::drivers::generics::dev_disk::DiskDevice;
+use crate::drivers::ide::AtaDeviceIdentifier;
+use crate::fs::partitions::{Partition, PartitionMetadata};
 
 /// Offset of the `Parition table` in the `Master Boot Record`.
 const MBR_PART_OFFSET: isize = 0x1BE;
 
-/// Load the `Master Boot Record` partition table from a [`SATADrive`].
-pub fn load_drive_mbr(drive: &mut SATADrive, sectors_offset: u64) -> MBRPartitionTable {
-    let mut first_sector = [0u8; 512];
-    drive.read(sectors_offset, 1, &mut first_sector).unwrap();
+/// Load the `Master Boot Record` partition table from a [`AHCIDrive`].
+pub fn load_drive_mbr<D: DiskDevice>(drive: &D, sectors_offset: u64) -> MBRPartitionTable {
+    let first_sector = drive
+        .read(sectors_offset, 1)
+        .complete()
+        .data
+        .expect("Failed to read from disk");
 
     let entries = unsafe {
         core::ptr::read(
@@ -27,7 +29,7 @@ pub fn load_drive_mbr(drive: &mut SATADrive, sectors_offset: u64) -> MBRPartitio
     };
 
     MBRPartitionTable {
-        drive_id: drive.id,
+        drive_id: drive.identifier(),
         partitions: entries,
     }
 }
@@ -39,7 +41,7 @@ pub fn load_drive_mbr(drive: &mut SATADrive, sectors_offset: u64) -> MBRPartitio
 #[repr(packed)]
 #[derive(Debug)]
 pub struct MBRPartitionTable {
-    drive_id: usize,
+    drive_id: AtaDeviceIdentifier,
     partitions: [MBRPartitionEntry; 4],
 }
 

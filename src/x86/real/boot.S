@@ -1,4 +1,4 @@
-#define BOOT_SECTORS_COUNT 0xA00
+#define BOOT_SECTORS_COUNT 0x400
 #define BOOTSTRAP_SECTORS_COUNT 0x3
 #define MAX_SECTORS_PER_READ 0x80
 #define MAX_DISK_OP_RETRIES 5
@@ -50,6 +50,7 @@ ext_load_boot:
     mov ah, 0x42
     int 0x13
     jc read_loop
+    xor al, al
     sub bx, dap_sectors_count
     add cx, MAX_SECTORS_PER_READ
     add WORD PTR dap_segment, MAX_SECTORS_PER_READ * 0x20
