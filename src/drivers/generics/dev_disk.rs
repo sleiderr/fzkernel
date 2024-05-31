@@ -1,3 +1,11 @@
+//! Standard API to interact with disk devices, regardless of their physical specificities (IDE, AHCI).
+//!
+//! Disk devices are all assigned a unique identifier ([`AtaDeviceIdentifier`]) based on the physical
+//! layer technology used, and a number unique across all devices that share the same technology.
+//!
+//! The `DiskDevice` trait specifies standard methods to interact with disk devices, however the actual
+//! implementation of those method may depend on the physical controller to which the disk is linked.
+
 use crate::drivers::ahci::ahci_devices;
 use crate::drivers::ide::ata_pio::{ata_devices, AtaIoRequest};
 use crate::drivers::ide::AtaDeviceIdentifier;
@@ -5,17 +13,29 @@ use crate::fs::partitions::Partition;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+/// Virtual structure that emulates the capacities of a standard physical device.
+///
+/// Forwards the various requests to an actual physical disk device, depending on the
+/// technology used (`IDE`, `AHCI`).
+///
+/// Implements the [`DiskDevice`] trait, which specifies the standard methods through
+/// which one should interact with a disk device.
 pub struct SataDevice {
     identifier: AtaDeviceIdentifier,
     inner: Arc<dyn DiskDevice>,
 }
 
+/// Available physical devices types.
+///
+/// A [`SataDevice`] encapsulates one of these physical disk device.
 #[derive(Clone, Copy, Debug)]
 pub enum SataDeviceType {
     IDE,
     AHCI,
 }
 
+/// Returns a [`SataDevice`] structure encapsulating a physical disk device,
+/// from its unique identifier ([`AtaDeviceIdentifier`]).
 pub fn get_sata_drive(id: AtaDeviceIdentifier) -> Option<SataDevice> {
     match id.disk_type {
         SataDeviceType::IDE => Some(SataDevice {
@@ -90,11 +110,15 @@ pub trait DiskDevice {
     /// ```
     fn write(&self, start_lba: u64, sectors_count: u16, data: Vec<u8>) -> AtaIoRequest;
 
+    /// Returns a list of all partitions defined on the device.
     fn partitions(&self) -> &Vec<Partition>;
 
+    /// Returns this device's unique identifier.
     fn identifier(&self) -> AtaDeviceIdentifier;
 
+    /// Returns the maximum sector in user accessible space.
     fn max_sector(&self) -> usize;
 
+    /// Returns the number of bytes per logical sector.
     fn logical_sector_size(&self) -> u64;
 }
