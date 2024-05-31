@@ -6,35 +6,37 @@ use core::slice;
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 
+use crate::drivers::generics::dev_disk::DiskDevice;
+use crate::drivers::ide::AtaDeviceIdentifier;
 use crate::{
-    drivers::ahci::device::SATADrive,
     error,
     fs::partitions::{mbr::load_drive_mbr, Partition},
     info,
 };
 
-/// Loads a `GUID Partition Table` from a [`SATADrive`].
-pub fn load_drive_gpt(drive: &mut SATADrive) -> Option<GUIDPartitionTable> {
+/// Loads a `GUID Partition Table` from a [`AHCIDrive`].
+pub fn load_drive_gpt<D: DiskDevice>(drive: &D) -> Option<GUIDPartitionTable> {
     let pmbr = load_drive_mbr(drive, 0);
 
     if !pmbr.is_pmbr() {
         return None;
     }
 
-    let mut gpt_header_bytes = alloc::vec![0u8; drive.device_info.logical_sector_size() as usize];
-    drive.read(1, 1, &mut gpt_header_bytes).ok()?;
-    let mut gpt_header = unsafe { core::ptr::read(gpt_header_bytes.as_ptr() as *mut GPTHeader) };
+    let mut gpt_header_raw_bytes = drive.read(1, 1).complete().data?;
+    let mut gpt_header_bytes = gpt_header_raw_bytes.as_slice();
+
+    let mut gpt_header =
+        unsafe { core::ptr::read_unaligned(gpt_header_bytes.as_ptr() as *mut GPTHeader) };
 
     // fallback to backup header
     if !gpt_header.is_valid() {
         error!("gpt", "invalid primary gpt header");
-        drive
-            .read(
-                drive.device_info.maximum_addressable_lba() as u64 - 1,
-                1,
-                &mut gpt_header_bytes,
-            )
-            .ok()?;
+        gpt_header_raw_bytes = drive
+            .read(u64::try_from(drive.max_sector()).ok()? - 1, 1)
+            .complete()
+            .data?;
+
+        gpt_header_bytes = gpt_header_raw_bytes.as_slice();
         gpt_header = unsafe { core::ptr::read(gpt_header_bytes.as_ptr() as *mut GPTHeader) };
 
         if !gpt_header.is_valid() {
@@ -44,18 +46,16 @@ pub fn load_drive_gpt(drive: &mut SATADrive) -> Option<GUIDPartitionTable> {
     }
 
     let gpt_entries_buffer_size_in_sectors =
-        ((gpt_header.partitions_count + gpt_header.part_entry_size) / 0x200) + 1;
-    let mut gpt_entries_buffer: Vec<u8> =
-        alloc::vec![0; (gpt_header.part_entry_size * gpt_header.partitions_count) as usize];
+        ((gpt_header.partitions_count * gpt_header.part_entry_size) / 0x200) + 1;
 
     let mut partitions: Vec<GPTPartitionEntry> = alloc::vec![];
-    drive
+    let gpt_entries_buffer = drive
         .read(
             gpt_header.part_entry_lba,
             gpt_entries_buffer_size_in_sectors as u16,
-            &mut gpt_entries_buffer,
         )
-        .ok()?;
+        .complete()
+        .data?;
 
     for i in 0..gpt_header.partitions_count {
         let part_buffer = &gpt_entries_buffer[((i * gpt_header.part_entry_size) as usize)
@@ -86,7 +86,7 @@ pub fn load_drive_gpt(drive: &mut SATADrive) -> Option<GUIDPartitionTable> {
         "loading disk guid partition table ({} partitions found)",
         partitions.len()
     );
-    let gpt = Box::new(GPT::new(drive.id, gpt_header, partitions));
+    let gpt = Box::new(GPT::new(drive.identifier(), gpt_header, partitions));
     Some(gpt)
 }
 
@@ -97,13 +97,17 @@ pub type GUIDPartitionTable = Box<GPT>;
 /// Contains a GPT Header, as well as the list of all used partitions described in the table.
 #[derive(Debug)]
 pub struct GPT {
-    drive_id: usize,
+    drive_id: AtaDeviceIdentifier,
     header: GPTHeader,
     partitions: Vec<GPTPartitionEntry>,
 }
 
 impl GPT {
-    pub fn new(drive_id: usize, header: GPTHeader, partitions: Vec<GPTPartitionEntry>) -> Self {
+    pub fn new(
+        drive_id: AtaDeviceIdentifier,
+        header: GPTHeader,
+        partitions: Vec<GPTPartitionEntry>,
+    ) -> Self {
         Self {
             drive_id,
             header,
@@ -201,7 +205,6 @@ impl GPTHeader {
             error!("gpt", "gpt header invalid signature");
             return false;
         }
-
         let crc_32 = self.checksum;
         self.checksum = 0;
 
@@ -220,6 +223,7 @@ impl GPTHeader {
 
             return false;
         }
+
         self.checksum = crc_32;
 
         true

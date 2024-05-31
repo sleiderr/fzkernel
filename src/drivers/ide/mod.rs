@@ -1,11 +1,14 @@
 pub mod ata_command;
-pub(crate) mod ata_pio;
+pub(super) mod ata_pio;
 
+use crate::drivers::generics::dev_disk::SataDeviceType;
 use crate::drivers::ide::ata_pio::{ata_devices, AtaDevice};
 use crate::drivers::pci::{pci_devices, DeviceClass};
 use crate::io::IOPort;
 use alloc::vec::Vec;
 use conquer_once::spin::OnceCell;
+use core::cmp::Ordering;
+use core::fmt::{Display, Formatter};
 use modular_bitfield::bitfield;
 use modular_bitfield::prelude::{B2, B4};
 use spin::RwLock;
@@ -14,7 +17,7 @@ use super::pci::device::MappedRegister;
 use super::pci::device::PCIDevice;
 
 pub fn ata_irq_entry() {
-    for ata_dev in ata_devices().read().iter() {
+    for ata_dev in ata_devices().read().values() {
         if ata_dev.may_expect_irq() {
             ata_dev.handle_irq();
         }
@@ -37,17 +40,51 @@ pub fn ide_init() {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct AtaDeviceIdentifier {
-    ide_controller: usize,
-    device_id: usize,
+    pub disk_type: SataDeviceType,
+    pub(in crate::drivers) ide_controller: usize,
+    pub(in crate::drivers) device_id: usize,
+}
+
+impl PartialEq for AtaDeviceIdentifier {
+    fn eq(&self, other: &Self) -> bool {
+        self.internal_identifier().eq(&other.internal_identifier())
+    }
+}
+
+impl Eq for AtaDeviceIdentifier {}
+
+impl PartialOrd for AtaDeviceIdentifier {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.internal_identifier()
+            .partial_cmp(&other.internal_identifier())
+    }
+}
+
+impl Ord for AtaDeviceIdentifier {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.internal_identifier().cmp(&other.internal_identifier())
+    }
 }
 
 impl AtaDeviceIdentifier {
-    pub fn new(ide_controller: usize, device_id: usize) -> Self {
+    pub fn new(disk_type: SataDeviceType, ide_controller: usize, device_id: usize) -> Self {
         Self {
+            disk_type,
             ide_controller,
             device_id,
         }
+    }
+
+    fn internal_identifier(self) -> usize {
+        self.ide_controller * 4 + self.device_id
+    }
+}
+
+impl Display for AtaDeviceIdentifier {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        todo!()
     }
 }
 
@@ -103,20 +140,50 @@ impl IdeController {
             ),
         };
 
-        let primary_master = AtaDevice::init(ports.0, ports.1, false).ok();
-        let primary_slave = AtaDevice::init(ports.0, ports.1, true).ok();
-        let secondary_master = AtaDevice::init(ports.2, ports.3, false).ok();
-        let secondary_slave = AtaDevice::init(ports.2, ports.3, true).ok();
-
         let mut controller_list = ide_controllers().write();
         let controller_id = controller_list.len();
+        let primary_master = AtaDevice::init(
+            AtaDeviceIdentifier::new(SataDeviceType::IDE, controller_id, 0),
+            ports.0,
+            ports.1,
+            false,
+            controller_id,
+            true,
+        )
+        .ok();
+        let primary_slave = AtaDevice::init(
+            AtaDeviceIdentifier::new(SataDeviceType::IDE, controller_id, 1),
+            ports.0,
+            ports.1,
+            true,
+            controller_id,
+            true,
+        )
+        .ok();
+        let secondary_master = AtaDevice::init(
+            AtaDeviceIdentifier::new(SataDeviceType::IDE, controller_id, 2),
+            ports.2,
+            ports.3,
+            false,
+            controller_id,
+            true,
+        )
+        .ok();
+        let secondary_slave = AtaDevice::init(
+            AtaDeviceIdentifier::new(SataDeviceType::IDE, controller_id, 3),
+            ports.2,
+            ports.3,
+            true,
+            controller_id,
+            true,
+        )
+        .ok();
+
         controller_list.push(Self {
-            primary_master: primary_master.map(|dev| AtaDeviceIdentifier::new(controller_id, dev)),
-            primary_slave: primary_slave.map(|dev| AtaDeviceIdentifier::new(controller_id, dev)),
-            secondary_master: secondary_master
-                .map(|dev| AtaDeviceIdentifier::new(controller_id, dev)),
-            secondary_slave: secondary_slave
-                .map(|dev| AtaDeviceIdentifier::new(controller_id, dev)),
+            primary_master: primary_master,
+            primary_slave: primary_slave,
+            secondary_master: secondary_master,
+            secondary_slave: secondary_slave,
         });
     }
 }

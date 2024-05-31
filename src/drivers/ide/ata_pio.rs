@@ -1,11 +1,16 @@
 use crate::drivers::ahci::device::{ATAMediaRotationRate, SizeFormat};
-use crate::drivers::generics::dev_disk::DiskDevice;
+use crate::drivers::generics::dev_disk::{DiskDevice, SataDeviceType};
 use crate::drivers::ide::ata_command::AtaCommand;
+use crate::drivers::ide::AtaDeviceIdentifier;
 use crate::errors::CanFail;
+use crate::fs::partitions::gpt::load_drive_gpt;
+use crate::fs::partitions::mbr::{load_drive_mbr, PartitionType};
+use crate::fs::partitions::{Partition, PartitionMetadata, PartitionTable};
 use crate::io::{inb, inw, outb, outw, IOPort};
 use crate::mem::utils::Convertible;
-use crate::{println, wait};
+use crate::wait;
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -14,20 +19,22 @@ use core::cell::{RefCell, UnsafeCell};
 use core::hint;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use modular_bitfield::bitfield;
-use modular_bitfield::specifiers::{B4, B5};
+use modular_bitfield::specifiers::B4;
 use spin::{Mutex, RwLock};
 
 static LAST_ATA_DEVICE: AtomicU8 = AtomicU8::new(0);
 
-pub fn ata_devices() -> &'static RwLock<Vec<AtaDevice>> {
-    static ATA_DEVICES: OnceCell<RwLock<Vec<AtaDevice>>> = OnceCell::uninit();
+pub fn ata_devices() -> &'static RwLock<BTreeMap<AtaDeviceIdentifier, Arc<AtaDevice>>> {
+    static ATA_DEVICES: OnceCell<RwLock<BTreeMap<AtaDeviceIdentifier, Arc<AtaDevice>>>> =
+        OnceCell::uninit();
 
     ATA_DEVICES
-        .try_get_or_init(|| RwLock::new(Vec::<AtaDevice>::new()))
+        .try_get_or_init(|| RwLock::new(BTreeMap::<AtaDeviceIdentifier, Arc<AtaDevice>>::new()))
         .unwrap()
 }
 
-pub(super) struct AtaDevice {
+pub(crate) struct AtaDevice {
+    id: AtaDeviceIdentifier,
     io_base: IOPort,
     ctrl_base: IOPort,
     is_slave: bool,
@@ -36,22 +43,24 @@ pub(super) struct AtaDevice {
     command_queue: RefCell<Option<AtaCommandRequest>>,
     identify_data: UnsafeCell<AtaIdentify>,
     sectors_per_drq: UnsafeCell<u16>,
+    partition_table: UnsafeCell<PartitionTable>,
+    partitions: UnsafeCell<Vec<Partition>>,
 }
 
 #[derive(Debug)]
-pub(super) struct AtaIoResult {
-    result: AtaResult,
-    command: AtaCommand,
-    data: Option<Vec<u8>>,
+pub struct AtaIoResult {
+    pub result: AtaResult,
+    pub command: AtaCommand,
+    pub data: Option<Vec<u8>>,
 }
 
 pub struct AtaIoRequest {
-    inner: Arc<AtaIoRequestInner>,
+    pub(in crate::drivers) inner: Arc<AtaIoRequestInner>,
 }
 
-struct AtaIoRequestInner {
-    has_completed: AtomicBool,
-    result: Mutex<Option<AtaIoResult>>,
+pub(in crate::drivers) struct AtaIoRequestInner {
+    pub(in crate::drivers) has_completed: AtomicBool,
+    pub(in crate::drivers) result: Mutex<Option<AtaIoResult>>,
 }
 
 impl AtaIoRequest {
@@ -59,7 +68,7 @@ impl AtaIoRequest {
     ///
     /// It is associated with a [`AtaCommandRequest`], and indicates the current state of that
     /// command request, and contains its result when it has been fully processed.
-    pub(super) fn new(has_completed: AtomicBool) -> Self {
+    pub(crate) fn new(has_completed: AtomicBool) -> Self {
         AtaIoRequest {
             inner: Arc::new(AtaIoRequestInner {
                 has_completed,
@@ -73,7 +82,7 @@ impl AtaIoRequest {
     /// `I/O` operations are processed as soon as the [`AtaCommandRequest`] is dispatched to the
     /// device. That process is asynchronous, and therefore to get the result of the operation you
     /// must make sure it has been fully processed by the device.
-    pub(super) fn complete(self) -> AtaIoResult {
+    pub fn complete(self) -> AtaIoResult {
         while !self.inner.has_completed.load(Ordering::Relaxed) {
             hint::spin_loop();
         }
@@ -275,14 +284,33 @@ impl DiskDevice for AtaDevice {
 
         request
     }
+
+    fn partitions(&self) -> &Vec<Partition> {
+        unsafe { &(*self.partitions.get()) }
+    }
+
+    fn identifier(&self) -> AtaDeviceIdentifier {
+        return self.id;
+    }
+
+    fn max_sector(&self) -> usize {
+        self.identify_data().maximum_addressable_lba()
+    }
+
+    fn logical_sector_size(&self) -> u64 {
+        u64::from(self.identify_data().logical_sector_size())
+    }
 }
 
 impl AtaDevice {
     pub(super) fn init(
+        id: AtaDeviceIdentifier,
         io_base: IOPort,
         ctrl_base: IOPort,
         is_slave: bool,
-    ) -> Result<usize, AtaErrorCode> {
+        ctrl_id: usize,
+        is_prim: bool,
+    ) -> Result<AtaDeviceIdentifier, AtaErrorCode> {
         if is_slave {
             outb(io_base + 0x6, 1 << 4);
         }
@@ -292,6 +320,7 @@ impl AtaDevice {
         }
 
         let device = AtaDevice {
+            id,
             io_base,
             ctrl_base,
             is_slave,
@@ -300,14 +329,26 @@ impl AtaDevice {
             identify_data: UnsafeCell::new(AtaIdentify([0u16; 256])),
             sector_sz: UnsafeCell::new(0),
             sectors_per_drq: UnsafeCell::new(0),
+            partition_table: UnsafeCell::new(PartitionTable::Unknown),
+            partitions: UnsafeCell::new(alloc::vec![]),
         };
-        let device_id = ata_devices().read().len();
-        ata_devices().write().push(device);
+        let ctlr_dev_id = match (is_slave, is_prim) {
+            (false, true) => 0,
+            (false, false) => 1,
+            (true, true) => 2,
+            (true, false) => 3,
+        };
+        let device_id = AtaDeviceIdentifier::new(SataDeviceType::IDE, ctrl_id, ctlr_dev_id);
+        ata_devices().write().insert(device_id, Arc::new(device));
         let dev_list = ata_devices().read();
 
-        let dev = dev_list.last().ok_or(AtaErrorCode::DriveNotPresent)?;
+        let dev = dev_list
+            .get(&device_id)
+            .ok_or(AtaErrorCode::DriveNotPresent)?;
         dev.enable_irq();
         dev.identify();
+
+        dev.load_partition_table();
 
         Ok(device_id)
     }
@@ -484,6 +525,71 @@ impl AtaDevice {
                     hint::spin_loop();
                 }
             }
+        }
+    }
+
+    /// Loads the partitions contained on this device, whether the partition scheme is _MBR_ or
+    /// _GPT_.
+    pub fn load_partition_table(&self) {
+        let mbr = load_drive_mbr(self, 0);
+
+        if mbr.is_pmbr() {
+            let gpt = load_drive_gpt(self);
+
+            if let Some(gpt) = gpt {
+                unsafe {
+                    *self.partitions.get() = gpt.get_partitions();
+                    *self.partition_table.get() = PartitionTable::GPT(gpt);
+
+                    for partition in &mut (*self.partitions.get()) {
+                        partition.load_fs().unwrap();
+                    }
+                }
+
+                return;
+            }
+        }
+
+        unsafe {
+            *self.partitions.get() = mbr.get_partitions();
+        }
+
+        unsafe {
+            for partition in (*self.partitions.get()).clone().iter() {
+                if let PartitionMetadata::MBR(mut meta) = partition.metadata() {
+                    // if this device uses _EPBR_, we traverse the linked list to find all partitions.
+                    if matches!(meta.partition_type(), PartitionType::Extended)
+                        || matches!(meta.partition_type(), PartitionType::ExtendedLBA)
+                    {
+                        while load_drive_mbr(self, meta.start_lba() as u64).get_partition_metadata()
+                            [1]
+                        .is_used()
+                            || load_drive_mbr(self, meta.start_lba() as u64)
+                                .get_partition_metadata()[0]
+                                .is_used()
+                        {
+                            let partitions = load_drive_mbr(self, meta.start_lba() as u64)
+                                .get_partition_metadata();
+
+                            let mut ext_part = partitions[0];
+
+                            ext_part.set_start_lba(ext_part.start_lba() + meta.start_lba());
+
+                            (*self.partitions.get()).push(
+                                Partition::from_metadata(
+                                    0,
+                                    self.id,
+                                    PartitionMetadata::MBR(ext_part),
+                                )
+                                .unwrap(),
+                            );
+                            meta = partitions[1];
+                        }
+                    }
+                }
+            }
+
+            *self.partition_table.get() = PartitionTable::MBR(mbr);
         }
     }
 
@@ -780,7 +886,7 @@ impl AtaIdentify {
 }
 
 #[derive(Debug)]
-pub(super) enum AtaResult {
+pub enum AtaResult {
     Success,
 
     Error(AtaError),
