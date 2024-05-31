@@ -24,6 +24,8 @@ use hashbrown::HashMap;
 
 use spin::RwLock;
 
+use crate::drivers::generics::dev_disk::{get_sata_drive, DiskDevice};
+use crate::drivers::ide::AtaDeviceIdentifier;
 use crate::errors::MountError;
 use crate::fs::ext4::block_grp::{BlockGroupNumber, GroupDescriptorCache, LockedGroupDescriptor};
 use crate::fs::ext4::extent::Ext4RealBlkId;
@@ -33,7 +35,6 @@ use crate::fs::ext4::inode::{
 use crate::fs::ext4::sb::{Ext4ChksumAlgorithm, Ext4Superblock, LockedSuperblock, Superblock};
 use crate::fs::{Directory, Fs};
 use crate::{
-    drivers::ahci::get_sata_drive,
     errors::{CanFail, IOError},
     fs::{
         ext4::{dir::Ext4Directory, extent::ExtentTree, inode::Ext4Inode},
@@ -80,7 +81,7 @@ pub(super) type WeakLockedExt4Fs = Weak<RwLock<Ext4Fs>>;
 /// remain valid while the `ext4` filesystem is mounted.
 #[derive(Debug)]
 pub(crate) struct Ext4Fs {
-    drive_id: usize,
+    drive_id: AtaDeviceIdentifier,
     partition_id: usize,
 
     superblock: LockedSuperblock,
@@ -173,54 +174,58 @@ impl Ext4Fs {
     }
 
     fn read_blk_from_device(&self, blk_id: Ext4RealBlkId, buffer: &mut [u8]) -> CanFail<IOError> {
+        // With the new system for disk reads, this adds an unnecessary memcpy since the buffer is specified as an argument
+        // Either change the way block reads are implemented in ext4, or add a way to read from disk and store the retrieved
+        // bytes in a pre-specified buffer, as it was done previously.
         let sb = self.superblock.read();
         if blk_id > sb.blk_count() {
             return Err(IOError::InvalidCommand);
         }
 
-        let mut drive = get_sata_drive(self.drive_id).lock();
+        let mut drive = get_sata_drive(self.drive_id).ok_or(IOError::InvalidDevice)?;
         let partition_data = drive
-            .partitions
+            .partitions()
             .get(self.partition_id)
             .ok_or(IOError::Unknown)?
             .start_lba();
 
-        let sectors_count = sb.blk_size() / u64::from(drive.device_info.logical_sector_size());
-        let start_lba = partition_data
-            + (blk_id * sb.blk_size()) / u64::from(drive.device_info.logical_sector_size());
+        let sectors_count = sb.blk_size() / drive.logical_sector_size();
+        let start_lba = partition_data + (blk_id * sb.blk_size()) / drive.logical_sector_size();
 
-        drive.read(
-            start_lba,
-            u16::try_from(sectors_count).expect("invalid sectors count"),
-            buffer,
-        )
+        let read_req = drive
+            .read(
+                start_lba,
+                u16::try_from(sectors_count).expect("invalid sectors count"),
+            )
+            .complete();
+
+        buffer.copy_from_slice(&read_req.data.ok_or(IOError::Unknown)?);
+
+        Ok(())
     }
 }
 
 impl Fs for Ext4Fs {
     fn mount(
-        drive_id: usize,
+        drive_id: AtaDeviceIdentifier,
         partition_id: usize,
         partition_data: u64,
     ) -> Result<LockedExt4Fs, MountError> {
-        let mut drive = get_sata_drive(drive_id).lock();
+        let mut drive = get_sata_drive(drive_id).ok_or(MountError::IOError)?;
 
-        let sb_start_lba =
-            (1024 / u64::from(drive.device_info.logical_sector_size())) + partition_data;
+        let sb_start_lba = (1024 / u64::from(drive.logical_sector_size())) + partition_data;
         let sb_size_in_lba = u32::try_from(mem::size_of::<Ext4Superblock>())
             .expect("invalid superblock size")
-            / drive.device_info.logical_sector_size();
+            / u32::try_from(drive.logical_sector_size()).expect("invalid logical sector size");
 
-        let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
-        drive
-            .read(
-                sb_start_lba,
-                u16::try_from(sb_size_in_lba).expect("invalid superblock size"),
-                &mut raw_sb,
-            )
-            .map_err(|_| MountError::IOError)?;
+        let raw_sb = drive.read(
+            sb_start_lba,
+            u16::try_from(sb_size_in_lba).expect("invalid superblock size"),
+        );
 
-        let ext4_sb = *from_bytes(&raw_sb);
+        let raw_sb_buffer = raw_sb.complete().data.ok_or(MountError::IOError)?;
+
+        let ext4_sb = *from_bytes(&raw_sb_buffer);
         let sb = Superblock {
             ext4_superblock: ext4_sb,
         };
@@ -269,23 +274,24 @@ impl Fs for Ext4Fs {
         Ok(fs)
     }
 
-    fn identify(drive_id: usize, partition_data: u64) -> Result<bool, IOError> {
-        let mut drive = get_sata_drive(drive_id).lock();
+    fn identify(drive_id: AtaDeviceIdentifier, partition_data: u64) -> Result<bool, IOError> {
+        let mut drive = get_sata_drive(drive_id).ok_or(IOError::InvalidDevice)?;
 
-        let sb_start_lba =
-            (1024 / u64::from(drive.device_info.logical_sector_size())) + partition_data;
+        let sb_start_lba = (1024 / u64::from(drive.logical_sector_size())) + partition_data;
         let sb_size_in_lba = u32::try_from(mem::size_of::<Ext4Superblock>())
             .expect("invalid superblock size")
-            / drive.device_info.logical_sector_size();
+            / u32::try_from(drive.logical_sector_size()).expect("invalid logical sector size");
 
-        let mut raw_sb = [0u8; mem::size_of::<Ext4Superblock>()];
-        drive.read(
-            sb_start_lba,
-            u16::try_from(sb_size_in_lba).expect("invalid superblock size"),
-            &mut raw_sb,
-        )?;
+        let raw_sb = drive
+            .read(
+                sb_start_lba,
+                u16::try_from(sb_size_in_lba).expect("invalid superblock size"),
+            )
+            .complete();
 
-        let ext4_sb: Ext4Superblock = *from_bytes(&raw_sb);
+        let raw_sb_buffer = raw_sb.data.ok_or(IOError::Unknown)?;
+
+        let ext4_sb: Ext4Superblock = *from_bytes(&raw_sb_buffer);
 
         Ok(ext4_sb.magic.is_valid())
     }
