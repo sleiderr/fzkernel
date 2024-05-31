@@ -3,7 +3,10 @@
 use core::ops::{Add, BitAnd, Shl, Shr, Sub};
 
 /// Used to convert between integer types of different bit types, by masking bits we want to get rid of.
-pub trait Convertible<T: TryFrom<Self>>: Sized + BitAnd<Output = Self> {
+pub trait Convertible<T: TryFrom<Self>>:
+    Sized + BitAnd<Output = Self> + Shr<Output = Self>
+{
+    const SIZE_DIFF: Self;
     /// Mask corresponding to the low-order bits of the number.
     const LOW_BITS_MASK: Self;
 
@@ -21,7 +24,7 @@ pub trait Convertible<T: TryFrom<Self>>: Sized + BitAnd<Output = Self> {
 
     /// Returns the high-order bits of this number.
     fn high_bits(self) -> T {
-        self.convert_with_mask(Self::HIGH_BITS_MASK)
+        (self >> Self::SIZE_DIFF).convert_with_mask(Self::LOW_BITS_MASK)
     }
 
     /// Returns the low-order bits of this number.
@@ -31,33 +34,51 @@ pub trait Convertible<T: TryFrom<Self>>: Sized + BitAnd<Output = Self> {
 }
 
 impl Convertible<u64> for u128 {
+    const SIZE_DIFF: Self = 64;
     const LOW_BITS_MASK: Self = 0xFFFF_FFFF_FFFF_FFFF;
     const HIGH_BITS_MASK: Self = 0xFFFF_FFFF_FFFF_FFFF << 64;
 }
 
 impl Convertible<u16> for u128 {
+    const SIZE_DIFF: Self = 112;
     const LOW_BITS_MASK: Self = 0xFFFF;
     const HIGH_BITS_MASK: Self = 0xFFFF << 112;
 }
 
 impl Convertible<u32> for u64 {
+    const SIZE_DIFF: Self = 32;
     const LOW_BITS_MASK: Self = 0xFFFF_FFFF;
     const HIGH_BITS_MASK: Self = 0xFFFF_FFFF_0000_0000;
 }
 
 impl Convertible<u16> for u64 {
+    const SIZE_DIFF: Self = 48;
     const LOW_BITS_MASK: Self = 0xFFFF;
     const HIGH_BITS_MASK: Self = 0xFFFF_0000_0000_0000;
 }
 
+impl Convertible<u8> for u64 {
+    const SIZE_DIFF: Self = 56;
+    const LOW_BITS_MASK: Self = 0xFF;
+    const HIGH_BITS_MASK: Self = 0xFF00_0000_0000_0000;
+}
+
 impl Convertible<u16> for u32 {
+    const SIZE_DIFF: Self = 16;
     const LOW_BITS_MASK: Self = 0xFFFF;
     const HIGH_BITS_MASK: Self = 0xFFFF_0000;
 }
 
 impl Convertible<u8> for u32 {
+    const SIZE_DIFF: Self = 24;
     const LOW_BITS_MASK: Self = 0xFF;
     const HIGH_BITS_MASK: Self = 0xFF00_0000;
+}
+
+impl Convertible<u8> for u16 {
+    const SIZE_DIFF: Self = 8;
+    const LOW_BITS_MASK: Self = 0xFF;
+    const HIGH_BITS_MASK: Self = 0xFF00;
 }
 
 /// Used to access individual bits of a number.

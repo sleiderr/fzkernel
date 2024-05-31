@@ -5,7 +5,6 @@ use alloc::vec::Vec;
 use crate::{
     drivers::pci::{pci_read_long, pci_write_long, DeviceClass, PCICommonHeader, PCIHeader},
     errors::{CanFail, IOError},
-    println,
 };
 
 pub const BAR_32_WIDTH: u32 = 0x00;
@@ -344,7 +343,6 @@ impl<'d> PCIDevice<'d> {
     }
 
     pub fn interrupt_line(&self) -> u8 {
-        println!("l = {}", self.read_confl(INTERRUPT_WOFFSET));
         (self.read_confl(INTERRUPT_WOFFSET) & 0xff) as u8
     }
 

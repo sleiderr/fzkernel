@@ -1120,9 +1120,9 @@ pub(super) trait AtaRegister: From<u8> + Into<u8> {
 }
 
 #[derive(Debug)]
-pub(super) struct AtaError {
-    pub(super) code: AtaErrorCode,
-    pub(super) lba: u64,
+pub(in crate::drivers) struct AtaError {
+    pub(in crate::drivers) code: AtaErrorCode,
+    pub(in crate::drivers) lba: u64,
 }
 
 impl AtaError {
@@ -1132,7 +1132,7 @@ impl AtaError {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum AtaErrorCode {
+pub(in crate::drivers) enum AtaErrorCode {
     CommandAbort,
     DriveNotPresent,
     InvalidBufferSize,

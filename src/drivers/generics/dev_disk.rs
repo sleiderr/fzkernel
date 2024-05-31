@@ -1,3 +1,4 @@
+use crate::drivers::ahci::ahci_devices;
 use crate::drivers::ide::ata_pio::{ata_devices, AtaIoRequest};
 use crate::drivers::ide::AtaDeviceIdentifier;
 use crate::fs::partitions::Partition;
@@ -21,9 +22,10 @@ pub fn get_sata_drive(id: AtaDeviceIdentifier) -> Option<SataDevice> {
             identifier: id.clone(),
             inner: ata_devices().read().get(&id)?.clone(),
         }),
-        SataDeviceType::AHCI => {
-            todo!()
-        }
+        SataDeviceType::AHCI => Some(SataDevice {
+            identifier: id.clone(),
+            inner: ahci_devices().read().get(&id)?.clone(),
+        }),
     }
 }
 

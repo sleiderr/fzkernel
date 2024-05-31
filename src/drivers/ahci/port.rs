@@ -158,8 +158,8 @@ impl HBAPort {
 
         while self.device_busy() || self.device_drq() {}
 
-        self.port_command_set_issued(cmd_slot as u8);
         SATA_COMMAND_QUEUE.lock().insert(cmd_slot as u8, cmd);
+        self.port_command_set_issued(cmd_slot as u8);
 
         cmd_slot
     }
