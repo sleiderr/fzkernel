@@ -223,7 +223,10 @@ impl Cr3 {
     /// Returns [`InvalidAddress::InvalidAlignment`] if the given address is not page-aligned (4KB aligned).
     #[cfg(feature = "x86_64")]
     pub fn set_page_table_addr(self, addr: PhyAddr) -> Result<Self, InvalidAddress> {
-        if !addr.is_aligned_with(Alignment::ALIGN_4KB) {
+        if !addr
+            .is_aligned_with(Alignment::ALIGN_4KB)
+            .map_err(|_| InvalidAddress::InvalidAlignment)?
+        {
             return Err(InvalidAddress::InvalidAlignment);
         }
         Ok(self.with_pdt_addr(u64::from(addr) >> 12))
@@ -267,6 +270,119 @@ impl ControlRegister for Cr3 {
 ///
 /// Contains a group of flags that enable several architectural extensions, and indicate operating system support
 /// for specific processor capabilities.
+
+#[bitfield]
+#[derive(Clone, Copy, Debug)]
+#[cfg(feature = "x86_64")]
+#[repr(u64)]
+pub struct Cr4 {
+    /// Virtual-8086 Mode Extensions.
+    ///
+    /// Enables interrupt- and exception-handling extensions in _vm8086_ when set.
+    pub vm8086_ext: bool,
+
+    /// Protected-Mode Virtual Interrupts.
+    ///
+    /// Enables hardware support for a _virtual interrupt flag_ when set.
+    pub pm_vif: bool,
+
+    /// Time Stamp Disable.
+    ///
+    /// Restricts _RDTSC_ instruction to privilege 0 when set.
+    pub tsd: bool,
+
+    /// Debugging extensions.
+    pub debug_ext: bool,
+
+    /// Page Size extensions.
+    ///
+    /// Enables 4MB pages for 32-bit paging when set.
+    pub paging_ext: bool,
+
+    /// Physical Address Extension.
+    ///
+    /// When set, enables paging to produce physical address with more than 32bits.
+    pub phys_addr_ext: bool,
+
+    /// Machine-Check Enable.
+    ///
+    /// Enables the machine-check exception when set.
+    pub machine_check: bool,
+
+    /// Page Global Enable.
+    ///
+    /// Enables the global page feature when set. It allows frequently used pages to be marked as global to all users,
+    /// and therefore they are not flushed from the _TLB_ on a task switch.
+    pub page_global: bool,
+
+    /// Performance-Monitoring Counter Enable.
+    pub perf_mon_count: bool,
+
+    /// OS Support for _FXSAVE_ and _FXRSTOR_ instructions.
+    pub osfxsr: bool,
+
+    /// OS Support for _Unmasked SIMD Floating-Point Exceptions_.
+    pub osxmmexcpt: bool,
+
+    /// User-Mode Instruction Prevention.
+    ///
+    /// When set, _SGDT_, _SIDT_, _SLDT_, _STR_ and _SMSW_ instructions cannot be executed in user-mode (_CPL_ > 0).
+    pub umip: bool,
+
+    /// 57-bit linear addresses.
+    ///
+    /// When set in _IA-32e mode_, processor uses 5-level paging. Cannot be modified in _IA-32e mode_.
+    pub la57: bool,
+
+    /// VMX-Enable.
+    pub vmx: bool,
+
+    /// SMX-Enable.
+    pub smx: bool,
+
+    /// Enables the _RDFSBASE_, _RDGSBASE_, _WRFSBASE_ and _WRGSBASE_ instructions.
+    pub fsgsbase: bool,
+
+    /// PCID-Enable.
+    ///
+    /// Enables process-context identifier when set.
+    pub pcid: bool,
+
+    /// XSave and Processor Extended States-Enable.
+    pub osxsave: bool,
+
+    /// Key-Locker-Enable.
+    pub kl: bool,
+
+    /// SMEP-Enable.
+    ///
+    /// Enables supervisor-mode execution prevention when set.
+    pub smep: bool,
+
+    /// SMAP-Enable.
+    ///
+    /// Enables supervisor-mode access prevention when set.
+    pub smap: bool,
+
+    /// Enables protection key for user-mode pages.
+    pub pke: bool,
+
+    /// Control-flow Enforcement Technology.
+    pub cet: bool,
+
+    /// Enables protection key for supervisor-mode pages.
+    pub pks: bool,
+
+    /// User Interrupts Enable.
+    ///
+    /// Enables user interrupts when set, including user-interrupt delivery, notification identification and
+    /// instructions.
+    pub uintr: bool,
+
+    #[skip]
+    __: B39,
+}
+
 #[bitfield]
 #[derive(Clone, Copy, Debug)]
 #[cfg(not(feature = "x86_64"))]
@@ -381,9 +497,9 @@ pub struct Cr4 {
 
 impl ControlRegister for Cr4 {
     fn read() -> Self {
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(not(feature = "x86_64"))]
         let mut cr_bits: u32;
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(feature = "x86_64")]
         let mut cr_bits: u64;
         unsafe {
             asm!(
@@ -397,9 +513,9 @@ impl ControlRegister for Cr4 {
     }
 
     fn write(self) {
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(not(feature = "x86_64"))]
         let cr_bits = u32::from(self);
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(feature = "x86_64")]
         let cr_bits = u64::from(self);
         unsafe {
             asm!(

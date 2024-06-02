@@ -172,6 +172,14 @@ impl Add<u64> for PhyAddr {
     }
 }
 
+impl Add<PhyAddr> for PhyAddr {
+    type Output = PhyAddr;
+
+    fn add(self, rhs: PhyAddr) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
 impl<T> From<*mut T> for PhyAddr {
     fn from(value: *mut T) -> Self {
         Self(value as u64)

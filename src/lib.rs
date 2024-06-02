@@ -1,5 +1,6 @@
 #![feature(allow_internal_unstable)]
 #![feature(proc_macro_hygiene)]
+#![feature(noop_waker)]
 #![feature(naked_functions)]
 #![feature(type_alias_impl_trait)]
 #![feature(allocator_api)]

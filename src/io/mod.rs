@@ -66,7 +66,6 @@ pub fn outw(port: IOPort, data: u16) {
 }
 
 pub fn outl(port: u16, data: u32) {
-    unsafe { asm!("pusha") }
     unsafe {
         asm!(
         "out dx, eax",
@@ -74,7 +73,6 @@ pub fn outl(port: u16, data: u32) {
         in("eax") data
         )
     }
-    unsafe { asm!("popa") }
 }
 
 pub fn inb(port: IOPort) -> u8 {

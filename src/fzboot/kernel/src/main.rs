@@ -2,7 +2,6 @@
 #![no_std]
 #![no_main]
 
-use core::arch::asm;
 use core::panic::PanicInfo;
 
 #[no_mangle]
@@ -11,10 +10,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 extern "C" fn _kmain() -> ! {
-    unsafe {
-        asm!("mov rax, 0x7c");
-    }
-
     loop {}
 }
 

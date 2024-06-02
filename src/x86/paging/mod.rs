@@ -46,6 +46,7 @@ impl Frame {
     }
 }
 
+#[cfg(not(feature = "x86_64"))]
 /// Routines to enable paging at the pre-kernel init stage.
 pub mod bootinit_paging {
     use crate::mem::{MemoryAddress, PhyAddr, PhyAddr32, VirtAddr};
@@ -72,9 +73,14 @@ pub mod bootinit_paging {
     /// Disables interrupts (the `IDT` has to be updated to support 64-bit).
     #[allow(clippy::missing_panics_doc)]
     pub fn init_paging() {
-        identity_map_phys_level4(0);
+        identity_map_phys_level4(0, PhyAddr::new(0));
         identity_map_phys_level4(
             PageAddressTranslator::translate_address(KERNEL_PHYS_MAPPING_BASE).pml4_offset(),
+            PhyAddr::new(0),
+        );
+        identity_map_phys_level4(
+            PageAddressTranslator::translate_address(KERNEL_CODE_MAPPING_BASE).pml4_offset(),
+            PhyAddr::new(0x800_000),
         );
         Cr3::write(
             Cr3::new()
@@ -87,7 +93,7 @@ pub mod bootinit_paging {
         Cr0::write(Cr0::read().with_paging(true));
     }
 
-    fn identity_map_phys_level4(entry_offset: u16) {
+    fn identity_map_phys_level4(entry_offset: u16, phy_offset: PhyAddr) {
         let default_page_table: &mut PageTable = unsafe { &mut *BOOT_PAGE_TABLE_ADDR.as_mut_ptr() };
         let pdpt: &mut PageTable = Box::leak(Box::default());
 
@@ -114,7 +120,10 @@ pub mod bootinit_paging {
                 table_entry
                     .get_mut(j)
                     .map_to_addr(
-                        PhyAddr::new(4096 * 512 * 512 * u64::from(i) + 4096 * 512 * u64::from(j)),
+                        phy_offset
+                            + PhyAddr::new(
+                                4096 * 512 * 512 * u64::from(i) + 4096 * 512 * u64::from(j),
+                            ),
                         PageTableFlags::new()
                             .with_present(true)
                             .with_write(true)

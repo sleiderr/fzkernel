@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let kernel_img = String::from("artifacts/kernel.img");
         let parts = vec!["main", "kernel"];
         let cfg = BootloaderBuildConfig::new(
-            kernel_img,
+            kernel_img.clone(),
             boot_img.clone(),
             String::from("src/fzboot/$name"),
             String::from("target/$name/x86_64-fbios/release/$name.bin"),
@@ -72,6 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let img_cfg = ImageDiskBuildConfig {
             disk_img: String::from("fzkernel.img").into(),
             build_img: boot_img.into(),
+            kernel_img: kernel_img.into(),
         };
         let build = BootloaderBuild::new(cfg);
         let img_disk_build = ImageDiskBuild::new(img_cfg);

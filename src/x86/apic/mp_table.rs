@@ -84,11 +84,12 @@ pub(crate) struct MPProcessorEntry {
     pub(crate) flags: MPProcessorEntryFlags,
     signature: u8,
     family: u8,
-    reserved1: u16,
+    reserved1: u8,
+    reserved2: u8,
 
     /// Feature flags for this processor, as return by the `CPUID` instruction.
     pub(crate) feature_flags: MPProcessorEntryFeatureFlags,
-    reserved2: u64,
+    reserved3: [u8; 8],
 }
 
 /// CPU Flags, used in the [`MPProcessorEntry`] structure.

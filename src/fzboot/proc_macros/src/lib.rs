@@ -130,6 +130,7 @@ pub fn interrupt(
         }
     };
 
+    #[cfg(not(feature = "x86_64"))]
     // Define wrapper assembly
     let wrapper = format!(
         "pushad
@@ -137,6 +138,18 @@ pub fn interrupt(
                 call {}
                 call _pic_eoi
                 popad
+                iretd",
+        wrapped_name
+    );
+
+    #[cfg(feature = "x86_64")]
+    // Define wrapper assembly
+    // TODO: save registers ?
+    let wrapper = format!(
+        "
+                call _int_entry
+                call {}
+                call _pic_eoi
                 iretd",
         wrapped_name
     );
@@ -221,6 +234,8 @@ pub fn interrupt_default(
             };
             let naked_name = format!("_int0x{:x}", i);
             let naked_ident = Ident::new(naked_name.as_str(), Span::mixed_site());
+
+            #[cfg(not(feature = "x86_64"))]
             let wrapper = format!(
                 "pushad
                 call _int_entry
@@ -230,6 +245,17 @@ pub fn interrupt_default(
                 iretd",
                 name
             );
+
+            #[cfg(feature = "x86_64")]
+            let wrapper = format!(
+                "
+                call _int_entry
+                call {}
+                call _pic_eoi
+                iretd",
+                name
+            );
+
             let naked_int = quote! {
                 #[link_section = #section]
                 #[naked]

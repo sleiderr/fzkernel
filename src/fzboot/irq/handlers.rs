@@ -1,5 +1,6 @@
 use crate::drivers::ide::ata_irq_entry;
 use crate::io::pic::PIC;
+use crate::println;
 use crate::x86::apic::local_apic;
 use core::arch::asm;
 use fzproc_macros::{interrupt, interrupt_default};
@@ -76,6 +77,11 @@ const CONTROLLER: PIC = PIC {
 
 #[interrupt]
 pub fn _int0x76() {
+    ata_irq_entry();
+}
+
+#[interrupt]
+pub fn _int0x2e() {
     ata_irq_entry();
 }
 
