@@ -5,6 +5,8 @@
 #![feature(proc_macro_hygiene)]
 #![feature(naked_functions)]
 
+mod boot;
+
 extern crate alloc;
 
 use core::arch::asm;
@@ -62,7 +64,10 @@ pub fn boot_main() -> ! {
     pci_enumerate();
     pci_devices_init();
 
+    let mb_information_hdr_addr = boot::headers::dump_multiboot_information_header();
     bootinit_paging::init_paging();
+
+    unsafe { asm!("mov ecx, {}", in(reg) mb_information_hdr_addr as u32) }
 
     loop {}
 }

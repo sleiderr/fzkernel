@@ -116,7 +116,8 @@ impl From<PhyAddr> for u64 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Ord, PartialOrd, Eq, PartialEq, Pod, Zeroable)]
+#[repr(transparent)]
 pub struct PhyAddr(u64);
 
 impl PhyAddr {
@@ -186,7 +187,7 @@ impl<T> From<*mut T> for PhyAddr {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct PhyAddr32(u32);
 

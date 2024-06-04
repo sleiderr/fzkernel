@@ -27,6 +27,7 @@
 
 pub mod video;
 pub mod bios;
+pub mod boot;
 pub mod drivers;
 #[cfg(feature = "alloc")]
 pub mod fs;
