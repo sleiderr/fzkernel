@@ -116,6 +116,12 @@ impl From<PhyAddr> for u64 {
     }
 }
 
+impl Display for VirtAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.pad(&format!("{:#018x}", self.0))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Ord, PartialOrd, Eq, PartialEq, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct PhyAddr(u64);

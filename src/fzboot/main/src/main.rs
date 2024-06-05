@@ -9,8 +9,14 @@ mod boot;
 
 extern crate alloc;
 
+use boot::fzkernel;
 use core::arch::asm;
 use core::{panic::PanicInfo, ptr::NonNull};
+use fzboot::boot::multiboot;
+use fzboot::drivers::generics::dev_disk::{sata_drives, DiskDevice};
+use fzboot::drivers::ide::AtaDeviceIdentifier;
+use fzboot::fs::partitions::mbr;
+use fzboot::mem::MemoryAddress;
 use fzboot::println;
 use fzboot::video::vesa::text_buffer;
 use fzboot::x86::paging::bootinit_paging;
@@ -64,10 +70,21 @@ pub fn boot_main() -> ! {
     pci_enumerate();
     pci_devices_init();
 
+    let kernel_part = boot::fzkernel::locate_kernel_partition();
+    boot::fzkernel::load_kernel(kernel_part.0, kernel_part.1);
+
     let mb_information_hdr_addr = boot::headers::dump_multiboot_information_header();
     bootinit_paging::init_paging();
 
-    unsafe { asm!("mov ecx, {}", in(reg) mb_information_hdr_addr as u32) }
+    let kernel_entry_ptr = boot::fzkernel::KERNEL_LOAD_ADDR.as_ptr::<()>();
+    let kernel_entry: fn(*mut u8) -> ! = unsafe { core::mem::transmute(kernel_entry_ptr) };
+
+    info!(
+        "kernel",
+        "jumping to kernel main (addr = {:#x})", kernel_entry_ptr as usize
+    );
+
+    kernel_entry(mb_information_hdr_addr);
 
     loop {}
 }

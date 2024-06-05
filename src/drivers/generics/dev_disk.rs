@@ -7,7 +7,7 @@
 //! implementation of those method may depend on the physical controller to which the disk is linked.
 
 use crate::drivers::ahci::ahci_devices;
-use crate::drivers::ide::ata_pio::{ata_devices, AtaIoRequest};
+use crate::drivers::ide::ata_pio::{ata_devices, AtaDevice, AtaIoRequest};
 use crate::drivers::ide::AtaDeviceIdentifier;
 use crate::fs::partitions::Partition;
 use alloc::sync::Arc;
@@ -46,6 +46,40 @@ pub fn get_sata_drive(id: AtaDeviceIdentifier) -> Option<SataDevice> {
             identifier: id.clone(),
             inner: ahci_devices().read().get(&id)?.clone(),
         }),
+    }
+}
+
+/// Returns an iterator over all availables [`SataDevice`] on the computer.
+pub fn sata_drives() -> SataDeviceIterator {
+    SataDeviceIterator::new()
+}
+
+/// Iterator over all [`SataDevice`] available on the computer.
+pub struct SataDeviceIterator {
+    identifiers: alloc::vec::IntoIter<AtaDeviceIdentifier>,
+}
+
+impl SataDeviceIterator {
+    fn new() -> Self {
+        let mut ata_devices_identifiers: Vec<AtaDeviceIdentifier> =
+            ata_devices().read().keys().cloned().collect();
+
+        let mut ahci_device_identifers: Vec<AtaDeviceIdentifier> =
+            ahci_devices().read().keys().cloned().collect();
+
+        ata_devices_identifiers.append(&mut ahci_device_identifers);
+
+        Self {
+            identifiers: ata_devices_identifiers.into_iter(),
+        }
+    }
+}
+
+impl Iterator for SataDeviceIterator {
+    type Item = SataDevice;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        get_sata_drive(self.identifiers.next()?)
     }
 }
 

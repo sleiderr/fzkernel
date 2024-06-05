@@ -2,10 +2,10 @@
 #![no_std]
 #![no_main]
 
-use core::panic::PanicInfo;
+use core::{arch::asm, panic::PanicInfo};
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start(multiboot_information_ptr: *mut u8) -> ! {
     _kmain();
 }
 
