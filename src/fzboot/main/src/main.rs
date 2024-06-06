@@ -5,12 +5,21 @@
 #![feature(proc_macro_hygiene)]
 #![feature(naked_functions)]
 
+mod boot;
+
 extern crate alloc;
 
+use boot::fzkernel;
 use core::arch::asm;
 use core::{panic::PanicInfo, ptr::NonNull};
-use fzboot::println;
-use fzboot::video::vesa::text_buffer;
+use fzboot::boot::multiboot;
+use fzboot::drivers::generics::dev_disk::{sata_drives, DiskDevice};
+use fzboot::drivers::ide::AtaDeviceIdentifier;
+use fzboot::error;
+use fzboot::fs::partitions::mbr;
+use fzboot::mem::MemoryAddress;
+use fzboot::video::vesa::{init_text_buffer_from_vesa, text_buffer};
+use fzboot::x86::descriptors::gdt::long_init_gdt;
 use fzboot::x86::paging::bootinit_paging;
 use fzboot::{
     drivers::pci::pci_devices_init,
@@ -54,6 +63,7 @@ pub extern "C" fn _start() -> ! {
 }
 
 pub fn boot_main() -> ! {
+    init_text_buffer_from_vesa();
     fzboot::mem::zero_bss();
     heap_init();
     acpi_init();
@@ -62,9 +72,20 @@ pub fn boot_main() -> ! {
     pci_enumerate();
     pci_devices_init();
 
+    let kernel_part = boot::fzkernel::locate_kernel_partition();
+    boot::fzkernel::load_kernel(kernel_part.0, kernel_part.1);
+
+    let mb_information_hdr_addr = boot::headers::dump_multiboot_information_header();
     bootinit_paging::init_paging();
 
-    loop {}
+    info!("kernel", "jumping to kernel main (addr = 0x800000)");
+
+    unsafe {
+        long_init_gdt();
+        asm!("mov ecx, {}", in(reg) mb_information_hdr_addr);
+        asm!("push 0x10", "push 0x800000", "retf");
+        core::unreachable!();
+    }
 }
 
 pub fn clock_init() {
@@ -149,6 +170,6 @@ fn panic(info: &PanicInfo) -> ! {
     unsafe {
         text_buffer().buffer.force_unlock();
     }
-    println!("fatal: {info}");
+    error!("fatal: {info}");
     loop {}
 }

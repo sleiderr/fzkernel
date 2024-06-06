@@ -11,4 +11,4 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-#fzboot = { path = "../../../", features = ["alloc"] }
+fzboot = { path = "../../../", features = ["alloc", "x86_64"] }

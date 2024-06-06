@@ -480,8 +480,14 @@ pub fn cpu_id(eax: u32) -> Option<[u32; 4]> {
         return None;
     }
 
+    #[cfg(not(feature = "x86_64"))]
     unsafe {
         asm!("cpuid", inout("eax") eax => result[0], out("ebx") result[1], out("ecx") result[2], out("edx") result[3]);
+    }
+
+    #[cfg(feature = "x86_64")]
+    unsafe {
+        asm!("cpuid", "mov edi, ebx", inout("eax") eax => result[0], out("edi") result[1], out("ecx") result[2], out("edx") result[3]);
     }
 
     Some(result)
@@ -525,6 +531,7 @@ pub fn cpu_id_support() -> bool {
     let eax: u32;
 
     unsafe {
+        #[cfg(not(feature = "x86_64"))]
         asm!(
             // Save the EFLAGS register.
             "pushfd",
@@ -541,6 +548,28 @@ pub fn cpu_id_support() -> bool {
             // And finally we compare it to the value after the bit flip.
             "xor eax, [esp]",
             "popfd",
+            // If eax != 0, the bit flip was successful.
+            "and eax, 0x200000",
+            out("eax") eax
+        );
+
+        #[cfg(feature = "x86_64")]
+        asm!(
+            // Save the EFLAGS register.
+            "pushfq",
+            // Push it again, this time to modify it.
+            "pushfq",
+            // We flip the bit 21 of the EFLAGS register.
+            "xor dword ptr [esp], 0x200000",
+            // We put it back in the EFLAGS register.
+            "popfq",
+            // We push it again, to check if the bit flip succeeded.
+            "pushfq",
+            // We put the initial EFLAGS value into eax.
+            "pop rax",
+            // And finally we compare it to the value after the bit flip.
+            "xor eax, [esp]",
+            "popfq",
             // If eax != 0, the bit flip was successful.
             "and eax, 0x200000",
             out("eax") eax

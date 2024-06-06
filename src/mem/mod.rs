@@ -116,7 +116,14 @@ impl From<PhyAddr> for u64 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq)]
+impl Display for VirtAddr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.pad(&format!("{:#018x}", self.0))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Ord, PartialOrd, Eq, PartialEq, Pod, Zeroable)]
+#[repr(transparent)]
 pub struct PhyAddr(u64);
 
 impl PhyAddr {
@@ -172,13 +179,21 @@ impl Add<u64> for PhyAddr {
     }
 }
 
+impl Add<PhyAddr> for PhyAddr {
+    type Output = PhyAddr;
+
+    fn add(self, rhs: PhyAddr) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
 impl<T> From<*mut T> for PhyAddr {
     fn from(value: *mut T) -> Self {
         Self(value as u64)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Pod, Zeroable)]
 #[repr(transparent)]
 pub struct PhyAddr32(u32);
 

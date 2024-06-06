@@ -84,7 +84,14 @@ impl AtaDeviceIdentifier {
 
 impl Display for AtaDeviceIdentifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        todo!()
+        let disk_type_str = match self.disk_type {
+            SataDeviceType::IDE => "IDE",
+            SataDeviceType::AHCI => "AHCI",
+        };
+        f.write_fmt(format_args!(
+            "ATA device   device_type = {}    controller_id = {}    device_id = {}",
+            disk_type_str, self.ide_controller, self.device_id
+        ))
     }
 }
 

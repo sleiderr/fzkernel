@@ -108,6 +108,7 @@ bitfield! {
     non_volatile, _: 1, 1;
 }
 
+#[cfg(not(feature = "x86_64"))]
 fn __mem_entry_e820(mut ebx: u32, buffer: u32) -> Result<u32, E820Error> {
     let cf: u32;
 

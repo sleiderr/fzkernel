@@ -79,6 +79,9 @@ impl BuildStep for ImageDiskBuild {
         let mut build_img =
             std::fs::File::open(&self.config.build_img).map_err(|_| BuildError(None))?;
 
+        let mut kernel_img =
+            std::fs::File::open(&self.config.kernel_img).map_err(|_| BuildError(None))?;
+
         build_img
             .read(&mut bootcode)
             .map_err(|_| BuildError(None))?;
@@ -105,7 +108,7 @@ impl BuildStep for ImageDiskBuild {
             )
             .map_err(|_| BuildError(None))?;
 
-        gpt_disk
+        let kernel_part_id = gpt_disk
             .add_partition(
                 "kernelfs",
                 1024 * 1024 * 1,
@@ -126,6 +129,11 @@ impl BuildStep for ImageDiskBuild {
             .map_err(|_| BuildError(None))?;
 
         let boot_part_start_lba = gpt_disk.partitions().get(&boot_part_id).unwrap().first_lba;
+        let kernel_part_start_lba = gpt_disk
+            .partitions()
+            .get(&kernel_part_id)
+            .unwrap()
+            .first_lba;
         gpt_disk.write().map_err(|_| BuildError(None))?;
 
         let mut post_mbr_code = vec![0; (build_img.metadata().unwrap().len() - 0x200) as usize];
@@ -135,6 +143,13 @@ impl BuildStep for ImageDiskBuild {
             .map_err(|_| BuildError(None))?;
 
         disk_image.write_at(&post_mbr_code, boot_part_start_lba * 0x200);
+
+        let mut kernel_code = vec![0; kernel_img.metadata().unwrap().len() as usize];
+        kernel_img
+            .read(&mut kernel_code)
+            .map_err(|_| BuildError(None))?;
+
+        disk_image.write_at(&kernel_code, kernel_part_start_lba * 0x200);
         master
             .send(BuildEvent::StepFinished(
                 String::from("disk image"),
@@ -150,6 +165,7 @@ impl BuildStep for ImageDiskBuild {
 pub struct ImageDiskBuildConfig {
     pub disk_img: PathBuf,
     pub build_img: PathBuf,
+    pub kernel_img: PathBuf,
 }
 
 pub struct BootloaderBuildConfig {

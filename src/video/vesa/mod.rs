@@ -15,6 +15,7 @@ use conquer_once::spin::OnceCell;
 use core::fmt::{self, Write};
 use core::ptr;
 
+use crate::boot::multiboot::mb_information::FramebufferMultibootInformation;
 use crate::video::vesa::framebuffer::{LockedTextFrameBuffer, RgbaColor, TextFrameBuffer};
 use crate::video::vesa::video_mode::{ModeInfoBlock, VESA_MODE_BUFFER};
 
@@ -23,18 +24,27 @@ pub mod video_mode;
 pub mod framebuffer;
 pub mod macros;
 
+static TEXT_BUFFER: OnceCell<LockedTextFrameBuffer> = OnceCell::uninit();
+
 pub fn text_buffer() -> &'static LockedTextFrameBuffer<'static> {
-    static TEXT_BUFFER: OnceCell<LockedTextFrameBuffer> = OnceCell::uninit();
+    TEXT_BUFFER.try_get().unwrap()
+}
 
-    TEXT_BUFFER
-        .try_get_or_init(|| {
-            let vesamode_info_ptr = VESA_MODE_BUFFER as *mut ModeInfoBlock;
-            let vesamode_info = unsafe { ptr::read(vesamode_info_ptr) };
-            let mut framebuffer = TextFrameBuffer::from_vesamode_info(&vesamode_info);
+pub fn init_text_buffer_from_vesa() {
+    TEXT_BUFFER.try_init_once(|| {
+        let vesamode_info_ptr = VESA_MODE_BUFFER as *mut ModeInfoBlock;
+        let vesamode_info = unsafe { ptr::read(vesamode_info_ptr) };
+        let framebuffer = TextFrameBuffer::from_vesamode_info(&vesamode_info);
 
-            LockedTextFrameBuffer::new(framebuffer)
-        })
-        .unwrap()
+        LockedTextFrameBuffer::new(framebuffer)
+    });
+}
+
+pub fn init_text_buffer_from_multiboot(header: FramebufferMultibootInformation) {
+    TEXT_BUFFER.init_once(|| {
+        let framebuffer = TextFrameBuffer::from_multiboot_info(&header);
+        LockedTextFrameBuffer::new(framebuffer)
+    });
 }
 
 /// Prints a formatted text input to the shared [`TextFrameBuffer`].

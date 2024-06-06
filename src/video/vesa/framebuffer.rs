@@ -10,7 +10,11 @@ use core::{fmt::Write, slice};
 use noto_sans_mono_bitmap::{get_raster, FontWeight, RasterHeight, RasterizedChar};
 use spin::Mutex;
 
-use crate::video::vesa::video_mode::{ModeInfoBlock, PixelLayout};
+use crate::{
+    boot::multiboot::mb_information::FramebufferMultibootInformation,
+    mem::MemoryAddress,
+    video::vesa::video_mode::{ModeInfoBlock, PixelLayout},
+};
 
 /// Default font char height.
 pub const CHAR_HEIGHT: RasterHeight = RasterHeight::Size16;
@@ -114,6 +118,48 @@ impl<'b> TextFrameBuffer<'b> {
             slice::from_raw_parts_mut(
                 info.framebuffer as *mut u8,
                 (info.bits_per_pixel as usize >> 3) * info.height as usize * info.width as usize,
+            )
+        };
+
+        let mut framebuffer = Self {
+            buffer,
+            cursor: TextCursor::default(),
+            metadata,
+        };
+
+        framebuffer.clear();
+
+        framebuffer
+    }
+
+    /// Creates a `TextFrameBuffer` from information provided in a [`MultibootInformation`] block.
+    ///
+    /// The VESA mode must support a linear framebuffer.
+    pub fn from_multiboot_info(info: &FramebufferMultibootInformation) -> Self {
+        let pixel_layout = match (
+            info.red_field_pos,
+            info.green_field_pos,
+            info.blue_field_pos,
+        ) {
+            (0, 8, 16) => PixelLayout::RGB,
+            (16, 8, 0) => PixelLayout::BGR,
+            _ => PixelLayout::RGB,
+        };
+        let metadata = FrameBufferMetadata {
+            layout: pixel_layout,
+            bytes_per_px: info.bpp as usize >> 3,
+            width: info.width as usize,
+            height: info.height as usize,
+            stride: usize::try_from(info.pitch).expect("invalid framebuffer pitch"),
+            bg_color: Some(DEFAULT_BG_COLOR),
+        };
+
+        let framebuffer_addr = info.addr;
+
+        let buffer = unsafe {
+            slice::from_raw_parts_mut(
+                framebuffer_addr.as_mut_ptr::<u8>(),
+                (info.bpp as usize >> 3) * info.height as usize * info.width as usize,
             )
         };
 
