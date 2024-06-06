@@ -1,0 +1,3 @@
+[submodule "src/deps/acpi"]
+	path = src/deps/acpi
+	url = git@github.com:rust-osdev/acpi.git
