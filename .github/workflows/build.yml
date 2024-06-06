@@ -1,32 +1,34 @@
 name: Build
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+    push:
+        branches:
+            - main
+    pull_request:
 
 defaults:
-  run:
-    working-directory: ./build
+    run:
+        working-directory: ./build
 
 jobs:
-  test:
-    name: cargo-test-x86_64-linux
-    runs-on: self-hosted
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v2
+    test:
+        name: cargo-test-x86_64-linux
+        runs-on: self-hosted
+        steps:
+            - name: Checkout source code
+              uses: actions/checkout@v2
+              with:
+                  submodules: recursive
 
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly
-          override: true
-          components: clippy,rust-src,llvm-tools-preview
+            - name: Install Rust
+              uses: actions-rs/toolchain@v1
+              with:
+                  toolchain: nightly
+                  override: true
+                  components: clippy,rust-src,llvm-tools-preview
 
-      - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --manifest-path=build/Cargo.toml
+            - name: Build
+              uses: actions-rs/cargo@v1
+              with:
+                  command: build
+                  args: --manifest-path=build/Cargo.toml
