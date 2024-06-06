@@ -86,6 +86,7 @@ pub struct MultibootInformation {
     apm_table: PhyAddr32,
 
     vbe: VbeMultibootInformation,
+
     framebuffer: FramebufferMultibootInformation,
 }
 
@@ -118,6 +119,17 @@ impl MultibootInformation {
         }
 
         Some(bootloader_name)
+    }
+
+    pub fn framebuffer(&self) -> Option<FramebufferMultibootInformation> {
+        if self
+            .flags
+            .contains(MultibootInformationFlags::FRAMEBUFFER_VALID)
+        {
+            return Some(self.framebuffer);
+        }
+
+        None
     }
 
     pub fn insert_framebuffer_info(&mut self, mode_info_block: ModeInfoBlock) {
@@ -310,18 +322,18 @@ pub struct VbeMultibootInformation {
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 #[repr(C, packed)]
 pub struct FramebufferMultibootInformation {
-    addr: PhyAddr,
-    pitch: u32,
-    width: u32,
-    height: u32,
-    bpp: u8,
-    framebuffer_type: u8,
-    red_field_pos: u8,
-    red_mask_size: u8,
-    green_field_pos: u8,
-    green_mask_size: u8,
-    blue_field_pos: u8,
-    blue_mask_size: u8,
+    pub(crate) addr: PhyAddr,
+    pub(crate) pitch: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) bpp: u8,
+    pub(crate) framebuffer_type: u8,
+    pub(crate) red_field_pos: u8,
+    pub(crate) red_mask_size: u8,
+    pub(crate) green_field_pos: u8,
+    pub(crate) green_mask_size: u8,
+    pub(crate) blue_field_pos: u8,
+    pub(crate) blue_mask_size: u8,
 }
 
 /// Contains information about the disk device from which the OS image was loaded.

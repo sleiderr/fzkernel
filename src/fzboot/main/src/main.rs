@@ -15,10 +15,11 @@ use core::{panic::PanicInfo, ptr::NonNull};
 use fzboot::boot::multiboot;
 use fzboot::drivers::generics::dev_disk::{sata_drives, DiskDevice};
 use fzboot::drivers::ide::AtaDeviceIdentifier;
+use fzboot::error;
 use fzboot::fs::partitions::mbr;
 use fzboot::mem::MemoryAddress;
-use fzboot::println;
-use fzboot::video::vesa::text_buffer;
+use fzboot::video::vesa::{init_text_buffer_from_vesa, text_buffer};
+use fzboot::x86::descriptors::gdt::long_init_gdt;
 use fzboot::x86::paging::bootinit_paging;
 use fzboot::{
     drivers::pci::pci_devices_init,
@@ -62,6 +63,7 @@ pub extern "C" fn _start() -> ! {
 }
 
 pub fn boot_main() -> ! {
+    init_text_buffer_from_vesa();
     fzboot::mem::zero_bss();
     heap_init();
     acpi_init();
@@ -76,17 +78,14 @@ pub fn boot_main() -> ! {
     let mb_information_hdr_addr = boot::headers::dump_multiboot_information_header();
     bootinit_paging::init_paging();
 
-    let kernel_entry_ptr = boot::fzkernel::KERNEL_LOAD_ADDR.as_ptr::<()>();
-    let kernel_entry: fn(*mut u8) -> ! = unsafe { core::mem::transmute(kernel_entry_ptr) };
+    info!("kernel", "jumping to kernel main (addr = 0x800000)");
 
-    info!(
-        "kernel",
-        "jumping to kernel main (addr = {:#x})", kernel_entry_ptr as usize
-    );
-
-    kernel_entry(mb_information_hdr_addr);
-
-    loop {}
+    unsafe {
+        long_init_gdt();
+        asm!("mov ecx, {}", in(reg) mb_information_hdr_addr);
+        asm!("push 0x10", "push 0x800000", "retf");
+        core::unreachable!();
+    }
 }
 
 pub fn clock_init() {
@@ -171,6 +170,6 @@ fn panic(info: &PanicInfo) -> ! {
     unsafe {
         text_buffer().buffer.force_unlock();
     }
-    println!("fatal: {info}");
+    error!("fatal: {info}");
     loop {}
 }
