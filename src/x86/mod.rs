@@ -11,9 +11,6 @@ pub mod msr;
 pub mod tsc;
 
 #[cfg(feature = "alloc")]
-pub mod idt;
-
-#[cfg(feature = "alloc")]
 pub mod apic;
 
 pub mod descriptors;

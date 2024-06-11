@@ -11,7 +11,7 @@ use crate::errors::CanFail;
 use crate::mem::{MemoryAddress, MemoryError, PhyAddr};
 use crate::x86::msr::{Ia32ExtendedFeature, ModelSpecificRegister};
 use crate::x86::privilege::PrivilegeLevel;
-use crate::{BitIndex, Convertible};
+use crate::{error, BitIndex, Convertible};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::arch::asm;
@@ -20,6 +20,7 @@ use core::mem;
 use core::mem::size_of;
 use core::ptr::{read, NonNull};
 use modular_bitfield::prelude::{B24, B4, B40, B5};
+use modular_bitfield::specifiers::{B13, B2};
 use modular_bitfield::{bitfield, BitfieldSpecifier};
 
 pub const LONG_GDT_ADDR: u64 = 0x4000;
@@ -907,6 +908,67 @@ impl SegmentType for SystemSegmentType {
             SystemSegmentType::TrapGate => 0b01111,
         }
     }
+}
+
+pub struct SegmentSelector {
+    pub(super) inner: SegmentSelectorInner,
+}
+
+#[bitfield]
+#[derive(BitfieldSpecifier)]
+#[repr(u16)]
+pub(super) struct SegmentSelectorInner {
+    /// Requested privilege level of the selector ([`x86::privilege::PrivilegeLevel`]).
+    ///
+    /// Determines if the selector is valid during permission checks and may set execution or memoy access privilege.
+    rpl: B2,
+
+    /// Specifies which descriptor table to use, if clear the `GDT` is used, otherwise the `LDT` is used.
+    ti: bool,
+
+    /// Specifies the index of the `GDT` or `LDT` entry referenced by this _selector_.   
+    index: B13,
+}
+
+impl SegmentSelector {
+    pub fn with_rpl(self, rpl: PrivilegeLevel) -> Self {
+        let rpl_bits = match rpl {
+            PrivilegeLevel::Ring0 => 0b00,
+            PrivilegeLevel::Ring1 => 0b01,
+            PrivilegeLevel::Ring2 => 0b10,
+            PrivilegeLevel::Ring3 => 0b11,
+        };
+
+        Self {
+            inner: self.inner.with_rpl(rpl_bits),
+        }
+    }
+
+    pub fn gdt_selector() -> Self {
+        Self {
+            inner: SegmentSelectorInner::new(),
+        }
+    }
+
+    pub fn ldt_selector() -> Self {
+        Self {
+            inner: SegmentSelectorInner::new().with_ti(true),
+        }
+    }
+
+    pub fn with_index(self, index: u16) -> Result<Self, InvalidSegmentSelector> {
+        if index & 0b111 != 0 {
+            return Err(InvalidSegmentSelector::InvalidIndexAlignment);
+        }
+
+        Ok(Self {
+            inner: self.inner.with_index(index),
+        })
+    }
+}
+
+pub enum InvalidSegmentSelector {
+    InvalidIndexAlignment,
 }
 
 /// Error type when building a [`SegmentDescriptor`].
