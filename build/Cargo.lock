@@ -738,7 +738,6 @@ version = "0.1.0"
 dependencies = [
  "conquer-once",
  "fzboot",
- "fzproc_macros",
 ]
 
 [[package]]

@@ -16,3 +16,4 @@ pub(crate) mod local_apic;
 pub(crate) mod mp_table;
 
 pub use local_apic::local_apic;
+pub use local_apic::InterruptVector;

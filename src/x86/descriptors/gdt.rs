@@ -910,12 +910,13 @@ impl SegmentType for SystemSegmentType {
     }
 }
 
+#[derive(Debug)]
 pub struct SegmentSelector {
     pub(super) inner: SegmentSelectorInner,
 }
 
 #[bitfield]
-#[derive(BitfieldSpecifier)]
+#[derive(BitfieldSpecifier, Debug)]
 #[repr(u16)]
 pub(super) struct SegmentSelectorInner {
     /// Requested privilege level of the selector ([`x86::privilege::PrivilegeLevel`]).
@@ -967,6 +968,7 @@ impl SegmentSelector {
     }
 }
 
+#[derive(Debug)]
 pub enum InvalidSegmentSelector {
     InvalidIndexAlignment,
 }

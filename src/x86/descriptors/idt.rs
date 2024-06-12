@@ -15,7 +15,9 @@ use crate::{
     error,
     errors::{BaseError, CanFail},
     mem::{MemoryAddress, PhyAddr},
+    println,
     x86::{
+        descriptors::idt,
         int::{disable_interrupts, enable_interrupts, interrupts_disabled},
         privilege::PrivilegeLevel,
     },
@@ -158,7 +160,7 @@ impl<A: MemoryAddress> InterruptDescriptorTable<A> {
     }
 
     pub unsafe fn write_table(&self) -> CanFail<IDTError> {
-        self.write_header();
+        self.write_header()?;
 
         if core::mem::size_of::<A::AsPrimitive>() == 0x8 {
             let mut idt_entries_ptr = (self.base_addr + 0x10)
@@ -168,7 +170,7 @@ impl<A: MemoryAddress> InterruptDescriptorTable<A> {
             for i in 0..256 {
                 idt_entries_ptr.write(u128::from_le_bytes(self.entries[i].inner.bytes));
 
-                idt_entries_ptr = idt_entries_ptr.add(0x10);
+                idt_entries_ptr = idt_entries_ptr.add(0x1);
             }
         }
 
@@ -184,7 +186,7 @@ impl<A: MemoryAddress> InterruptDescriptorTable<A> {
                         .expect("infaillible conversion"),
                 ));
 
-                idt_entries_ptr = idt_entries_ptr.add(0x8);
+                idt_entries_ptr = idt_entries_ptr.add(0x1);
             }
         }
 
@@ -192,10 +194,7 @@ impl<A: MemoryAddress> InterruptDescriptorTable<A> {
     }
 
     unsafe fn write_header(&self) -> CanFail<IDTError> {
-        let base_idt_ptr = self
-            .base_addr
-            .as_nonnull_ptr::<u8>()
-            .map_err(|_| IDTError::InvalidBaseAddress)?;
+        let base_idt_ptr = self.base_addr.as_mut_ptr::<u8>();
 
         base_idt_ptr.cast::<u16>().write(self.length);
 
@@ -221,6 +220,12 @@ impl GateDescriptor {
 
     pub(crate) fn set_present(&mut self, present: bool) {
         self.inner = self.inner.with_present(present);
+    }
+
+    pub(crate) fn with_present(self, present: bool) -> Self {
+        Self {
+            inner: self.inner.with_present(present),
+        }
     }
 
     pub(crate) fn with_offset(self, offset: PhyAddr) -> Self {
