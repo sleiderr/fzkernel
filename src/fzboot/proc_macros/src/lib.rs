@@ -2,131 +2,52 @@
 #![feature(proc_macro_quote)]
 extern crate proc_macro2;
 
-use std::fs;
-
-use proc_macro2::{Span, TokenStream};
+use darling::{ast::NestedMeta, Error, FromMeta};
+use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::quote;
-use syn;
-use syn::parse::Parser;
-use syn::{parse_file, parse_macro_input, Ident, Item, ItemFn};
+use syn::{parse_macro_input, Ident, ItemFn};
 
-/// This procedural macro will generate a function that will build the IDT from
-/// the module where all interrupts are defined.
-/// This function will then have to be called from the main function.
-///
-/// ```
-/// generate_idt();
-/// ```
-#[proc_macro_attribute]
-pub fn interrupt_descriptor_table(
-    args: proc_macro::TokenStream,
-    item: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
-    let offset = u32::from_str_radix(
-        args.to_string()
-            .split('x')
-            .collect::<Vec<&str>>()
-            .get(1)
-            .unwrap(),
-        16,
-    )
-    .unwrap();
-
-    let item_2 = TokenStream::from(item.clone());
-
-    let mut interrupts_token: Vec<TokenStream> = Vec::new();
-    // Iterate over all 256 interrupts
-    for i in 0..256 {
-        let title = format!("_int0x{:x}", i);
-        let title = title.as_str();
-        let int_number = i as usize;
-        let ident = Ident::new(
-            &format!("{}{}", "int", int_number),
-            syn::__private::Span::mixed_site(),
-        );
-        let fn_name = Ident::new(title, Span::mixed_site());
-        // Add statements to set handler's address for this entry in the IDT
-        let code = quote! {
-            let #ident = table.get_entry_mut(#int_number).unwrap();
-            #ident.set_offset(handlers::#fn_name as *const () as *const u8 as u32);
-        };
-        interrupts_token.push(code);
-    }
-
-    let default_table = quote! {
-        // We create an empty table
-        let mut table = Table::empty();
-        let mut default : GateDescriptor = GateDescriptor::new();
-        // Default type is Interrupt 32 bits
-        default.set_type(GateType::InterruptGate32b);
-        // Segment is hard coded but has to be passed as parameter in the future
-        let mut segment : SegmentSelector = SegmentSelector::new()
-            .with_gdt()
-            .with_privilege(0b00)
-            .with_segment_index(16);
-        default.set_segment_selector(segment);
-        default.set_valid();
-        // We populate the table
-        table.populate(default);
-    };
-
-    // We merge every streams.
-    let stream = quote! {
-        #item_2
-        // Function name
-        pub fn generate_idt() {
-            #default_table
-            #(#interrupts_token)*
-            table.write(#offset);
-        }
-    };
-    stream.into()
+#[derive(FromMeta)]
+struct InterruptHandlerMacroParam {
+    int_vector: Option<u16>,
 }
 
-/// This proc macro aims to provide a higher level interface for interrupts definition.
-///
-/// This macro wraps the function in a naked wrapper function.
-/// The wrapper function is defined as follows :
-///
-/// ```rust
-/// use std::arch::asm;
-///
-/// #[naked]
-/// pub fn _foo_naked_wrapper () {
-///     unsafe { asm!(
-///         "pushad
-///         call _foo
-///         popad
-///         iretd", options(noreturn)
-///     ) }
-/// }
-/// ```
+/// Generates a wrapper for static interrupt handlers.
 #[proc_macro_attribute]
-pub fn interrupt(
-    _args: proc_macro::TokenStream,
+pub fn interrupt_handler(
+    args: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
-    let func = parse_macro_input!(item as ItemFn);
+) -> TokenStream {
+    let input_fn = parse_macro_input!(item as ItemFn);
+
+    let attr_args = match NestedMeta::parse_meta_list(args.into()) {
+        Ok(v) => v,
+        Err(e) => return TokenStream::from(Error::from(e).write_errors()),
+    };
+
+    let InterruptHandlerMacroParam { int_vector } =
+        match InterruptHandlerMacroParam::from_list(&attr_args) {
+            Ok(p) => p,
+            Err(_) => InterruptHandlerMacroParam { int_vector: None },
+        };
+
     let ItemFn {
         attrs: _,
         vis: _,
         sig,
         block,
-    } = func;
+    } = input_fn;
 
-    // Handle specific arg (not implemented yet)
-    let name = sig.ident.to_string();
-    let wrapped_name = format!("_wrapped{}", name);
+    let fn_body = &block.stmts;
 
-    // Compute int number
-    let body = &block.stmts;
-    let wrapped_ident = Ident::new(wrapped_name.as_str(), Span::mixed_site());
-    // Rename routine to wrap it
-    let wrapped = quote! {
+    let wrapped_fn_name = format!("__int_handler_wrapped_{}", sig.ident.to_string());
+    let wrapped_fn_ident = Ident::new(wrapped_fn_name.as_str(), Span::mixed_site());
+    let wrapped_int_handler = quote! {
         #[no_mangle]
         #[link_section = ".int"]
-        pub fn #wrapped_ident () {
-            #(#body)*
+        pub fn #wrapped_fn_ident () {
+            #(#fn_body)*
         }
     };
 
@@ -139,7 +60,7 @@ pub fn interrupt(
                 call _pic_eoi
                 popad
                 iretd",
-        wrapped_name
+        wrapped_fn_name
     );
 
     #[cfg(feature = "x86_64")]
@@ -150,18 +71,18 @@ pub fn interrupt(
                 call _int_entry
                 call {}
                 call _pic_eoi
-                iretd",
-        wrapped_name
+                iretq",
+        wrapped_fn_name
     );
 
-    let wrapper_ident = Ident::new(&name, Span::mixed_site());
+    let wrapper_ident = Ident::new(&sig.ident.to_string(), Span::mixed_site());
 
     let wrapper = quote! {
         #[link_section = ".int"]
         #[naked]
         pub fn #wrapper_ident () {
             unsafe {
-                asm!(
+                core::arch::asm!(
                     #wrapper
                 , options(noreturn))
             }
@@ -169,109 +90,81 @@ pub fn interrupt(
     };
 
     let stream = quote! {
-        #wrapped
+        #wrapped_int_handler
         #wrapper
     };
+
     stream.into()
 }
 
-#[proc_macro_attribute]
-pub fn interrupt_default(
-    _args: proc_macro::TokenStream,
-    item: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
-    let default = parse_macro_input!(item as syn::ItemFn);
-    let ItemFn {
-        attrs: _,
-        vis: _,
-        sig,
-        block,
-    } = default;
-    // Compute default body
-    let default_body = block.stmts;
-    // We check which interrupts are implemented in handlers.rs
-    let span = proc_macro::Span::call_site();
-    // List of all already implemented interrupt to prevent overwriting them
-    let mut int_defined = Vec::new();
-    let source = span.source_file();
-    let path = source.path();
-    let file = fs::read_to_string(&path).unwrap();
-    let code = parse_file(&file).unwrap();
-    for item in code.items {
-        if let Item::Fn(f) = item {
-            if f.sig.ident != sig.ident {
-                let title = f.sig.ident.to_string();
-                // Ignore naked wrappers
-                if !title.contains("naked") {
-                    let int_number: usize = usize::from_str_radix(
-                        title.split('x').collect::<Vec<&str>>().get(1).unwrap(),
-                        16,
+/// Generates interrupt handler entry points for dynamically registered interrupt handlers.
+#[proc_macro]
+pub fn generate_runtime_handlers_wrapper(_item: TokenStream) -> TokenStream {
+    let mut handlers = Vec::new();
+    let mut mappings = Vec::new();
+
+    for i in 0u8..=255 {
+        let wrapper_name = Ident::new(
+            &format!("__runtime_handler_wrapper_{}", i),
+            Span::mixed_site(),
+        );
+
+        let wrapped_name = Ident::new(&format!("__runtime_handler_{}", i), Span::mixed_site());
+
+        #[cfg(not(feature = "x86_64"))]
+        let wrapper = format!(
+            "pushad
+            call _int_entry
+            call {}
+            call _pic_eoi
+            popad
+            iretd",
+            wrapped_name
+        );
+
+        #[cfg(feature = "x86_64")]
+        let wrapper = format!(
+            "
+            call _int_entry
+            call {}
+            call _pic_eoi
+            iretq",
+            wrapped_name
+        );
+
+        let handler = quote! {
+            #[inline(always)]
+            #[no_mangle]
+            pub fn #wrapped_name () {
+                crate::fzboot::irq::handlers::_runtime_int_entry(InterruptVector::from(#i));
+            }
+
+            pub fn #wrapper_name () {
+                unsafe {
+                    core::arch::asm!(
+                        #wrapper
                     )
-                    .unwrap();
-                    // We compute interrupts number and append it to the int_defined list
-                    int_defined.push(int_number);
                 }
             }
-        }
-    }
+        };
 
-    let mut default_interrupts = Vec::new();
+        let mapping = quote! {
+            #i, #wrapper_name as fn()
+        };
 
-    // Auto implement other interrupts with default template and a wrapper
-    for i in 0..256 {
-        if !int_defined.contains(&i) {
-            let name = format!("_wrapped_int0x{:x}", i);
-            let n = i as u32;
-            let ident = Ident::new(name.as_str(), Span::mixed_site());
-            let section = String::from(".int");
-            let default_int = quote! {
-                #[no_mangle]
-                #[link_section = #section]
-                pub fn #ident (){
-                    let int_code : u32 = #n;
-                    #(#default_body)*
-                }
-            };
-            let naked_name = format!("_int0x{:x}", i);
-            let naked_ident = Ident::new(naked_name.as_str(), Span::mixed_site());
-
-            #[cfg(not(feature = "x86_64"))]
-            let wrapper = format!(
-                "pushad
-                call _int_entry
-                call {}
-                call _pic_eoi
-                popad
-                iretd",
-                name
-            );
-
-            #[cfg(feature = "x86_64")]
-            let wrapper = format!(
-                "
-                call _int_entry
-                call {}
-                call _pic_eoi
-                iretd",
-                name
-            );
-
-            let naked_int = quote! {
-                #[link_section = #section]
-                #[naked]
-                pub fn #naked_ident() {
-                    unsafe {asm!(
-                        #wrapper
-                    , options(noreturn))}
-                }
-            };
-            default_interrupts.push(naked_int);
-            default_interrupts.push(default_int);
-        }
+        mappings.push(mapping);
+        handlers.push(handler);
     }
 
     let stream = quote! {
-        #(#default_interrupts)*
+        lazy_static::lazy_static! {
+            pub static ref __RUNTIME_HANDLER_WRAPPER_MAPPINGS: hashbrown::HashMap<u8, fn()> = {
+                let mut map = hashbrown::HashMap::new();
+                #(map.insert(#mappings);)*
+                map
+            };
+        }
+        #(#handlers)*
     };
 
     stream.into()

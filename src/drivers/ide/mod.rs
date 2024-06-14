@@ -5,10 +5,13 @@ use crate::drivers::generics::dev_disk::SataDeviceType;
 use crate::drivers::ide::ata_pio::{ata_devices, AtaDevice};
 use crate::drivers::pci::{pci_devices, DeviceClass};
 use crate::io::IOPort;
+use crate::irq::manager::get_interrupt_manager;
+use crate::x86::apic::InterruptVector;
 use alloc::vec::Vec;
 use conquer_once::spin::OnceCell;
 use core::cmp::Ordering;
 use core::fmt::{Display, Formatter};
+use fzproc_macros::interrupt_handler;
 use modular_bitfield::bitfield;
 use modular_bitfield::prelude::{B2, B4};
 use spin::RwLock;
@@ -16,6 +19,7 @@ use spin::RwLock;
 use super::pci::device::MappedRegister;
 use super::pci::device::PCIDevice;
 
+#[interrupt_handler]
 pub fn ata_irq_entry() {
     for ata_dev in ata_devices().read().values() {
         if ata_dev.may_expect_irq() {
@@ -108,6 +112,9 @@ impl IdeController {
         let prim_chan_ctrl = &pci_dev.registers[1];
         let sec_chan = &pci_dev.registers[2];
         let sec_chan_ctrl = &pci_dev.registers[3];
+
+        get_interrupt_manager().register_static_handler(InterruptVector::from(0x76), ata_irq_entry);
+        get_interrupt_manager().register_static_handler(InterruptVector::from(0x2E), ata_irq_entry);
 
         let ports = match (prim_chan, prim_chan_ctrl, sec_chan, sec_chan_ctrl) {
             (

@@ -15,5 +15,7 @@ pub(crate) mod io_apic;
 pub(crate) mod local_apic;
 pub(crate) mod mp_table;
 
+pub use io_apic::get_io_apic;
+
 pub use local_apic::local_apic;
 pub use local_apic::InterruptVector;

@@ -919,16 +919,16 @@ pub struct SegmentSelector {
 #[derive(BitfieldSpecifier, Debug)]
 #[repr(u16)]
 pub(super) struct SegmentSelectorInner {
-    /// Requested privilege level of the selector ([`x86::privilege::PrivilegeLevel`]).
-    ///
-    /// Determines if the selector is valid during permission checks and may set execution or memoy access privilege.
-    rpl: B2,
+    /// Specifies the index of the `GDT` or `LDT` entry referenced by this _selector_.   
+    index: B13,
 
     /// Specifies which descriptor table to use, if clear the `GDT` is used, otherwise the `LDT` is used.
     ti: bool,
 
-    /// Specifies the index of the `GDT` or `LDT` entry referenced by this _selector_.   
-    index: B13,
+    /// Requested privilege level of the selector ([`x86::privilege::PrivilegeLevel`]).
+    ///
+    /// Determines if the selector is valid during permission checks and may set execution or memoy access privilege.
+    rpl: B2,
 }
 
 impl SegmentSelector {
