@@ -24,13 +24,22 @@ static IO_APIC: OnceCell<LocklessCell<HashMap<ProcLocalApicID, Mutex<IOApic>>>> 
 ///
 /// The returned structure is locked, as it is not `CPU` dependent (contrary to the `LocalAPIC`).
 /// It does not initialize the [`IOApic`] if it was not already done.
-pub(super) fn get_io_apic(id: ProcLocalApicID) -> Option<&'static Mutex<IOApic>> {
+pub fn get_io_apic(id: ProcLocalApicID) -> Option<&'static Mutex<IOApic>> {
     let io_apics = IO_APIC
         .try_get_or_init(|| LocklessCell::new(HashMap::new()))
         .ok()?
         .get();
 
     io_apics.get(&id)
+}
+
+pub fn get_all_io_apics() -> Option<&'static HashMap<ProcLocalApicID, Mutex<IOApic>>> {
+    Some(
+        IO_APIC
+            .try_get_or_init(|| LocklessCell::new(HashMap::new()))
+            .ok()?
+            .get(),
+    )
 }
 
 /// Registers an [`IOApic`] after its initialization.

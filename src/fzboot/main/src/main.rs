@@ -15,11 +15,13 @@ use core::{panic::PanicInfo, ptr::NonNull};
 use fzboot::boot::multiboot;
 use fzboot::drivers::generics::dev_disk::{sata_drives, DiskDevice};
 use fzboot::drivers::ide::AtaDeviceIdentifier;
-use fzboot::error;
 use fzboot::fs::partitions::mbr;
+use fzboot::irq::manager::{get_interrupt_manager, get_prot_interrupt_manager};
 use fzboot::mem::MemoryAddress;
 use fzboot::video::vesa::{init_text_buffer_from_vesa, text_buffer};
+use fzboot::x86::apic::InterruptVector;
 use fzboot::x86::descriptors::gdt::long_init_gdt;
+use fzboot::x86::int::enable_interrupts;
 use fzboot::x86::paging::bootinit_paging;
 use fzboot::{
     drivers::pci::pci_devices_init,
@@ -27,9 +29,9 @@ use fzboot::{
         e820::{AddressRangeDescriptor, E820MemType, E820MemoryMap},
         MemoryStructure, MEM_STRUCTURE,
     },
-    x86::idt::{load_idt, IDTDescriptor},
 };
 use fzboot::{drivers::pci::pci_enumerate, io::pic::PIC};
+use fzboot::{error, println};
 use fzboot::{
     info,
     io::acpi::{acpi_init, hpet::hpet_clk_init},
@@ -37,6 +39,7 @@ use fzboot::{
     time,
     x86::tsc::TSCClock,
 };
+use fzproc_macros::interrupt_handler;
 
 static mut DEFAULT_HEAP_ADDR: usize = 0x5000000;
 const DEFAULT_HEAP_SIZE: usize = 0x1000000;
@@ -104,13 +107,15 @@ pub fn clock_init() {
 }
 
 pub fn interrupts_init() {
-    let mut idtr = IDTDescriptor::new();
-    idtr.set_offset(0x8);
-    idtr.store(0x0);
     let pic = PIC::default();
     pic.remap(0x20, 0x28);
-    fzboot::irq::generate_idt();
-    load_idt(0x0);
+
+    let int_mgr = get_interrupt_manager();
+
+    unsafe {
+        int_mgr.load_idt();
+    }
+    enable_interrupts();
 }
 
 pub fn heap_init() {

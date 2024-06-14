@@ -255,7 +255,7 @@ pub(crate) struct VectorRelativePriority(u8);
 /// through the [`VectorPriorityClass`] and [`VectorRelativePriority`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
 #[repr(transparent)]
-pub(crate) struct InterruptVector(u8);
+pub struct InterruptVector(u8);
 
 impl InterruptVector {
     /// Spurious vector interrupt vector.

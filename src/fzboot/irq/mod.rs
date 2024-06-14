@@ -1,13 +1,11 @@
+use crate::io::outb;
 use crate::io::IOPort;
 use crate::video::vesa::text_buffer;
 use crate::x86::apic::local_apic::local_apic;
-use crate::{
-    io::outb,
-    x86::idt::{GateDescriptor, GateType, SegmentSelector, Table},
-};
+
+pub mod manager;
 
 #[cfg(feature = "alloc")]
-#[fzproc_macros::interrupt_descriptor_table(0x8)]
 pub mod handlers;
 
 // todo: restore locks afterwards

@@ -142,6 +142,8 @@ impl Display for PhyAddr {
 
 impl MemoryAddress for PhyAddr {
     const WIDTH: u64 = 8;
+    const NULL_PTR: Self = Self(0);
+
     type AsPrimitive = u64;
 
     fn as_ptr<T>(&self) -> *const T {
@@ -266,6 +268,7 @@ pub trait MemoryAddress:
     Display + Sized + Clone + Copy + Add<usize, Output = Self> + PartialEq + PartialOrd
 {
     const WIDTH: u64;
+    const NULL_PTR: Self;
 
     type AsPrimitive: Into<Self>
         + From<Self>
@@ -295,6 +298,7 @@ pub trait MemoryAddress:
 
 impl MemoryAddress for PhyAddr32 {
     const WIDTH: u64 = 4;
+    const NULL_PTR: Self = Self(0x0);
 
     type AsPrimitive = u32;
 

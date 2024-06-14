@@ -2,6 +2,7 @@
 
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use conquer_once::spin::OnceCell;
+use fzproc_macros::interrupt_handler;
 use spin::RwLock;
 
 use crate::{
@@ -17,7 +18,10 @@ use crate::{
             DeviceClass, PCI_DEVICES,
         },
     },
-    error, info, wait_for, wait_for_or,
+    error, info,
+    irq::manager::get_interrupt_manager,
+    wait_for, wait_for_or,
+    x86::apic::{io_apic::get_all_io_apics, mp_table::IOApicIntPin, InterruptVector},
 };
 
 pub mod device;
@@ -65,6 +69,14 @@ pub fn ahci_init() {
         Some(dev) => dev,
         None => return,
     };
+
+    for io_apic in get_all_io_apics().unwrap() {
+        io_apic.1.lock().map_pin_to_irq(
+            IOApicIntPin::from(pci_dev.interrupt_line()),
+            InterruptVector::from(0x76),
+        );
+    }
+    get_interrupt_manager().register_static_handler(InterruptVector::from(0x76), irq_entry);
 
     pci_dev.set_memory_space_access(true).unwrap();
     pci_dev.set_interrupt_disable(false).unwrap();
@@ -155,6 +167,7 @@ pub fn ahci_init() {
 }
 
 /// AHCI controller related IRQs entry point.
+#[interrupt_handler]
 pub fn irq_entry() {
     unsafe { AHCI_CONTROLLER.get_unchecked().force_unlock() };
     let ahci_ctrl = AHCI_CONTROLLER.get().unwrap().lock();
