@@ -71,7 +71,7 @@ impl TryFrom<Alignment> for u64 {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct VirtAddr(u64);
 
 impl VirtAddr {
@@ -96,6 +96,14 @@ impl VirtAddr {
     }
 }
 
+impl Add<usize> for VirtAddr {
+    type Output = Self;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        VirtAddr::new(self.0 + u64::try_from(rhs).expect("infaillible conversion"))
+    }
+}
+
 impl Add for VirtAddr {
     type Output = Self;
 
@@ -104,9 +112,17 @@ impl Add for VirtAddr {
     }
 }
 
+impl From<u64> for VirtAddr {
+    fn from(value: u64) -> Self {
+        VirtAddr::new(value)
+    }
+}
+
 impl From<VirtAddr> for u64 {
     fn from(value: VirtAddr) -> Self {
-        value.0
+        let sg_extd = (value.0 & (1 << 47)) >> 47;
+
+        value.0 | sg_extd * (0xFFFF << 48)
     }
 }
 
@@ -217,6 +233,12 @@ impl From<PhyAddr32> for u32 {
     }
 }
 
+impl From<PhyAddr32> for u64 {
+    fn from(value: PhyAddr32) -> Self {
+        u64::from(value.0)
+    }
+}
+
 impl AddAssign<u32> for PhyAddr32 {
     fn add_assign(&mut self, rhs: u32) {
         self.0 += rhs;
@@ -265,7 +287,7 @@ impl Display for PhyAddr32 {
 }
 
 pub trait MemoryAddress:
-    Display + Sized + Clone + Copy + Add<usize, Output = Self> + PartialEq + PartialOrd
+    Display + Sized + Clone + Copy + Add<usize, Output = Self> + Into<u64> + PartialEq + PartialOrd
 {
     const WIDTH: u64;
     const NULL_PTR: Self;
@@ -301,6 +323,25 @@ impl MemoryAddress for PhyAddr32 {
     const NULL_PTR: Self = Self(0x0);
 
     type AsPrimitive = u32;
+
+    fn as_ptr<T>(&self) -> *const T {
+        Self::AsPrimitive::from(*self) as *const T
+    }
+
+    fn as_mut_ptr<T>(&self) -> *mut T {
+        Self::AsPrimitive::from(*self) as *mut T
+    }
+
+    fn is_null(&self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl MemoryAddress for VirtAddr {
+    const WIDTH: u64 = 8;
+    const NULL_PTR: Self = Self(0x0);
+
+    type AsPrimitive = u64;
 
     fn as_ptr<T>(&self) -> *const T {
         Self::AsPrimitive::from(*self) as *const T

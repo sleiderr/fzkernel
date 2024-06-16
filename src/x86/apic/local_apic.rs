@@ -12,7 +12,7 @@ use crate::mem::{LocklessCell, MemoryAddress, PhyAddr32};
 use crate::x86::apic::io_apic::IOApic;
 use crate::x86::apic::mp_table::{MPInterruptType, MPLocalApicIntPin, MPTable};
 use crate::x86::cpuid::cpu_id;
-use crate::x86::int::{disable_interrupts, enable_interrupts};
+use crate::x86::int::{disable_interrupts, enable_interrupts, interrupts_disabled};
 use crate::x86::msr::Ia32ApicBase;
 use bytemuck::{Contiguous, Pod, Zeroable};
 use conquer_once::spin::OnceCell;
@@ -604,6 +604,7 @@ pub struct LocalAPIC {
 
 impl LocalAPIC {
     pub fn init() -> Result<Self, ()> {
+        let interrupts_disabled = interrupts_disabled();
         disable_interrupts();
         let mp_table = MPTable::load().ok_or(())?;
 
@@ -636,7 +637,9 @@ impl LocalAPIC {
             }
         }
 
-        enable_interrupts();
+        if !interrupts_disabled {
+            enable_interrupts();
+        }
 
         Ok(local_apic)
     }
@@ -672,7 +675,7 @@ impl LocalAPIC {
     /// Sets the `APIC` global enable flag in the [`Ia32ApicBase`] MSR.
     /// On some systems, the `APIC` cannot be enabled after hard disabling it once.
     pub(crate) fn enable_apic(&mut self) {
-        self.msr_register.global_disable();
+        self.msr_register.global_enable();
     }
 
     /// Updates the `EOI` (_End of Interrupt_) register upon interrupt completion.

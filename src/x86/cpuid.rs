@@ -487,7 +487,7 @@ pub fn cpu_id(eax: u32) -> Option<[u32; 4]> {
 
     #[cfg(feature = "x86_64")]
     unsafe {
-        asm!("cpuid", "mov edi, ebx", inout("eax") eax => result[0], out("edi") result[1], out("ecx") result[2], out("edx") result[3]);
+        asm!("push rbx", "cpuid", "mov edi, ebx", "pop rbx", inout("eax") eax => result[0], out("edi") result[1], out("ecx") result[2], out("edx") result[3]);
     }
 
     Some(result)
@@ -506,8 +506,14 @@ pub fn cpu_id_leaf_support(val: u32) -> bool {
 pub fn cpu_id_max_leaf() -> u32 {
     let result: u32;
 
-    unsafe {
-        asm!("xor eax, eax", "cpuid", out("eax") result);
+    if cfg!(feature = "x86_64") {
+        unsafe {
+            asm!("push rbx", "xor eax, eax", "cpuid", "pop rbx", out("eax") result);
+        }
+    } else {
+        unsafe {
+            asm!("xor eax, eax", "cpuid", out("eax") result);
+        }
     }
 
     result
@@ -517,8 +523,14 @@ pub fn cpu_id_max_leaf() -> u32 {
 pub fn cpu_id_max_extended_leaf() -> u32 {
     let result_ext: u32;
 
-    unsafe {
-        asm!("xor eax, eax", "cpuid", out("eax") result_ext);
+    if cfg!(feature = "x86_64") {
+        unsafe {
+            asm!("push rbx", "mov eax, 0x80000000", "cpuid", "pop rbx", out("eax") result_ext);
+        }
+    } else {
+        unsafe {
+            asm!("mov eax, 0x80000000", "cpuid", out("eax") result_ext);
+        }
     }
 
     result_ext

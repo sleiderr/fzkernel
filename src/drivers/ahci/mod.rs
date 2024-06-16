@@ -73,10 +73,10 @@ pub fn ahci_init() {
     for io_apic in get_all_io_apics().unwrap() {
         io_apic.1.lock().map_pin_to_irq(
             IOApicIntPin::from(pci_dev.interrupt_line()),
-            InterruptVector::from(0x76),
+            InterruptVector::from(0x77),
         );
     }
-    get_interrupt_manager().register_static_handler(InterruptVector::from(0x76), irq_entry);
+    get_interrupt_manager().register_static_handler(InterruptVector::from(0x77), irq_entry);
 
     pci_dev.set_memory_space_access(true).unwrap();
     pci_dev.set_interrupt_disable(false).unwrap();

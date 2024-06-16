@@ -69,7 +69,6 @@ impl TSCClock {
             info!("tsc", "Time-Stamp Counter is not available on this CPU");
             return Err(ClockError::NotPresent);
         }
-
         let invariant = __tsc_invariant_support();
         if invariant {
             info!("tsc", "invariant TSC available");

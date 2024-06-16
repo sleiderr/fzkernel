@@ -80,7 +80,7 @@ pub mod bootinit_paging {
         );
         identity_map_phys_level4(
             PageAddressTranslator::translate_address(KERNEL_CODE_MAPPING_BASE).pml4_offset(),
-            PhyAddr::new(0x800_000),
+            PhyAddr::new(0x8_000_000),
         );
         Cr3::write(
             Cr3::new()

@@ -201,7 +201,7 @@ impl<A: MemoryAddress> InterruptDescriptorTable<A> {
         let mut offset_idt_ptr = base_idt_ptr.add(0x2).cast::<A::AsPrimitive>();
         let base_idt_entries = self.base_addr + 0x10;
 
-        offset_idt_ptr.write(base_idt_entries.into());
+        offset_idt_ptr.write(Into::<A::AsPrimitive>::into(base_idt_entries));
 
         Ok(())
     }
@@ -228,7 +228,7 @@ impl GateDescriptor {
         }
     }
 
-    pub(crate) fn with_offset(self, offset: PhyAddr) -> Self {
+    pub(crate) fn with_offset<M: MemoryAddress>(self, offset: M) -> Self {
         if matches!(self.inner.gate_type(), GateType::TaskGate) {
             error!("idt", "attempted to set the offset field of a task gate");
             return self;
