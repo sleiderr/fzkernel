@@ -100,7 +100,7 @@ impl RuntimeInterruptHandler {
 #[no_mangle]
 #[link_section = ".int"]
 extern "C" fn _runtime_int_entry(vector: InterruptVector) {
-    #[cfg(not(feature = "x86_64"))]
+    #[cfg(feature = "x86_64")]
     if let InterruptHandler::Dynamic(dyn_handler) = get_long_interrupt_manager()
         .handler_registry
         .read()
@@ -110,7 +110,7 @@ extern "C" fn _runtime_int_entry(vector: InterruptVector) {
         dyn_handler.exec_handlers_in_order();
     }
 
-    #[cfg(feature = "x86_64")]
+    #[cfg(not(feature = "x86_64"))]
     if let InterruptHandler::Dynamic(dyn_handler) = get_prot_interrupt_manager()
         .handler_registry
         .read()

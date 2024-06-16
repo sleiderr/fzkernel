@@ -12,3 +12,4 @@ categories.workspace = true
 
 [dependencies]
 fzboot = { path = "../../../", features = ["alloc", "x86_64"] }
+fzproc_macros = { path = "../proc_macros", features = ["x86_64"] }

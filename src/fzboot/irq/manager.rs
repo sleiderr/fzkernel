@@ -33,7 +33,7 @@ use spin::{Mutex, RwLock};
 
 use crate::{
     errors::CanFail,
-    mem::{MemoryAddress, PhyAddr, PhyAddr32},
+    mem::{MemoryAddress, PhyAddr, PhyAddr32, VirtAddr},
     x86::{
         apic::local_apic::InterruptVector,
         descriptors::{
@@ -151,27 +151,43 @@ impl<A: MemoryAddress> InterruptManager<A> {
         };
 
         let default_handler_ptr: fn() = _default_int_handler;
-        let handler_ptr = PhyAddr::new(
-            u64::try_from(default_handler_ptr as usize).expect("invalid handler pointer"),
-        );
+        let descriptor = if A::WIDTH == 8 {
+            let handler_ptr = VirtAddr::new(
+                u64::try_from(default_handler_ptr as usize).expect("invalid handler pointer"),
+            );
+
+            GateDescriptor::new(GateType::InterruptGate)
+                .with_dpl(PrivilegeLevel::Ring0)
+                .with_offset(handler_ptr)
+                .with_present(true)
+                .with_segment_selector(
+                    SegmentSelector::gdt_selector()
+                        .with_index(0x10)
+                        .expect("invalid segment selector while registering static handler")
+                        .with_rpl(PrivilegeLevel::Ring0),
+                )
+        } else {
+            let handler_ptr = PhyAddr::new(
+                u64::try_from(default_handler_ptr as usize).expect("invalid handler pointer"),
+            );
+
+            GateDescriptor::new(GateType::InterruptGate)
+                .with_dpl(PrivilegeLevel::Ring0)
+                .with_offset(handler_ptr)
+                .with_present(true)
+                .with_segment_selector(
+                    SegmentSelector::gdt_selector()
+                        .with_index(0x10)
+                        .expect("invalid segment selector while registering static handler")
+                        .with_rpl(PrivilegeLevel::Ring0),
+                )
+        };
 
         // Setup default handlers for every interrupt vector when first loading the table.
         for int_vec in 0..=255 {
             imgr.idt
                 .lock()
-                .set_entry(
-                    usize::from(u8::from(int_vec)),
-                    GateDescriptor::new(GateType::InterruptGate)
-                        .with_dpl(PrivilegeLevel::Ring0)
-                        .with_offset(handler_ptr)
-                        .with_present(true)
-                        .with_segment_selector(
-                            SegmentSelector::gdt_selector()
-                                .with_index(0x10)
-                                .expect("invalid segment selector while registering static handler")
-                                .with_rpl(PrivilegeLevel::Ring0),
-                        ),
-                )
+                .set_entry(usize::from(u8::from(int_vec)), descriptor)
                 .unwrap();
         }
 
@@ -277,25 +293,42 @@ impl<A: MemoryAddress> InterruptManager<A> {
             .get(&u8::from(int_vector))
             .ok_or(HandlerRegistrationError::NoRuntimeHandlerMapping)?
             .clone();
-        let handler_ptr = PhyAddr::new(
-            u64::try_from(runtime_entry_ptr as usize).expect("invalid handler pointer"),
-        );
+
+        let descriptor = if A::WIDTH == 8 {
+            let handler_ptr = VirtAddr::new(
+                u64::try_from(runtime_entry_ptr as usize).expect("invalid handler pointer"),
+            );
+
+            GateDescriptor::new(GateType::InterruptGate)
+                .with_dpl(PrivilegeLevel::Ring0)
+                .with_offset(handler_ptr)
+                .with_present(true)
+                .with_segment_selector(
+                    SegmentSelector::gdt_selector()
+                        .with_index(0x10)
+                        .expect("invalid segment selector while registering static handler")
+                        .with_rpl(PrivilegeLevel::Ring0),
+                )
+        } else {
+            let handler_ptr = PhyAddr::new(
+                u64::try_from(runtime_entry_ptr as usize).expect("invalid handler pointer"),
+            );
+
+            GateDescriptor::new(GateType::InterruptGate)
+                .with_dpl(PrivilegeLevel::Ring0)
+                .with_offset(handler_ptr)
+                .with_present(true)
+                .with_segment_selector(
+                    SegmentSelector::gdt_selector()
+                        .with_index(0x10)
+                        .expect("invalid segment selector while registering static handler")
+                        .with_rpl(PrivilegeLevel::Ring0),
+                )
+        };
 
         self.idt
             .lock()
-            .set_entry(
-                usize::from(u8::from(int_vector)),
-                GateDescriptor::new(GateType::InterruptGate)
-                    .with_dpl(PrivilegeLevel::Ring0)
-                    .with_offset(handler_ptr)
-                    .with_present(true)
-                    .with_segment_selector(
-                        SegmentSelector::gdt_selector()
-                            .with_index(0x10)
-                            .expect("invalid segment selector while registering static handler")
-                            .with_rpl(PrivilegeLevel::Ring0),
-                    ),
-            )
+            .set_entry(usize::from(u8::from(int_vector)), descriptor)
             .map_err(|_| HandlerRegistrationError::IDTWriteError)?;
 
         unsafe {
@@ -353,24 +386,39 @@ impl<A: MemoryAddress> InterruptManager<A> {
             .write()
             .insert(int_vector, InterruptHandler::Static(handler));
 
-        let handler_ptr =
-            PhyAddr::new(u64::try_from(handler as usize).expect("invalid handler pointer"));
+        let descriptor = if A::WIDTH == 8 {
+            let handler_ptr =
+                VirtAddr::new(u64::try_from(handler as usize).expect("invalid handler pointer"));
+
+            GateDescriptor::new(GateType::InterruptGate)
+                .with_dpl(PrivilegeLevel::Ring0)
+                .with_offset(handler_ptr)
+                .with_present(true)
+                .with_segment_selector(
+                    SegmentSelector::gdt_selector()
+                        .with_index(0x10)
+                        .expect("invalid segment selector while registering static handler")
+                        .with_rpl(PrivilegeLevel::Ring0),
+                )
+        } else {
+            let handler_ptr =
+                PhyAddr::new(u64::try_from(handler as usize).expect("invalid handler pointer"));
+
+            GateDescriptor::new(GateType::InterruptGate)
+                .with_dpl(PrivilegeLevel::Ring0)
+                .with_offset(handler_ptr)
+                .with_present(true)
+                .with_segment_selector(
+                    SegmentSelector::gdt_selector()
+                        .with_index(0x10)
+                        .expect("invalid segment selector while registering static handler")
+                        .with_rpl(PrivilegeLevel::Ring0),
+                )
+        };
 
         self.idt
             .lock()
-            .set_entry(
-                usize::from(u8::from(int_vector)),
-                GateDescriptor::new(GateType::InterruptGate)
-                    .with_dpl(PrivilegeLevel::Ring0)
-                    .with_offset(handler_ptr)
-                    .with_present(true)
-                    .with_segment_selector(
-                        SegmentSelector::gdt_selector()
-                            .with_index(0x10)
-                            .expect("invalid segment selector while registering static handler")
-                            .with_rpl(PrivilegeLevel::Ring0),
-                    ),
-            )
+            .set_entry(usize::from(u8::from(int_vector)), descriptor)
             .map_err(|_| HandlerRegistrationError::IDTWriteError)?;
 
         unsafe {

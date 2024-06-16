@@ -68,9 +68,37 @@ pub fn interrupt_handler(
     // TODO: save registers ?
     let wrapper = format!(
         "
+        push rax
+        push rbx
+        push rcx
+        push rdx
+        push rsi
+        push rbp
+        push r8
+        push r9
+        push r10
+        push r11
+        push r12
+        push r13
+        push r14
+        push r15
                 call _int_entry
                 call {}
                 call _pic_eoi
+                pop r15
+                pop r14
+                pop r13
+                pop r12
+                pop r11
+                pop r10
+                pop r9
+                pop r8
+                pop rbp
+                pop rsi
+                pop rdx
+                pop rcx
+                pop rbx
+                pop rax
                 iretq",
         wrapped_fn_name
     );
@@ -125,9 +153,37 @@ pub fn generate_runtime_handlers_wrapper(_item: TokenStream) -> TokenStream {
         #[cfg(feature = "x86_64")]
         let wrapper = format!(
             "
+            push rax
+            push rbx
+            push rcx
+            push rdx
+            push rsi
+            push rbp
+            push r8
+            push r9
+            push r10
+            push r11
+            push r12
+            push r13
+            push r14
+            push r15
             call _int_entry
             call {}
             call _pic_eoi
+            pop r15
+            pop r14
+            pop r13
+            pop r12
+            pop r11
+            pop r10
+            pop r9
+            pop r8
+            pop rbp
+            pop rsi
+            pop rdx
+            pop rcx
+            pop rbx
+            pop rax
             iretq",
             wrapped_name
         );
@@ -139,11 +195,13 @@ pub fn generate_runtime_handlers_wrapper(_item: TokenStream) -> TokenStream {
                 crate::fzboot::irq::handlers::_runtime_int_entry(InterruptVector::from(#i));
             }
 
+            #[link_section = ".int"]
+            #[naked]
             pub fn #wrapper_name () {
                 unsafe {
                     core::arch::asm!(
                         #wrapper
-                    )
+                    , options(noreturn))
                 }
             }
         };

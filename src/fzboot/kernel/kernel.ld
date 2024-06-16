@@ -3,6 +3,14 @@ ENTRY(_start)
 SECTIONS {
 
     . = 0xFFFF8C0000000000;
+    
+    .start : {
+        *(.start)
+    }
+    
+    .interrupts : {
+        KEEP(*(.int*))
+    }
 
     .text : {
         *(.text .text.*)

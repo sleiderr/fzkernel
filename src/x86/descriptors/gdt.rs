@@ -169,9 +169,9 @@ impl<A: MemoryAddress> GlobalDescriptorTable<A> {
             self.base_address.as_nonnull_ptr().unwrap().byte_add(2);
         if size_of::<A::AsPrimitive>() == 8 {
             let gdt_base_address = self.base_address.add(0x8);
-            gdt_address.write(gdt_base_address.into());
+            gdt_address.write(Into::<A::AsPrimitive>::into(gdt_base_address));
         } else {
-            gdt_address.write(self.base_address.into());
+            gdt_address.write(Into::<A::AsPrimitive>::into(self.base_address));
             if self.length == 0 {
                 self.length += 8;
             }
