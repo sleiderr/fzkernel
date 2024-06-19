@@ -39,6 +39,13 @@ pub fn interrupt_handler(
         block,
     } = input_fn;
 
+    if sig.inputs.len() != 1 {
+        panic!(
+            "invalid number of arguments for handler {}",
+            sig.ident.to_string()
+        );
+    }
+
     let fn_body = &block.stmts;
 
     let wrapped_fn_name = format!("__int_handler_wrapped_{}", sig.ident.to_string());
@@ -46,7 +53,7 @@ pub fn interrupt_handler(
     let wrapped_int_handler = quote! {
         #[no_mangle]
         #[link_section = ".int"]
-        pub fn #wrapped_fn_ident () {
+        pub extern "C" fn #wrapped_fn_ident (frame: crate::fzboot::irq::InterruptStackFrame) {
             #(#fn_body)*
         }
     };
@@ -68,38 +75,52 @@ pub fn interrupt_handler(
     // TODO: save registers ?
     let wrapper = format!(
         "
-        push rax
-        push rbx
-        push rcx
-        push rdx
-        push rsi
-        push rbp
-        push r8
-        push r9
-        push r10
-        push r11
-        push r12
-        push r13
-        push r14
         push r15
-                call _int_entry
-                call {}
-                call _pic_eoi
-                pop r15
-                pop r14
-                pop r13
-                pop r12
-                pop r11
-                pop r10
-                pop r9
-                pop r8
-                pop rbp
-                pop rsi
-                pop rdx
-                pop rcx
-                pop rbx
-                pop rax
-                iretq",
+        push r14
+        push r13
+        push r12
+        push r11
+        push r10
+        push r9
+        push r8
+        push rbp
+        push rdi
+        push rsi
+        push rdx
+        push rcx
+        push rbx
+        push rax
+        mov rbp, rsp
+        mov rax, [rbp + 0x90]
+        push rax
+        mov rax, [rbp + 0x88]
+        push rax
+        mov rax, [rbp + 0x80]
+        push rax
+        mov rax, [rbp + 0x78]
+        push rax
+        mov rax, [rbp + 0x70]
+        push rax
+        mov rdi, rsp
+        call {}
+        call _pic_eoi
+        add rsp, 0x28
+        pop rax
+        pop rbx
+        pop rcx
+        pop rdx
+        pop rsi
+        pop rdi
+        pop rbp
+        pop r8
+        pop r9
+        pop r10
+        pop r11
+        pop r12
+        pop r13
+        pop r14
+        pop r15
+        iretq",
         wrapped_fn_name
     );
 
@@ -153,37 +174,51 @@ pub fn generate_runtime_handlers_wrapper(_item: TokenStream) -> TokenStream {
         #[cfg(feature = "x86_64")]
         let wrapper = format!(
             "
-            push rax
-            push rbx
-            push rcx
-            push rdx
-            push rsi
-            push rbp
-            push r8
-            push r9
-            push r10
-            push r11
-            push r12
-            push r13
-            push r14
             push r15
-            call _int_entry
+            push r14
+            push r13
+            push r12
+            push r11
+            push r10
+            push r9
+            push r8
+            push rbp
+            push rdi
+            push rsi
+            push rdx
+            push rcx
+            push rbx
+            push rax
+            mov rbp, rsp
+            mov rax, [rbp + 0x90]
+            push rax
+            mov rax, [rbp + 0x88]
+            push rax
+            mov rax, [rbp + 0x80]
+            push rax
+            mov rax, [rbp + 0x78]
+            push rax
+            mov rax, [rbp + 0x70]
+            push rax
+            mov rdi, rsp
             call {}
             call _pic_eoi
-            pop r15
-            pop r14
-            pop r13
-            pop r12
-            pop r11
-            pop r10
-            pop r9
-            pop r8
-            pop rbp
-            pop rsi
-            pop rdx
-            pop rcx
-            pop rbx
+            add rsp, 0x28
             pop rax
+            pop rbx
+            pop rcx
+            pop rdx
+            pop rsi
+            pop rdi
+            pop rbp
+            pop r8
+            pop r9
+            pop r10
+            pop r11
+            pop r12
+            pop r13
+            pop r14
+            pop r15
             iretq",
             wrapped_name
         );
@@ -191,7 +226,7 @@ pub fn generate_runtime_handlers_wrapper(_item: TokenStream) -> TokenStream {
         let handler = quote! {
             #[inline(always)]
             #[no_mangle]
-            pub fn #wrapped_name () {
+            pub fn #wrapped_name (frame: crate::fzboot::irq::InterruptStackFrame) {
                 crate::fzboot::irq::handlers::_runtime_int_entry(InterruptVector::from(#i));
             }
 

@@ -19,7 +19,7 @@ use crate::{
         },
     },
     error, info,
-    irq::manager::get_interrupt_manager,
+    irq::{manager::get_interrupt_manager, InterruptStackFrame},
     wait_for, wait_for_or,
     x86::apic::{io_apic::get_all_io_apics, mp_table::IOApicIntPin, InterruptVector},
 };
@@ -168,7 +168,7 @@ pub fn ahci_init() {
 
 /// AHCI controller related IRQs entry point.
 #[interrupt_handler]
-pub fn irq_entry() {
+pub fn irq_entry(frame: InterruptStackFrame) {
     unsafe { AHCI_CONTROLLER.get_unchecked().force_unlock() };
     let ahci_ctrl = AHCI_CONTROLLER.get().unwrap().lock();
 

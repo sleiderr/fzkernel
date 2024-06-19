@@ -21,7 +21,7 @@ generate_runtime_handlers_wrapper!();
 
 /// Default interrupt handler when initializing the `InterruptManager`, corresponds to a no-op.
 #[interrupt_handler]
-pub(super) fn _default_int_handler() {
+pub(super) fn _default_int_handler(frame: InterruptStackFrame) {
     ()
 }
 

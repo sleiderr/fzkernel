@@ -6,6 +6,7 @@ use crate::drivers::ide::ata_pio::{ata_devices, AtaDevice};
 use crate::drivers::pci::{pci_devices, DeviceClass};
 use crate::io::IOPort;
 use crate::irq::manager::get_interrupt_manager;
+use crate::irq::InterruptStackFrame;
 use crate::x86::apic::InterruptVector;
 use alloc::vec::Vec;
 use conquer_once::spin::OnceCell;
@@ -20,7 +21,7 @@ use super::pci::device::MappedRegister;
 use super::pci::device::PCIDevice;
 
 #[interrupt_handler]
-pub fn ata_irq_entry() {
+pub fn ata_irq_entry(frame: InterruptStackFrame) {
     for ata_dev in ata_devices().read().values() {
         if ata_dev.may_expect_irq() {
             ata_dev.handle_irq();
