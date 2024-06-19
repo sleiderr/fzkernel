@@ -1,16 +1,21 @@
 #![feature(start)]
 #![feature(const_nonnull_new)]
 #![feature(const_option)]
+#![feature(naked_functions)]
+#![feature(panic_info_message)]
 #![no_std]
 #![no_main]
 
-use core::{arch::asm, fmt::Write, panic::PanicInfo, ptr::NonNull};
+extern crate alloc;
+
+use core::{arch::asm, panic::PanicInfo, ptr::NonNull};
 
 use fzboot::{
     boot::multiboot::mb_information,
+    exceptions::panic::panic_entry_no_exception,
     mem::bmalloc::heap::LockedBuddyAllocator,
     println,
-    video::{self, vesa::text_buffer},
+    video::{self},
 };
 
 static mut DEFAULT_HEAP_ADDR: usize = 0x5000000;
@@ -32,6 +37,7 @@ pub static BUDDY_ALLOCATOR: LockedBuddyAllocator<16> = LockedBuddyAllocator::new
 );
 
 #[no_mangle]
+#[link_section = ".start"]
 pub extern "C" fn _start() -> ! {
     let mut mb_information_ptr: u64 = 0;
     unsafe {
@@ -53,5 +59,13 @@ extern "C" fn _kmain(mb_information_header: mb_information::MultibootInformation
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    loop {}
+    if let Some(panic_msg) = info.message() {
+        panic_entry_no_exception(panic_msg.as_str().unwrap());
+    }
+
+    if let Some(panic_msg) = info.payload().downcast_ref::<&str>() {
+        panic_entry_no_exception(panic_msg);
+    } else {
+        panic_entry_no_exception("Unknown exception");
+    }
 }

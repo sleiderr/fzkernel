@@ -1,4 +1,5 @@
 mod err;
+pub mod exceptions;
 #[cfg(feature = "alloc")]
 pub mod irq;
 pub mod time;
