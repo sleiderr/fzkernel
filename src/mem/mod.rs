@@ -148,6 +148,10 @@ impl PhyAddr {
     pub const fn new(addr: u64) -> Self {
         Self(addr % (1 << 52))
     }
+
+    pub const fn const_mut_convert<T>(&self) -> *mut T {
+        self.0 as *mut T
+    }
 }
 
 impl Display for PhyAddr {
