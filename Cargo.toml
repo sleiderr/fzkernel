@@ -23,6 +23,7 @@ hashbrown = "0.14.5"
 modular-bitfield = "0.11"
 noto-sans-mono-bitmap = "0.2"
 conquer-once = { version = "0.4", default-features = false }
+unifont = "1.1"
 fzproc_macros = { path = "src/fzboot/proc_macros" }
 vob = { path = "src/deps/vob", features = ["unsafe_internals"] }
 acpi = { path = "src/deps/acpi/acpi" }

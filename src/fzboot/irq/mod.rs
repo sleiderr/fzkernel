@@ -35,16 +35,36 @@ pub(crate) struct InterruptStackFrame {
     pub(crate) registers: GeneralPurposeRegisters,
 }
 
+/// Content of the _Exception Stack Frame_, set up by the CPU when an exception that defines an error code
+/// is raised.
+///
+/// It differs from a usual [`InterruptStackFrame`] with the presence of an error code, pushed when the exception
+/// is raised.
+///
+/// Interrupt handlers with `exception` set as true receive this structure as their first argument.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ExceptionStackFrame {
-    register_dump: GeneralPurposeRegisters,
-    error_code: u64,
-    rip: VirtAddr,
-    cs: u64,
-    rflags: u64,
-    stack_ptr: VirtAddr,
-    stack_segment: u64,
+    /// Error code associated with the exception.
+    pub(crate) error_code: u64,
+
+    /// Saved content of the `RIP` (_instruction pointer_ register) prior to the exception.
+    pub(crate) rip: VirtAddr,
+
+    /// Saved content of the `CS` (_code segment_ register) prior to the exception.
+    pub(crate) cs: u64,
+
+    /// Saved content of the `RFLAGS` register prior to the exception.
+    pub(crate) rflags: u64,
+
+    /// Saved value of the stack pointer (`RSP`) prior to the exception.
+    pub(crate) stack_ptr: VirtAddr,
+
+    /// Saved value of the stack segment (`SS`) prior to the exception.
+    pub(crate) stack_segment: u64,
+
+    /// Saved values of all general purpose registers.
+    pub(crate) registers: GeneralPurposeRegisters,
 }
 
 // todo: restore locks afterwards

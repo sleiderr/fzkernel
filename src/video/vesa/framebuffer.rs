@@ -9,6 +9,7 @@ use core::{fmt::Write, slice};
 
 use noto_sans_mono_bitmap::{get_raster, FontWeight, RasterHeight, RasterizedChar};
 use spin::Mutex;
+use unifont::{get_glyph, Glyph};
 
 use crate::{
     boot::multiboot::mb_information::FramebufferMultibootInformation,
@@ -181,6 +182,35 @@ impl<'b> TextFrameBuffer<'b> {
         }
     }
 
+    pub fn write_str_bitmap(&mut self, text: &str) {
+        for c in text.chars() {
+            self.putchar_bitmap(c, false);
+        }
+    }
+
+    pub fn write_str_bitmap_reversed(&mut self, text: &str) {
+        for c in text.chars() {
+            self.putchar_bitmap(c, true);
+        }
+    }
+
+    pub fn write_str_bitmap_centered(&mut self, text: &str, reversed: bool) {
+        let text_width = text.len() * 8;
+        let remaining_width = self.metadata.width - text_width;
+
+        for _ in 0..remaining_width >> 4 {
+            self.putchar_bitmap(' ', false);
+        }
+
+        for c in text.chars() {
+            self.putchar_bitmap(c, reversed);
+        }
+
+        for _ in 0..remaining_width >> 4 {
+            self.putchar_bitmap(' ', false);
+        }
+    }
+
     /// Prints a character in the `TextFrameBuffer`.
     /// Moves the buffer's cursor current position afterwards,
     /// and jumps to the next line if necessary.
@@ -199,6 +229,28 @@ impl<'b> TextFrameBuffer<'b> {
                 match color {
                     Some(color) => self.write_rasterized_char_with_color(rendered, color),
                     None => self.write_rasterized_char(rendered),
+                }
+            }
+        }
+    }
+
+    fn putchar_bitmap(&mut self, ch: char, reversed: bool) {
+        match ch {
+            '\n' => self.newline(),
+            '\r' => self.carriage_return(),
+            ch => {
+                if (self.cursor.x + CHAR_WIDTH) >= self.metadata.width {
+                    self.newline();
+                }
+                if (self.cursor.y + CHAR_HEIGHT.val() + BORDER) >= self.metadata.height {
+                    self.clear();
+                }
+                if let Glyph::Halfwidth(rendered) = get_glyph(ch).unwrap() {
+                    if reversed {
+                        self.write_bitmap_char_reversed(rendered);
+                    } else {
+                        self.write_bitmap_char(rendered);
+                    }
                 }
             }
         }
@@ -230,6 +282,30 @@ impl<'b> TextFrameBuffer<'b> {
             }
         }
         self.cursor.x += char.width() + CHAR_SPACING;
+    }
+
+    fn write_bitmap_char(&mut self, char: &[u8; 16]) {
+        for (y, row) in char.iter().enumerate() {
+            for (x, bit) in (0..8).enumerate() {
+                match *row & 1 << (7 - bit) {
+                    0 => self.write_px_with_intensity(self.cursor.x + x, self.cursor.y + y, 0),
+                    _ => self.write_px_with_intensity(self.cursor.x + x, self.cursor.y + y, 255),
+                }
+            }
+        }
+        self.cursor.x += 8 + CHAR_SPACING;
+    }
+
+    fn write_bitmap_char_reversed(&mut self, char: &[u8; 16]) {
+        for (y, row) in char.iter().enumerate() {
+            for (x, bit) in (0..8).enumerate() {
+                match *row & 1 << (7 - bit) {
+                    0 => self.write_px_with_intensity(self.cursor.x + x, self.cursor.y + y, 255),
+                    _ => self.write_px_with_intensity(self.cursor.x + x, self.cursor.y + y, 0),
+                }
+            }
+        }
+        self.cursor.x += 8 + CHAR_SPACING;
     }
 
     /// Write a pixel to the `TextFrameBuffer` given an intensity.

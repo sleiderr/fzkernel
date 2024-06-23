@@ -17,7 +17,7 @@ use fzboot::drivers::generics::dev_disk::{sata_drives, DiskDevice};
 use fzboot::drivers::ide::AtaDeviceIdentifier;
 use fzboot::fs::partitions::mbr;
 use fzboot::irq::manager::{get_interrupt_manager, get_prot_interrupt_manager};
-use fzboot::mem::MemoryAddress;
+use fzboot::mem::{MemoryAddress, VirtAddr};
 use fzboot::video::vesa::{init_text_buffer_from_vesa, text_buffer};
 use fzboot::x86::apic::InterruptVector;
 use fzboot::x86::descriptors::gdt::long_init_gdt;
@@ -86,7 +86,7 @@ pub fn boot_main() -> ! {
     unsafe {
         long_init_gdt();
         asm!("mov ecx, {}", in(reg) mb_information_hdr_addr);
-        asm!("push 0x10", "push 0x800000", "retf");
+        asm!("mov ebp, 0", "push 0x10", "push 0x8000000", "retf");
         core::unreachable!();
     }
 }
