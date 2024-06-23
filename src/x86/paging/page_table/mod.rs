@@ -2,6 +2,7 @@
 
 #[cfg(feature = "kernel")]
 mod frame_alloc;
+pub mod mapper;
 pub mod translate;
 
 use crate::errors::CanFail;
