@@ -12,10 +12,11 @@ use core::{arch::asm, panic::PanicInfo, ptr::NonNull};
 
 use fzboot::{
     boot::multiboot::mb_information,
-    exceptions::panic::panic_entry_no_exception,
+    exceptions::{panic::panic_entry_no_exception, register_exception_handlers},
+    irq::manager::get_interrupt_manager,
     mem::bmalloc::heap::LockedBuddyAllocator,
-    println,
-    video::{self},
+    video,
+    x86::int::enable_interrupts,
 };
 
 static mut DEFAULT_HEAP_ADDR: usize = 0x5000000;
@@ -47,12 +48,18 @@ pub extern "C" fn _start() -> ! {
     let mb_information: mb_information::MultibootInformation = unsafe {
         core::ptr::read(mb_information_ptr as *const mb_information::MultibootInformation)
     };
+
     _kmain(mb_information);
 }
 
 extern "C" fn _kmain(mb_information_header: mb_information::MultibootInformation) -> ! {
     video::vesa::init_text_buffer_from_multiboot(mb_information_header.framebuffer().unwrap());
-    println!("Hello from the kernel !");
+
+    unsafe {
+        get_interrupt_manager().load_idt();
+    }
+    register_exception_handlers();
+    enable_interrupts();
 
     loop {}
 }

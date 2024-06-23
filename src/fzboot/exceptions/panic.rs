@@ -1,4 +1,5 @@
 use core::{
+    arch::asm,
     fmt::Write,
     hint,
     sync::atomic::{AtomicBool, Ordering},
@@ -35,6 +36,14 @@ pub fn panic_entry_no_exception(error_msg: &str) -> ! {
 
     let register_dump = format!("EXPLICIT_PANIC: {}\n", error_msg);
     text_buffer.write_str_bitmap(&register_dump);
+
+    let base_ptr: usize;
+
+    unsafe {
+        asm!("mov {}, rbp", out(reg) base_ptr);
+    }
+
+    print_stack_trace(base_ptr as *const usize);
 
     drop(text_buffer);
     any_key_or_reboot()
@@ -84,20 +93,35 @@ R14: {:#018x}        R15: {:#018x}        RIP: {:#018x}\n",
         u64::from(frame.rip)
     ));
 
-    print_stack_trace();
+    print_stack_trace(frame.registers.rbp as *const usize);
 
     drop(text_buffer);
     any_key_or_reboot()
 }
 
-fn print_stack_trace() {
+fn print_stack_trace(mut frame_base_ptr: *const usize) {
     unsafe {
         text_buffer().buffer.force_unlock();
     }
     let mut text_buffer: spin::MutexGuard<crate::video::vesa::framebuffer::TextFrameBuffer<'_>> =
         text_buffer().buffer.lock();
 
-    text_buffer.write_str_bitmap("\n\nStack trace: ");
+    text_buffer.write_str_bitmap("\n\nStack trace: \n");
+
+    let mut stack_frame_pos = 0;
+    while !frame_base_ptr.is_null() {
+        if stack_frame_pos > 6 {
+            break;
+        }
+        let return_addr = unsafe { *(frame_base_ptr.offset(1)) };
+
+        if return_addr != 0 {
+            text_buffer
+                .write_str_bitmap(&format!("[{}] {:#018x?} \n", stack_frame_pos, return_addr));
+        }
+        frame_base_ptr = unsafe { *(frame_base_ptr) as *const usize };
+        stack_frame_pos += 1;
+    }
 }
 
 fn write_panic_header() {
