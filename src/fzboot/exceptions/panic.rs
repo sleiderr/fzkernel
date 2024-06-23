@@ -8,7 +8,7 @@ use alloc::format;
 use fzproc_macros::interrupt_handler;
 
 use crate::{
-    irq::manager::get_interrupt_manager,
+    irq::{manager::get_interrupt_manager, ExceptionStackFrame},
     mem::{MemoryAddress, PhyAddr},
     video::vesa::{framebuffer::RgbaColor, text_buffer},
     x86::{
@@ -28,6 +28,79 @@ pub fn panic_entry_no_exception(error_msg: &str) -> ! {
     unsafe {
         text_buffer().buffer.force_unlock();
     }
+    write_panic_header();
+
+    let mut text_buffer: spin::MutexGuard<crate::video::vesa::framebuffer::TextFrameBuffer<'_>> =
+        text_buffer().buffer.lock();
+
+    let register_dump = format!("EXPLICIT_PANIC: {}\n", error_msg);
+    text_buffer.write_str_bitmap(&register_dump);
+
+    drop(text_buffer);
+    any_key_or_reboot()
+}
+
+pub fn panic_entry_exception(error_msg: &str, frame: ExceptionStackFrame) -> ! {
+    unsafe {
+        text_buffer().buffer.force_unlock();
+    }
+
+    write_panic_header();
+
+    let mut text_buffer: spin::MutexGuard<crate::video::vesa::framebuffer::TextFrameBuffer<'_>> =
+        text_buffer().buffer.lock();
+
+    text_buffer.write_str_bitmap(&format!(
+        "EXCEPTION_{} (#{:x}) STOP at {} \n",
+        error_msg, frame.error_code, frame.rip
+    ));
+
+    text_buffer.write_str("\n\n\n");
+
+    text_buffer.write_str_bitmap(&format!(
+        "RSP: {:#018x}        RBP: {:#018x}        RFLAGS: {:#018x}
+RAX: {:#018x}        RBX: {:#018x}        RCX: {:#018x}
+RDX: {:#018x}        RSI: {:#018x}        RDI: {:#018x}
+R08: {:#018x}        R09: {:#018x}        R10: {:#018x}
+R11: {:#018x}        R12: {:#018x}        R13: {:#018x}
+R14: {:#018x}        R15: {:#018x}        RIP: {:#018x}\n",
+        u64::from(frame.stack_ptr),
+        frame.registers.rbp,
+        frame.rflags,
+        frame.registers.rax,
+        frame.registers.rbx,
+        frame.registers.rcx,
+        frame.registers.rdx,
+        frame.registers.rsi,
+        frame.registers.rdi,
+        frame.registers.r8,
+        frame.registers.r9,
+        frame.registers.r10,
+        frame.registers.r11,
+        frame.registers.r12,
+        frame.registers.r13,
+        frame.registers.r14,
+        frame.registers.r15,
+        u64::from(frame.rip)
+    ));
+
+    print_stack_trace();
+
+    drop(text_buffer);
+    any_key_or_reboot()
+}
+
+fn print_stack_trace() {
+    unsafe {
+        text_buffer().buffer.force_unlock();
+    }
+    let mut text_buffer: spin::MutexGuard<crate::video::vesa::framebuffer::TextFrameBuffer<'_>> =
+        text_buffer().buffer.lock();
+
+    text_buffer.write_str_bitmap("\n\nStack trace: ");
+}
+
+fn write_panic_header() {
     let mut text_buffer: spin::MutexGuard<crate::video::vesa::framebuffer::TextFrameBuffer<'_>> =
         text_buffer().buffer.lock();
 
@@ -41,9 +114,11 @@ pub fn panic_entry_no_exception(error_msg: &str) -> ! {
     text_buffer.write_str_bitmap(
         "The system encountered a fatal exception and cannot continue properly. \n\n",
     );
+}
 
-    let register_dump = format!("EXPLICIT_PANIC: {}\n", error_msg);
-    text_buffer.write_str_bitmap(&register_dump);
+fn any_key_or_reboot() -> ! {
+    let mut text_buffer: spin::MutexGuard<crate::video::vesa::framebuffer::TextFrameBuffer<'_>> =
+        text_buffer().buffer.lock();
 
     text_buffer.write_str("\n\n\n");
     text_buffer.write_str_bitmap_centered("Press any key to reboot", false);

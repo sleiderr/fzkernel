@@ -260,6 +260,10 @@ pub struct InterruptVector(u8);
 impl InterruptVector {
     /// Spurious vector interrupt vector.
     pub(super) const SPURIOUS_VECTOR: Self = Self(0xFF);
+
+    pub const fn new(vector: u8) -> Self {
+        Self(vector)
+    }
 }
 
 impl From<u8> for InterruptVector {

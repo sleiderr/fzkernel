@@ -11,6 +11,7 @@ use syn::{parse_macro_input, Ident, ItemFn};
 #[derive(FromMeta)]
 struct InterruptHandlerMacroParam {
     int_vector: Option<u16>,
+    exception: Option<bool>,
 }
 
 /// Generates a wrapper for static interrupt handlers.
@@ -26,11 +27,18 @@ pub fn interrupt_handler(
         Err(e) => return TokenStream::from(Error::from(e).write_errors()),
     };
 
-    let InterruptHandlerMacroParam { int_vector } =
-        match InterruptHandlerMacroParam::from_list(&attr_args) {
-            Ok(p) => p,
-            Err(_) => InterruptHandlerMacroParam { int_vector: None },
-        };
+    let InterruptHandlerMacroParam {
+        int_vector,
+        exception,
+    } = match InterruptHandlerMacroParam::from_list(&attr_args) {
+        Ok(p) => p,
+        Err(_) => InterruptHandlerMacroParam {
+            int_vector: None,
+            exception: None,
+        },
+    };
+
+    let is_exception = exception.unwrap_or_default();
 
     let ItemFn {
         attrs: _,
@@ -50,11 +58,21 @@ pub fn interrupt_handler(
 
     let wrapped_fn_name = format!("__int_handler_wrapped_{}", sig.ident.to_string());
     let wrapped_fn_ident = Ident::new(wrapped_fn_name.as_str(), Span::mixed_site());
-    let wrapped_int_handler = quote! {
-        #[no_mangle]
-        #[link_section = ".int"]
-        pub extern "C" fn #wrapped_fn_ident (frame: crate::fzboot::irq::InterruptStackFrame) {
-            #(#fn_body)*
+    let wrapped_int_handler = if is_exception {
+        quote! {
+            #[no_mangle]
+            #[link_section = ".int"]
+            pub extern "C" fn #wrapped_fn_ident (frame: crate::fzboot::irq::ExceptionStackFrame) {
+                #(#fn_body)*
+            }
+        }
+    } else {
+        quote! {
+            #[no_mangle]
+            #[link_section = ".int"]
+            pub extern "C" fn #wrapped_fn_ident (frame: crate::fzboot::irq::InterruptStackFrame) {
+                #(#fn_body)*
+            }
         }
     };
 
@@ -73,8 +91,9 @@ pub fn interrupt_handler(
     #[cfg(feature = "x86_64")]
     // Define wrapper assembly
     // TODO: save registers ?
-    let wrapper = format!(
-        "
+    let wrapper = if is_exception {
+        format!(
+            "
         push r15
         push r14
         push r13
@@ -91,6 +110,10 @@ pub fn interrupt_handler(
         push rbx
         push rax
         mov rbp, rsp
+        mov rax, [rbp + 0xA0]
+        push rax
+        mov rax, [rbp + 0x98]
+        push rax
         mov rax, [rbp + 0x90]
         push rax
         mov rax, [rbp + 0x88]
@@ -99,7 +122,56 @@ pub fn interrupt_handler(
         push rax
         mov rax, [rbp + 0x78]
         push rax
-        mov rax, [rbp + 0x70]
+        mov rdi, rsp
+        call {}
+        call _pic_eoi
+        add rsp, 0x30
+        pop rax
+        pop rbx
+        pop rcx
+        pop rdx
+        pop rsi
+        pop rdi
+        pop rbp
+        pop r8
+        pop r9
+        pop r10
+        pop r11
+        pop r12
+        pop r13
+        pop r14
+        pop r15
+        iretq",
+            wrapped_fn_name
+        )
+    } else {
+        format!(
+            "
+        push r15
+        push r14
+        push r13
+        push r12
+        push r11
+        push r10
+        push r9
+        push r8
+        push rbp
+        push rdi
+        push rsi
+        push rdx
+        push rcx
+        push rbx
+        push rax
+        mov rbp, rsp
+        mov rax, [rbp + 0x98]
+        push rax
+        mov rax, [rbp + 0x90]
+        push rax
+        mov rax, [rbp + 0x88]
+        push rax
+        mov rax, [rbp + 0x80]
+        push rax
+        mov rax, [rbp + 0x78]
         push rax
         mov rdi, rsp
         call {}
@@ -121,8 +193,9 @@ pub fn interrupt_handler(
         pop r14
         pop r15
         iretq",
-        wrapped_fn_name
-    );
+            wrapped_fn_name
+        )
+    };
 
     let wrapper_ident = Ident::new(&sig.ident.to_string(), Span::mixed_site());
 

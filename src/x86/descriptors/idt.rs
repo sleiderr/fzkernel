@@ -14,10 +14,8 @@ use modular_bitfield::{
 use crate::{
     error,
     errors::{BaseError, CanFail},
-    mem::{MemoryAddress, PhyAddr},
-    println,
+    mem::MemoryAddress,
     x86::{
-        descriptors::idt,
         int::{disable_interrupts, enable_interrupts, interrupts_disabled},
         privilege::PrivilegeLevel,
     },
