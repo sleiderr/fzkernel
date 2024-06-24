@@ -4,16 +4,17 @@ use alloc::format;
 use bytemuck::{Pod, Zeroable};
 use core::cell::UnsafeCell;
 use core::fmt::{Display, Formatter};
-use core::ops::{Add, AddAssign, BitAnd, Rem, Shr};
+use core::ops::{Add, AddAssign, BitAnd, Rem, Shr, Sub};
 use core::ptr;
 use core::ptr::NonNull;
 
-use crate::Convertible;
 use conquer_once::spin::OnceCell;
 
 pub mod bmalloc;
 pub mod e820;
 pub mod utils;
+#[cfg(feature = "x86_64")]
+pub mod vmalloc;
 
 pub static MEM_STRUCTURE: OnceCell<MemoryStructure> = OnceCell::uninit();
 
@@ -101,6 +102,14 @@ impl Add<usize> for VirtAddr {
 
     fn add(self, rhs: usize) -> Self::Output {
         VirtAddr::new(self.0 + u64::try_from(rhs).expect("infaillible conversion"))
+    }
+}
+
+impl Sub<usize> for VirtAddr {
+    type Output = Self;
+
+    fn sub(self, rhs: usize) -> Self::Output {
+        VirtAddr::new(self.0 - u64::try_from(rhs).expect("infaillible conversion"))
     }
 }
 
