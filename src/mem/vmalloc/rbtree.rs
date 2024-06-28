@@ -4,7 +4,10 @@
 
 use core::ptr::{self, null_mut};
 
-use crate::mem::{MemoryAddress, VirtAddr};
+use crate::{
+    mem::{MemoryAddress, VirtAddr},
+    video::io::color,
+};
 
 /// A red-black tree implementation.
 ///
@@ -350,7 +353,227 @@ impl<P: NodePayload> RbTree<P> {
             center.get_node().parent.get_node_mut().left = left_child;
         }
 
-        left_child.get_node_mut().left = center;
+        left_child.get_node_mut().right = center;
         center.get_node_mut().parent = left_child;
+    }
+
+    pub(super) fn remove_node(&mut self, mut node_to_remove: NodeLink<P>) -> NodeLink<P> {
+        let mut color_check = node_to_remove.get_node().header.get_color();
+        let mut extra_black: NodeLink<P> = NodeLink::NULL_LINK;
+
+        if node_to_remove.get_node().left == self.black_nil {
+            extra_black = node_to_remove.get_node().right;
+            self.swap_nodes(node_to_remove, extra_black);
+        } else if node_to_remove.get_node().right == self.black_nil {
+            extra_black = node_to_remove.get_node().left;
+            self.swap_nodes(node_to_remove, extra_black);
+        } else {
+            let right_min: NodeLink<P> = self.get_subtree_min(node_to_remove.get_node().right);
+            color_check = right_min.get_node().header.get_color();
+
+            extra_black = right_min.get_node().right;
+
+            if right_min != node_to_remove.get_node().right {
+                self.swap_nodes(right_min, right_min.get_node().right);
+                right_min.get_node_mut().right = node_to_remove.get_node().right;
+                right_min.get_node().right.get_node_mut().parent = right_min;
+            } else {
+                extra_black.get_node_mut().parent = right_min;
+            }
+
+            self.swap_nodes(node_to_remove, right_min);
+            right_min.get_node_mut().left = node_to_remove.get_node().left;
+            right_min.get_node().left.get_node_mut().parent = right_min;
+            right_min
+                .get_node_mut()
+                .header
+                .set_color(node_to_remove.get_node().header.get_color());
+        }
+
+        if let NodeColor::Black = color_check {
+            self.fix_remove_rb_violation(extra_black);
+        }
+
+        self.count -= 1;
+
+        node_to_remove
+    }
+
+    fn fix_remove_rb_violation(&mut self, mut extra_black_node: NodeLink<P>) {
+        while extra_black_node != self.root
+            && !matches!(
+                extra_black_node.get_node().header.get_color(),
+                NodeColor::Black
+            )
+        {
+            if extra_black_node == extra_black_node.get_node().parent.get_node().left {
+                let mut right_sibling = extra_black_node.get_node().parent.get_node().right;
+                if let NodeColor::Red = right_sibling.get_node().header.get_color() {
+                    right_sibling
+                        .get_node_mut()
+                        .header
+                        .set_color(NodeColor::Black);
+                    extra_black_node
+                        .get_node()
+                        .parent
+                        .get_node_mut()
+                        .header
+                        .set_color(NodeColor::Red);
+
+                    self.left_rotate(extra_black_node.get_node().parent);
+                    right_sibling = extra_black_node.get_node().parent.get_node().right;
+                }
+
+                if let (NodeColor::Black, NodeColor::Black) = (
+                    right_sibling.get_node().left.get_node().header.get_color(),
+                    right_sibling.get_node().right.get_node().header.get_color(),
+                ) {
+                    right_sibling
+                        .get_node_mut()
+                        .header
+                        .set_color(NodeColor::Red);
+                    extra_black_node = extra_black_node.get_node().parent;
+
+                    continue;
+                }
+
+                if let NodeColor::Black =
+                    right_sibling.get_node().right.get_node().header.get_color()
+                {
+                    right_sibling
+                        .get_node()
+                        .left
+                        .get_node_mut()
+                        .header
+                        .set_color(NodeColor::Black);
+                    right_sibling
+                        .get_node_mut()
+                        .header
+                        .set_color(NodeColor::Red);
+
+                    self.right_rotate(right_sibling);
+                    right_sibling = extra_black_node.get_node().parent.get_node().right;
+                }
+
+                right_sibling.get_node_mut().header.set_color(
+                    extra_black_node
+                        .get_node()
+                        .parent
+                        .get_node()
+                        .header
+                        .get_color(),
+                );
+
+                extra_black_node
+                    .get_node()
+                    .parent
+                    .get_node_mut()
+                    .header
+                    .set_color(NodeColor::Black);
+
+                right_sibling
+                    .get_node()
+                    .right
+                    .get_node_mut()
+                    .header
+                    .set_color(NodeColor::Black);
+
+                self.left_rotate(extra_black_node.get_node().parent);
+                extra_black_node = self.root;
+
+                continue;
+            }
+
+            let mut left_sibling = extra_black_node.get_node().parent.get_node().left;
+            if let NodeColor::Red = left_sibling.get_node().header.get_color() {
+                left_sibling
+                    .get_node_mut()
+                    .header
+                    .set_color(NodeColor::Black);
+                extra_black_node
+                    .get_node()
+                    .parent
+                    .get_node_mut()
+                    .header
+                    .set_color(NodeColor::Red);
+
+                self.right_rotate(extra_black_node.get_node().parent);
+                left_sibling = extra_black_node.get_node().parent.get_node().left;
+            }
+
+            if let (NodeColor::Black, NodeColor::Black) = (
+                left_sibling.get_node().left.get_node().header.get_color(),
+                left_sibling.get_node().right.get_node().header.get_color(),
+            ) {
+                left_sibling.get_node_mut().header.set_color(NodeColor::Red);
+                extra_black_node = extra_black_node.get_node().parent;
+
+                continue;
+            }
+
+            if let NodeColor::Black = left_sibling.get_node().left.get_node().header.get_color() {
+                left_sibling
+                    .get_node()
+                    .right
+                    .get_node_mut()
+                    .header
+                    .set_color(NodeColor::Black);
+                left_sibling.get_node_mut().header.set_color(NodeColor::Red);
+
+                self.left_rotate(left_sibling);
+                left_sibling = extra_black_node.get_node().parent.get_node().left;
+            }
+
+            left_sibling.get_node_mut().header.set_color(
+                extra_black_node
+                    .get_node()
+                    .parent
+                    .get_node()
+                    .header
+                    .get_color(),
+            );
+
+            extra_black_node
+                .get_node()
+                .parent
+                .get_node_mut()
+                .header
+                .set_color(NodeColor::Black);
+
+            left_sibling
+                .get_node()
+                .left
+                .get_node_mut()
+                .header
+                .set_color(NodeColor::Black);
+
+            self.right_rotate(extra_black_node.get_node().parent);
+            extra_black_node = self.root;
+        }
+
+        extra_black_node
+            .get_node_mut()
+            .header
+            .set_color(NodeColor::Black);
+    }
+
+    fn get_subtree_min(&self, mut subtree_root: NodeLink<P>) -> NodeLink<P> {
+        while subtree_root.get_node().left != self.black_nil {
+            subtree_root = subtree_root.get_node().left;
+        }
+
+        subtree_root
+    }
+
+    fn swap_nodes(&mut self, node_to_remove: NodeLink<P>, replacement_node: NodeLink<P>) {
+        if node_to_remove.get_node().parent == self.black_nil {
+            self.root = replacement_node;
+        } else if node_to_remove == node_to_remove.get_node().parent.get_node().left {
+            node_to_remove.get_node().parent.get_node_mut().left = replacement_node;
+        } else {
+            node_to_remove.get_node().parent.get_node_mut().right = replacement_node;
+        }
+
+        replacement_node.get_node_mut().parent = node_to_remove.get_node().parent;
     }
 }
