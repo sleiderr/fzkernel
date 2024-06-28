@@ -77,7 +77,9 @@ pub struct VirtAddr(u64);
 
 impl VirtAddr {
     pub const fn new(addr: u64) -> Self {
-        Self(addr % (1 << 48))
+        let sg_extd = (addr & (1 << 47)) >> 47;
+
+        Self(addr | sg_extd * (0xFFFF << 48))
     }
 
     pub fn as_ptr<T>(&self) -> *const T {

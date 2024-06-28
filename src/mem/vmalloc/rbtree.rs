@@ -21,12 +21,14 @@ pub(crate) struct RbTree<P: NodePayload> {
 }
 
 /// Available colors for the [`RbTree`] nodes.
+#[derive(Clone, Copy, Debug)]
 pub(super) enum NodeColor {
     Black,
     Red,
 }
 
 /// Wrapper around the pointers in between nodes, for the direct children / parent of a node.
+#[derive(Clone, Copy, Debug)]
 pub(super) struct NodeLink<P: NodePayload> {
     linked_node: *mut Node<P>,
 }
@@ -50,8 +52,8 @@ impl<P: NodePayload> NodeLink<P> {
     ///
     /// This is unsafe as it dereferences the raw pointer contained in this link. You should make sure to
     /// respect the usual borrow checking rules, even if they can be avoided here.
-    pub(super) unsafe fn get_node(&self) -> &Node<P> {
-        &*self.linked_node
+    pub(super) fn get_node(&self) -> &Node<P> {
+        unsafe { &*self.linked_node }
     }
 
     /// Returns a mutable reference to the [`Node`] to which this `NodeLink` links to.
@@ -60,8 +62,14 @@ impl<P: NodePayload> NodeLink<P> {
     ///
     /// This is unsafe as it dereferences the raw pointer contained in this link. You should make sure to
     /// respect the usual borrow checking rules, even if they can be avoided here.
-    pub(super) unsafe fn get_node_mut(&self) -> &mut Node<P> {
-        &mut *self.linked_node
+    pub(super) fn get_node_mut(&self) -> &mut Node<P> {
+        unsafe { &mut *self.linked_node }
+    }
+}
+
+impl<P: NodePayload> PartialEq for NodeLink<P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.linked_node == other.linked_node
     }
 }
 
@@ -70,7 +78,7 @@ impl<P: NodePayload> NodeLink<P> {
 ///
 /// Node color information have to be contained in the payload, so the structure must implement methods to retrieve
 /// and update the color of the node.
-pub(super) trait NodePayload {
+pub(super) trait NodePayload: Clone + Copy {
     /// Empty payload, used as a default when creating new nodes.
     const NULL: Self;
 
@@ -79,12 +87,17 @@ pub(super) trait NodePayload {
 
     /// Updates the color of the [`Node`] associated to this payload.
     fn set_color(&mut self, color: NodeColor);
+
+    fn value(&self) -> u64;
+
+    fn set_value(&mut self, new_val: u64);
 }
 
 /// Represents a Node in a [`RbTree`].
 ///
 /// The node can contain any type of payload, but all nodes in a given tree have to use the same type of payload. The actual
 /// form of the payload is the structure given as a generic parameter.
+#[derive(Debug)]
 pub(super) struct Node<P: NodePayload> {
     /// Payload associated with the node.
     pub(super) header: P,
@@ -97,6 +110,30 @@ pub(super) struct Node<P: NodePayload> {
 
     /// Link to the right child of this node.
     pub(super) right: NodeLink<P>,
+}
+
+impl<P: NodePayload> Node<P> {
+    pub(super) fn new_empty() -> Self {
+        Self {
+            header: P::NULL,
+            parent: NodeLink::NULL_LINK,
+            left: NodeLink::NULL_LINK,
+            right: NodeLink::NULL_LINK,
+        }
+    }
+
+    pub(super) fn new_isolated_with_value(value: u64) -> Self {
+        let mut header = P::NULL;
+
+        header.set_value(value);
+
+        Self {
+            header,
+            parent: NodeLink::NULL_LINK,
+            left: NodeLink::NULL_LINK,
+            right: NodeLink::NULL_LINK,
+        }
+    }
 }
 
 impl<P: NodePayload> RbTree<P> {
@@ -129,5 +166,191 @@ impl<P: NodePayload> RbTree<P> {
             black_nil: NodeLink::link_from_raw_ptr(black_nil_addr.as_mut_ptr()),
             count: 1,
         }
+    }
+
+    pub(super) fn insert_node(&mut self, new_node: NodeLink<P>) {
+        let mut child = self.root;
+        let mut parent = self.black_nil;
+        let mut curr_size = new_node.get_node().header.value();
+
+        while child != self.black_nil {
+            parent = child;
+            let child_size = child.get_node().header.value();
+
+            if curr_size < child_size {
+                child = child.get_node().left;
+            } else {
+                child = child.get_node().right;
+            }
+        }
+
+        new_node.get_node_mut().parent = parent;
+
+        if parent == self.black_nil {
+            self.root = new_node;
+        } else if curr_size < parent.get_node().header.value() {
+            parent.get_node_mut().left = new_node;
+        } else {
+            parent.get_node_mut().right = new_node;
+        }
+
+        new_node.get_node_mut().left = self.black_nil;
+        new_node.get_node_mut().right = self.black_nil;
+        new_node.get_node_mut().header.set_color(NodeColor::Red);
+
+        self.fix_insert_rb_violation(new_node);
+
+        self.count += 1;
+    }
+
+    fn fix_insert_rb_violation(&mut self, mut new_node: NodeLink<P>) {
+        while let NodeColor::Red = new_node.get_node().parent.get_node().header.get_color() {
+            if new_node.get_node().parent
+                == new_node.get_node().parent.get_node().parent.get_node().left
+            {
+                let uncle = new_node
+                    .get_node()
+                    .parent
+                    .get_node()
+                    .parent
+                    .get_node()
+                    .right;
+                if matches!(uncle.get_node().header.get_color(), NodeColor::Red) {
+                    new_node
+                        .get_node()
+                        .parent
+                        .get_node_mut()
+                        .header
+                        .set_color(NodeColor::Black);
+
+                    uncle.get_node_mut().header.set_color(NodeColor::Black);
+
+                    new_node
+                        .get_node()
+                        .parent
+                        .get_node()
+                        .parent
+                        .get_node_mut()
+                        .header
+                        .set_color(NodeColor::Red);
+
+                    new_node = new_node.get_node().parent.get_node().parent;
+
+                    continue;
+                }
+
+                if new_node == new_node.get_node().parent.get_node().right {
+                    new_node = new_node.get_node().parent;
+                    self.left_rotate(new_node);
+                }
+
+                new_node
+                    .get_node()
+                    .parent
+                    .get_node_mut()
+                    .header
+                    .set_color(NodeColor::Black);
+
+                new_node
+                    .get_node()
+                    .parent
+                    .get_node()
+                    .parent
+                    .get_node_mut()
+                    .header
+                    .set_color(NodeColor::Red);
+
+                self.right_rotate(new_node.get_node().parent.get_node().parent);
+                continue;
+            }
+
+            let uncle = new_node.get_node().parent.get_node().parent.get_node().left;
+
+            if matches!(uncle.get_node().header.get_color(), NodeColor::Red) {
+                new_node
+                    .get_node()
+                    .parent
+                    .get_node_mut()
+                    .header
+                    .set_color(NodeColor::Black);
+
+                uncle.get_node_mut().header.set_color(NodeColor::Black);
+
+                new_node
+                    .get_node()
+                    .parent
+                    .get_node()
+                    .parent
+                    .get_node_mut()
+                    .header
+                    .set_color(NodeColor::Red);
+
+                new_node = new_node.get_node().parent.get_node().parent;
+
+                continue;
+            }
+
+            if new_node == new_node.get_node().parent.get_node().left {
+                new_node = new_node.get_node().parent;
+                self.right_rotate(new_node);
+            }
+
+            let parent = new_node.get_node().parent;
+            parent.get_node_mut().header.set_color(NodeColor::Black);
+            parent
+                .get_node()
+                .parent
+                .get_node_mut()
+                .header
+                .set_color(NodeColor::Red);
+
+            self.left_rotate(parent.get_node().parent);
+        }
+
+        self.root.get_node_mut().header.set_color(NodeColor::Black);
+    }
+
+    fn left_rotate(&mut self, center: NodeLink<P>) {
+        let right_child = center.get_node().right;
+        center.get_node_mut().right = right_child.get_node().left;
+
+        if right_child.get_node().left != self.black_nil {
+            right_child.get_node().left.get_node_mut().parent = center;
+        }
+
+        right_child.get_node_mut().parent = center.get_node().parent;
+
+        if center.get_node().parent == self.black_nil {
+            self.root = right_child;
+        } else if center == center.get_node().parent.get_node().left {
+            center.get_node().parent.get_node_mut().left = right_child;
+        } else {
+            center.get_node().parent.get_node_mut().right = right_child;
+        }
+
+        right_child.get_node_mut().left = center;
+        center.get_node_mut().parent = right_child;
+    }
+
+    fn right_rotate(&mut self, center: NodeLink<P>) {
+        let left_child = center.get_node().left;
+        center.get_node_mut().left = left_child.get_node().right;
+
+        if left_child.get_node().right != self.black_nil {
+            left_child.get_node().right.get_node_mut().parent = center;
+        }
+
+        left_child.get_node_mut().parent = center.get_node().parent;
+
+        if center.get_node().parent == self.black_nil {
+            self.root = left_child;
+        } else if center == center.get_node().parent.get_node().right {
+            center.get_node().parent.get_node_mut().right = left_child;
+        } else {
+            center.get_node().parent.get_node_mut().left = left_child;
+        }
+
+        left_child.get_node_mut().left = center;
+        center.get_node_mut().parent = left_child;
     }
 }

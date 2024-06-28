@@ -14,6 +14,7 @@ pub struct KernelHeapAllocator {
 }
 
 #[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct AllocHeader {
     inner: u64,
 }
@@ -25,6 +26,15 @@ impl AllocHeader {
 
     pub(crate) fn free(&mut self) {
         self.inner &= !0x1;
+    }
+
+    pub(crate) fn get_size(&self) -> u64 {
+        self.inner & !0b111
+    }
+
+    pub(crate) fn set_size(&mut self, size: u64) {
+        let header_attr = self.inner & 0x7;
+        self.inner = size | header_attr;
     }
 }
 
@@ -42,12 +52,20 @@ impl NodePayload for AllocHeader {
     fn set_color(&mut self, color: super::rbtree::NodeColor) {
         match color {
             NodeColor::Black => {
-                self.inner &= !0xb100;
+                self.inner &= !0b100;
             }
             NodeColor::Red => {
                 self.inner |= 0b100;
             }
         }
+    }
+
+    fn value(&self) -> u64 {
+        self.get_size()
+    }
+
+    fn set_value(&mut self, new_val: u64) {
+        self.set_size(new_val);
     }
 }
 
