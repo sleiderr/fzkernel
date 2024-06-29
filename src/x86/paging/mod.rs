@@ -7,7 +7,8 @@
 use crate::errors::BaseError;
 use crate::mem::{PhyAddr, VirtAddr};
 
-pub(crate) mod page_table;
+pub mod page_alloc;
+pub mod page_table;
 
 pub use page_table::{PageTable, PageTableFlags};
 

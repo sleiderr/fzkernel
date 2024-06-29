@@ -4,16 +4,17 @@ use alloc::format;
 use bytemuck::{Pod, Zeroable};
 use core::cell::UnsafeCell;
 use core::fmt::{Display, Formatter};
-use core::ops::{Add, AddAssign, BitAnd, Rem, Shr};
+use core::ops::{Add, AddAssign, BitAnd, Rem, Shr, Sub};
 use core::ptr;
 use core::ptr::NonNull;
 
-use crate::Convertible;
 use conquer_once::spin::OnceCell;
 
 pub mod bmalloc;
 pub mod e820;
 pub mod utils;
+#[cfg(feature = "x86_64")]
+pub mod vmalloc;
 
 pub static MEM_STRUCTURE: OnceCell<MemoryStructure> = OnceCell::uninit();
 
@@ -76,7 +77,9 @@ pub struct VirtAddr(u64);
 
 impl VirtAddr {
     pub const fn new(addr: u64) -> Self {
-        Self(addr % (1 << 48))
+        let sg_extd = (addr & (1 << 47)) >> 47;
+
+        Self(addr | sg_extd * (0xFFFF << 48))
     }
 
     pub fn as_ptr<T>(&self) -> *const T {
@@ -101,6 +104,22 @@ impl Add<usize> for VirtAddr {
 
     fn add(self, rhs: usize) -> Self::Output {
         VirtAddr::new(self.0 + u64::try_from(rhs).expect("infaillible conversion"))
+    }
+}
+
+impl Add<u64> for VirtAddr {
+    type Output = Self;
+
+    fn add(self, rhs: u64) -> Self::Output {
+        VirtAddr::new(self.0 + rhs)
+    }
+}
+
+impl Sub<usize> for VirtAddr {
+    type Output = Self;
+
+    fn sub(self, rhs: usize) -> Self::Output {
+        VirtAddr::new(self.0 - u64::try_from(rhs).expect("infaillible conversion"))
     }
 }
 
@@ -147,6 +166,10 @@ impl PhyAddr {
 
     pub const fn new(addr: u64) -> Self {
         Self(addr % (1 << 52))
+    }
+
+    pub const fn const_mut_convert<T>(&self) -> *mut T {
+        self.0 as *mut T
     }
 }
 
