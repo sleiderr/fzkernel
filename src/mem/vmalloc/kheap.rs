@@ -1,10 +1,14 @@
-use core::mem::size_of;
+use core::{
+    alloc::Layout,
+    mem::size_of,
+    ops::{Add, Sub},
+};
 
-use crate::mem::{vmalloc::rbtree::Node, Alignment, VirtAddr};
+use crate::mem::{vmalloc::rbtree::Node, Alignment, MemoryAddress, VirtAddr};
 
-use super::rbtree::{NodeColor, NodePayload, RbTree};
+use super::rbtree::{NodeColor, NodeLink, NodePayload, RbTree};
 
-const MIN_HEAP_SIZE: usize = 0x1_000_000;
+const MIN_HEAP_SIZE: usize = 0x1_000;
 
 pub struct KernelHeapAllocator {
     start: VirtAddr,
@@ -35,6 +39,18 @@ impl AllocHeader {
     pub(crate) fn set_size(&mut self, size: u64) {
         let header_attr = self.inner & 0x7;
         self.inner = size | header_attr;
+    }
+
+    pub(crate) fn left_allocated(&self) -> bool {
+        self.inner & 0b10 != 0
+    }
+
+    pub(crate) fn set_left_allocated(&mut self, allocated: bool) {
+        if allocated {
+            self.inner |= 0b10;
+        } else {
+            self.inner &= !0b10;
+        }
     }
 }
 
@@ -70,6 +86,9 @@ impl NodePayload for AllocHeader {
 }
 
 impl KernelHeapAllocator {
+    const MIN_KHEAP_ALIGN: usize = 0b1000;
+    const MIN_BLOCK_SIZE: u64 = 0x80;
+
     pub(crate) unsafe fn init(heap_start: VirtAddr, heap_size: usize) -> Self {
         assert!(
             heap_start.is_aligned_with(Alignment::ALIGN_4KB),
@@ -87,11 +106,113 @@ impl KernelHeapAllocator {
 
         alloc_tree.black_nil.get_node_mut().header.allocate();
 
-        Self {
+        let mut heap = Self {
             start: heap_start,
             end: heap_end,
             size: heap_size,
             alloc_tree,
+        };
+
+        heap.init_node_header(
+            heap.alloc_tree.root,
+            u64::try_from(heap_size - (size_of::<Node<AllocHeader>>() + size_of::<AllocHeader>()))
+                .expect("infallible conversion"),
+        );
+
+        heap.init_node_end(
+            heap.alloc_tree.root,
+            u64::try_from(heap_size - (size_of::<Node<AllocHeader>>() + size_of::<AllocHeader>()))
+                .expect("infaillible conversion"),
+        );
+
+        heap
+    }
+
+    pub(crate) unsafe fn kalloc_layout(&mut self, alloc_layout: Layout) -> VirtAddr {
+        let (alloc_size, alloc_align) = (alloc_layout.size(), alloc_layout.align());
+
+        if alloc_size == 0 {
+            return VirtAddr::NULL_PTR;
         }
+
+        match self
+            .alloc_tree
+            .find_best_node_fit(u64::try_from(alloc_size).expect("infaillible conversion"))
+        {
+            Some(node) => self.split_alloc(node, alloc_size),
+            None => VirtAddr::NULL_PTR,
+        }
+    }
+
+    unsafe fn split_alloc(
+        &mut self,
+        free_block: NodeLink<AllocHeader>,
+        size_req: usize,
+    ) -> VirtAddr {
+        let block_size = free_block.get_node().header.get_size();
+        let size_req_64 = u64::try_from(size_req).expect("infaillible conversion");
+
+        if block_size >= size_req_64 + Self::MIN_BLOCK_SIZE {
+            self.init_free_node(
+                self.get_block_right_neighbor(free_block, size_req_64),
+                block_size
+                    - size_req_64
+                    - u64::try_from(size_of::<AllocHeader>()).expect("infaillible conversion"),
+            );
+            self.init_node_header(free_block, size_req_64);
+            free_block.get_node_mut().header.allocate();
+
+            return self.get_block_start_addr(free_block);
+        }
+
+        self.get_block_right_neighbor(free_block, block_size)
+            .get_node_mut()
+            .header
+            .set_left_allocated(true);
+        self.init_node_header(free_block, block_size);
+        free_block.get_node_mut().header.allocate();
+
+        self.get_block_start_addr(free_block)
+    }
+
+    unsafe fn init_free_node(&mut self, node: NodeLink<AllocHeader>, size: u64) {
+        node.get_node_mut().header.set_size(size);
+        node.get_node_mut().header.set_color(NodeColor::Red);
+        node.get_node_mut().header.set_left_allocated(true);
+
+        self.init_node_end(node, size);
+        self.get_block_right_neighbor(node, size)
+            .get_node_mut()
+            .header
+            .set_left_allocated(false);
+        self.alloc_tree.insert_node(node);
+    }
+
+    unsafe fn init_node_end(&self, node: NodeLink<AllocHeader>, size: u64) {
+        let footer_ptr: *mut AllocHeader = node.addr().add(size).as_mut_ptr();
+        *footer_ptr = node.get_node().header;
+    }
+
+    unsafe fn init_node_header(&self, node: NodeLink<AllocHeader>, size: u64) {
+        node.get_node_mut().header.set_size(size);
+        node.get_node_mut().header.set_left_allocated(true);
+    }
+
+    unsafe fn get_block_right_neighbor(
+        &self,
+        node: NodeLink<AllocHeader>,
+        size: u64,
+    ) -> NodeLink<AllocHeader> {
+        let right_ptr = node.addr().add(size).add(size_of::<AllocHeader>());
+
+        NodeLink::link_from_raw_ptr(right_ptr.as_mut_ptr())
+    }
+
+    unsafe fn get_block_start_addr(&self, node: NodeLink<AllocHeader>) -> VirtAddr {
+        node.addr().add(size_of::<AllocHeader>())
+    }
+
+    unsafe fn get_node_from_block_addr(&self, block: VirtAddr) -> NodeLink<AllocHeader> {
+        NodeLink::link_from_raw_ptr(block.sub(size_of::<AllocHeader>()).as_mut_ptr())
     }
 }

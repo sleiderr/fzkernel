@@ -4,10 +4,7 @@
 
 use core::ptr::{self, null_mut};
 
-use crate::{
-    mem::{MemoryAddress, VirtAddr},
-    video::io::color,
-};
+use crate::mem::{MemoryAddress, VirtAddr};
 
 /// A red-black tree implementation.
 ///
@@ -47,6 +44,14 @@ impl<P: NodePayload> NodeLink<P> {
         Self {
             linked_node: raw_ptr,
         }
+    }
+
+    pub(super) fn as_raw_ptr(&self) -> *mut Node<P> {
+        self.linked_node
+    }
+
+    pub(super) fn addr(&self) -> VirtAddr {
+        VirtAddr::from(self.linked_node as u64)
     }
 
     /// Returns a reference to the [`Node`] to which this `NodeLink` links to.
@@ -169,6 +174,41 @@ impl<P: NodePayload> RbTree<P> {
             black_nil: NodeLink::link_from_raw_ptr(black_nil_addr.as_mut_ptr()),
             count: 1,
         }
+    }
+
+    pub(super) fn find_best_node_fit(&mut self, value: u64) -> Option<NodeLink<P>> {
+        if self.root == self.black_nil {
+            return None;
+        }
+
+        let mut walker = self.root;
+        let mut closest_size_match = u64::MAX;
+        let mut to_remove = walker;
+
+        while walker != self.black_nil {
+            let walker_size = walker.get_node().header.value();
+            if value == walker_size {
+                closest_size_match = walker_size;
+                to_remove = walker;
+
+                break;
+            }
+
+            if value < walker_size {
+                if walker_size < closest_size_match {
+                    closest_size_match = walker_size;
+                    to_remove = walker;
+                }
+                walker = walker.get_node().left;
+            } else {
+                walker = walker.get_node().right;
+            }
+        }
+        if closest_size_match < value || closest_size_match == u64::MAX {
+            return None;
+        }
+
+        Some(self.remove_node(to_remove))
     }
 
     pub(super) fn insert_node(&mut self, new_node: NodeLink<P>) {
