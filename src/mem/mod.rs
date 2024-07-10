@@ -123,6 +123,14 @@ impl Sub<usize> for VirtAddr {
     }
 }
 
+impl Sub<u64> for VirtAddr {
+    type Output = Self;
+
+    fn sub(self, rhs: u64) -> Self::Output {
+        VirtAddr::new(self.0 - rhs)
+    }
+}
+
 impl Add for VirtAddr {
     type Output = Self;
 

@@ -14,7 +14,7 @@ pub struct KernelHeapAllocator {
     start: VirtAddr,
     end: VirtAddr,
     size: usize,
-    alloc_tree: RbTree<AllocHeader>,
+    pub(super) alloc_tree: RbTree<AllocHeader>,
 }
 
 #[repr(transparent)]
@@ -30,6 +30,10 @@ impl AllocHeader {
 
     pub(crate) fn free(&mut self) {
         self.inner &= !0x1;
+    }
+
+    pub(crate) fn is_allocated(&self) -> bool {
+        self.inner & 0x1 != 0
     }
 
     pub(crate) fn get_size(&self) -> u64 {
@@ -85,9 +89,17 @@ impl NodePayload for AllocHeader {
     }
 }
 
+#[derive(Debug)]
+struct BlockMergeResult {
+    current: NodeLink<AllocHeader>,
+    left: NodeLink<AllocHeader>,
+    right: NodeLink<AllocHeader>,
+    new_size: u64,
+}
+
 impl KernelHeapAllocator {
     const MIN_KHEAP_ALIGN: usize = 0b1000;
-    const MIN_BLOCK_SIZE: u64 = 0x80;
+    const MIN_BLOCK_SIZE: u64 = 0x40;
 
     pub(crate) unsafe fn init(heap_start: VirtAddr, heap_size: usize) -> Self {
         assert!(
@@ -122,7 +134,7 @@ impl KernelHeapAllocator {
         heap.init_node_end(
             heap.alloc_tree.root,
             u64::try_from(heap_size - (size_of::<Node<AllocHeader>>() + size_of::<AllocHeader>()))
-                .expect("infaillible conversion"),
+                .expect("infallible conversion"),
         );
 
         heap
@@ -137,11 +149,25 @@ impl KernelHeapAllocator {
 
         match self
             .alloc_tree
-            .find_best_node_fit(u64::try_from(alloc_size).expect("infaillible conversion"))
+            .find_best_node_fit(u64::try_from(alloc_size).expect("infallible conversion"))
         {
             Some(node) => self.split_alloc(node, alloc_size),
             None => VirtAddr::NULL_PTR,
         }
+    }
+
+    pub(crate) unsafe fn kfree(&mut self, block: VirtAddr) {
+        if block == VirtAddr::NULL_PTR {
+            return;
+        }
+
+        let mut merge_result = self.merge_scan_neighbors(self.get_node_from_block_addr(block));
+
+        self.merge(&mut merge_result);
+        self.init_free_node(
+            merge_result.current,
+            merge_result.current.get_node().header.get_size(),
+        );
     }
 
     unsafe fn split_alloc(
@@ -150,14 +176,14 @@ impl KernelHeapAllocator {
         size_req: usize,
     ) -> VirtAddr {
         let block_size = free_block.get_node().header.get_size();
-        let size_req_64 = u64::try_from(size_req).expect("infaillible conversion");
+        let size_req_64 = u64::try_from(size_req).expect("infallible conversion");
 
         if block_size >= size_req_64 + Self::MIN_BLOCK_SIZE {
             self.init_free_node(
                 self.get_block_right_neighbor(free_block, size_req_64),
                 block_size
                     - size_req_64
-                    - u64::try_from(size_of::<AllocHeader>()).expect("infaillible conversion"),
+                    - u64::try_from(size_of::<AllocHeader>()).expect("infallible conversion"),
             );
             self.init_node_header(free_block, size_req_64);
             free_block.get_node_mut().header.allocate();
@@ -175,6 +201,45 @@ impl KernelHeapAllocator {
         self.get_block_start_addr(free_block)
     }
 
+    fn merge_scan_neighbors(&self, node: NodeLink<AllocHeader>) -> BlockMergeResult {
+        let start_size = node.get_node().header.get_size();
+        let mut merge_result = BlockMergeResult {
+            current: node,
+            left: NodeLink::NULL_LINK,
+            right: NodeLink::NULL_LINK,
+            new_size: start_size,
+        };
+
+        let right_node = unsafe { self.get_block_right_neighbor(node, start_size) };
+
+        if !right_node.get_node().header.is_allocated() {
+            merge_result.new_size += right_node.get_node().header.get_size()
+                + u64::try_from(size_of::<AllocHeader>()).expect("infallible conversion");
+
+            merge_result.right = right_node;
+        }
+
+        if node.addr() != self.start && !node.get_node().header.left_allocated() {
+            merge_result.left = unsafe { self.get_block_left_neighbor(node) };
+            merge_result.new_size += merge_result.left.get_node().header.get_size()
+                + u64::try_from(size_of::<AllocHeader>()).expect("infallible conversion");
+        }
+
+        merge_result
+    }
+
+    #[inline(always)]
+    unsafe fn merge(&mut self, scan_result: &mut BlockMergeResult) {
+        if scan_result.left != NodeLink::NULL_LINK {
+            scan_result.current = self.alloc_tree.remove_node(scan_result.left);
+        }
+        if scan_result.right != NodeLink::NULL_LINK {
+            scan_result.right = self.alloc_tree.remove_node(scan_result.right);
+        }
+
+        self.init_node_header(scan_result.current, scan_result.new_size);
+    }
+
     unsafe fn init_free_node(&mut self, node: NodeLink<AllocHeader>, size: u64) {
         node.get_node_mut().header.set_size(size);
         node.get_node_mut().header.set_color(NodeColor::Red);
@@ -185,6 +250,7 @@ impl KernelHeapAllocator {
             .get_node_mut()
             .header
             .set_left_allocated(false);
+
         self.alloc_tree.insert_node(node);
     }
 
@@ -206,6 +272,19 @@ impl KernelHeapAllocator {
         let right_ptr = node.addr().add(size).add(size_of::<AllocHeader>());
 
         NodeLink::link_from_raw_ptr(right_ptr.as_mut_ptr())
+    }
+
+    unsafe fn get_block_left_neighbor(&self, node: NodeLink<AllocHeader>) -> NodeLink<AllocHeader> {
+        let left_footer_ptr: *const AllocHeader =
+            node.addr().sub(size_of::<AllocHeader>()).as_ptr();
+        let left_footer = &*left_footer_ptr;
+
+        let left_node_ptr = node
+            .addr()
+            .sub(left_footer.get_size())
+            .sub(size_of::<AllocHeader>());
+
+        NodeLink::link_from_raw_ptr(left_node_ptr.as_mut_ptr())
     }
 
     unsafe fn get_block_start_addr(&self, node: NodeLink<AllocHeader>) -> VirtAddr {

@@ -258,7 +258,7 @@ impl<P: NodePayload> RbTree<P> {
                     .parent
                     .get_node()
                     .right;
-                if matches!(uncle.get_node().header.get_color(), NodeColor::Red) {
+                if let NodeColor::Red = uncle.get_node().header.get_color() {
                     new_node
                         .get_node()
                         .parent
@@ -441,7 +441,7 @@ impl<P: NodePayload> RbTree<P> {
 
     fn fix_remove_rb_violation(&mut self, mut extra_black_node: NodeLink<P>) {
         while extra_black_node != self.root
-            && !matches!(
+            && matches!(
                 extra_black_node.get_node().header.get_color(),
                 NodeColor::Black
             )
