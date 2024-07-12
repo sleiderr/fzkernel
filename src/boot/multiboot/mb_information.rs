@@ -91,6 +91,10 @@ pub struct MultibootInformation {
 }
 
 impl MultibootInformation {
+    pub fn get_mmap_addr(&self) -> PhyAddr32 {
+        self.mmap_addr
+    }
+
     pub fn set_bootloader_name(&mut self, str_address: PhyAddr32) {
         self.flags |= MultibootInformationFlags::BOOTLOADER_NAME_VALID;
         self.boot_loader_name = str_address;

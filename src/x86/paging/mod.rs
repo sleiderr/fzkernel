@@ -81,7 +81,7 @@ pub mod bootinit_paging {
         );
         identity_map_phys_level4(
             PageAddressTranslator::translate_address(KERNEL_CODE_MAPPING_BASE).pml4_offset(),
-            PhyAddr::new(0x8_000_000),
+            PhyAddr::new(0x800_000),
         );
         Cr3::write(
             Cr3::new()
@@ -109,7 +109,7 @@ pub mod bootinit_paging {
             )
             .expect("failed to create level 3 pagetable");
 
-        for i in 0..512 {
+        for i in 0..8 {
             let table_entry: &mut PageTable = Box::leak(Box::default());
             pdpt.get_mut(i)
                 .map_to_addr(

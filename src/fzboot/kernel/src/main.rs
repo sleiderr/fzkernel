@@ -14,9 +14,12 @@ use fzboot::{
     boot::multiboot::mb_information,
     exceptions::{panic::panic_entry_no_exception, register_exception_handlers},
     irq::manager::get_interrupt_manager,
-    mem::bmalloc::heap::LockedBuddyAllocator,
-    video,
-    x86::int::enable_interrupts,
+    mem::{bmalloc::heap::LockedBuddyAllocator, e820::E820MemoryMap, MemoryAddress, PhyAddr},
+    println, video,
+    x86::paging::{
+        page_alloc::frame_alloc::init_phys_memory_pool,
+        page_table::mapper::{MemoryMapping, PhysicalMemoryMapping},
+    },
 };
 
 static mut DEFAULT_HEAP_ADDR: usize = 0x5000000;
@@ -56,12 +59,23 @@ extern "C" fn _kmain(mb_information_header: mb_information::MultibootInformation
     video::vesa::init_text_buffer_from_multiboot(mb_information_header.framebuffer().unwrap());
 
     unsafe {
+        mem_init(&mb_information_header);
         get_interrupt_manager().load_idt();
     }
     register_exception_handlers();
     enable_interrupts();
 
     loop {}
+}
+
+unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
+    let memory_map = E820MemoryMap::new(
+        PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING
+            .convert(PhyAddr::from(mb_information.get_mmap_addr()))
+            .as_mut_ptr(),
+    );
+
+    init_phys_memory_pool(memory_map);
 }
 
 #[panic_handler]

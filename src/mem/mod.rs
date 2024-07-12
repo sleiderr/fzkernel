@@ -212,6 +212,12 @@ impl From<u64> for PhyAddr {
     }
 }
 
+impl From<PhyAddr32> for PhyAddr {
+    fn from(value: PhyAddr32) -> Self {
+        Self::new(value.0.into())
+    }
+}
+
 impl Add<usize> for PhyAddr {
     type Output = PhyAddr;
 

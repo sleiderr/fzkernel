@@ -8,6 +8,14 @@
 #![feature(const_option)]
 #![feature(strict_provenance)]
 #![feature(adt_const_params)]
+#![feature(
+    maybe_uninit_array_assume_init,
+    maybe_uninit_uninit_array,
+    const_maybe_uninit_array_assume_init,
+    const_maybe_uninit_write,
+    const_mut_refs,
+    const_maybe_uninit_uninit_array
+)]
 #![feature(non_null_convenience)]
 #![warn(missing_copy_implementations)]
 #![warn(missing_debug_implementations)]
@@ -44,3 +52,10 @@ pub use numtoa;
 extern crate alloc;
 
 extern crate rlibc;
+
+pub mod kernel_syms {
+    use crate::mem::PhyAddr;
+
+    pub const KERNEL_LOAD_ADDR: PhyAddr = PhyAddr::new(0x800_000);
+    pub const KERNEL_SECTOR_SZ: usize = 0x20 * 0x800;
+}

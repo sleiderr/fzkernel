@@ -14,11 +14,15 @@ pub struct PhysicalMemoryMapping {
 
 #[allow(overflowing_literals)]
 impl PhysicalMemoryMapping {
-    pub(crate) const DEFAULT_OFFSET: VirtAddr = VirtAddr::new(0xffff_1000_0000_0000);
+    pub(crate) const DEFAULT_OFFSET: VirtAddr = VirtAddr::new(0xFFFF_CF80_0000_0000);
     pub(crate) const DEFAULT_MAX_SIZE: usize = 0x0100_0000_0000;
 
     pub(crate) const IDENTITY: Self = Self {
         offset: VirtAddr::new(0),
+    };
+
+    pub const KERNEL_DEFAULT_MAPPING: Self = Self {
+        offset: Self::DEFAULT_OFFSET,
     };
 
     pub fn new(offset: VirtAddr) -> Self {

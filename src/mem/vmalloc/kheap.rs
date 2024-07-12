@@ -14,7 +14,7 @@ pub struct KernelHeapAllocator {
     start: VirtAddr,
     end: VirtAddr,
     size: usize,
-    pub(super) alloc_tree: RbTree<AllocHeader>,
+    alloc_tree: RbTree<AllocHeader>,
 }
 
 #[repr(transparent)]

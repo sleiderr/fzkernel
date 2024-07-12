@@ -17,6 +17,7 @@ use fzboot::drivers::generics::dev_disk::{sata_drives, DiskDevice};
 use fzboot::drivers::ide::AtaDeviceIdentifier;
 use fzboot::fs::partitions::mbr;
 use fzboot::irq::manager::{get_interrupt_manager, get_prot_interrupt_manager};
+use fzboot::mem::e820::{e820_entries_bootloader, E820_MAP_ADDR};
 use fzboot::mem::{MemoryAddress, VirtAddr};
 use fzboot::video::vesa::{init_text_buffer_from_vesa, text_buffer};
 use fzboot::x86::apic::InterruptVector;
@@ -42,19 +43,19 @@ use fzboot::{
 use fzproc_macros::interrupt_handler;
 
 static mut DEFAULT_HEAP_ADDR: usize = 0x5000000;
+/// Default heap size: 512KiB
 const DEFAULT_HEAP_SIZE: usize = 0x1000000;
 
-/// Minimum heap size: 16KiB
-const MIN_HEAP_SIZE: usize = 0x4000;
+/// Minimum heap size: 4KiB
+const MIN_HEAP_SIZE: usize = 0x1000;
 
-/// Maximum heap size: 2GiB
-const MAX_HEAP_SIZE: usize = 0x80000000;
+const MAX_HEAP_SIZE: usize = 0x1000000;
 
-/// Default stack size, if enough RAM is available: 8 MiB
-const STACK_SIZE: usize = 0x800000;
+/// Default stack size, if enough RAM is available: 32KiB
+const STACK_SIZE: usize = 0x8000;
 
 #[global_allocator]
-pub static BUDDY_ALLOCATOR: LockedBuddyAllocator<16> = LockedBuddyAllocator::new(
+pub static BUDDY_ALLOCATOR: LockedBuddyAllocator<14> = LockedBuddyAllocator::new(
     NonNull::new(unsafe { DEFAULT_HEAP_ADDR as *mut u8 }).unwrap(),
     DEFAULT_HEAP_SIZE,
 );
@@ -81,12 +82,12 @@ pub fn boot_main() -> ! {
     let mb_information_hdr_addr = boot::headers::dump_multiboot_information_header();
     bootinit_paging::init_paging();
 
-    info!("kernel", "jumping to kernel main (addr = 0x800000)");
+    info!("kernel", "jumping to kernel main (addr = 0x80000)");
 
     unsafe {
         long_init_gdt();
         asm!("mov ecx, {}", in(reg) mb_information_hdr_addr);
-        asm!("mov ebp, 0", "push 0x10", "push 0x8000000", "retf");
+        asm!("mov ebp, 0", "push 0x10", "push 0x800000", "retf");
         core::unreachable!();
     }
 }
@@ -119,7 +120,7 @@ pub fn interrupts_init() {
 }
 
 pub fn heap_init() {
-    let e820_map = E820MemoryMap::new();
+    let e820_map = E820MemoryMap::new(E820_MAP_ADDR as *mut u8);
     let mut best_entry = AddressRangeDescriptor::default();
 
     for entry in e820_map {

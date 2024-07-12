@@ -8,10 +8,19 @@
 //! Frames allocated using these allocators are not mapped to any virtual address space, thus paging requires
 //! a page mapper to map frames in a virtual address space.
 
+use conquer_once::spin::OnceCell;
+use spin::Mutex;
+
+use crate::kernel_syms;
+use crate::mem::e820::{AddressRangeDescriptor, E820MemType, E820MemoryMap};
 use crate::mem::{MemoryAddress, PhyAddr};
-use crate::x86::paging::page_table::mapper::MemoryMapping;
+use crate::x86::paging::page_table::mapper::{MemoryMapping, PhysicalMemoryMapping};
 use core::cmp::{max, min};
+use core::mem::MaybeUninit;
 use core::ptr::null_mut;
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+pub const MAX_PHYSICAL_MEM_BLK_SIZE: usize = 0x20000000;
 
 /// Defines the basic set of operations that should be offered by a physical memory allocator (_Frame_ allocator)
 pub trait FrameAllocator {
@@ -45,12 +54,90 @@ pub enum FrameAllocationError {
 }
 
 struct FreePageBlock {
-    next_blk: *mut FreePageBlock,
+    next_blk: AtomicPtr<FreePageBlock>,
 }
 
 impl FreePageBlock {
-    fn new(next_blk: *mut FreePageBlock) -> Self {
+    fn new(next_blk: AtomicPtr<FreePageBlock>) -> Self {
         Self { next_blk: next_blk }
+    }
+}
+
+static PHYSICAL_MEMORY_POOL: OnceCell<Mutex<BuddyFrameAllocator<18, PhysicalMemoryMapping>>> =
+    OnceCell::uninit();
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_alloc(alloc_size: usize) -> *mut u8 {
+    if let Some(mem_pool) = PHYSICAL_MEMORY_POOL.get() {
+        let allocation_attempt = mem_pool.lock().allocate(alloc_size);
+
+        if let Ok(alloc) = allocation_attempt {
+            alloc.start.as_mut_ptr()
+        } else {
+            null_mut()
+        }
+    } else {
+        null_mut()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn pm_free(alloc_base: *mut u8, alloc_size: usize) {
+    if let Some(mem_pool) = PHYSICAL_MEMORY_POOL.get() {
+        mem_pool.lock().deallocate(FrameAllocation {
+            start: PhyAddr::from(alloc_base),
+            length: alloc_size,
+        })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn init_phys_memory_pool(memory_map: E820MemoryMap) {
+    let mut largest_ram_segment = AddressRangeDescriptor::default();
+
+    for entry in memory_map {
+        if matches!(entry.addr_type, E820MemType::RAM)
+            && entry.length() > largest_ram_segment.length()
+        {
+            largest_ram_segment = entry;
+        }
+    }
+
+    let mut segment_base = PhyAddr::from(largest_ram_segment.base_addr());
+
+    // check if the kernel mapping is located inside the largest ram segment
+    if kernel_syms::KERNEL_LOAD_ADDR > segment_base
+        && kernel_syms::KERNEL_LOAD_ADDR < segment_base + largest_ram_segment.length()
+    {
+        segment_base = kernel_syms::KERNEL_LOAD_ADDR + kernel_syms::KERNEL_SECTOR_SZ * 0x200;
+    }
+
+    assert!(
+        !PHYSICAL_MEMORY_POOL.is_initialized(),
+        "attempted to initialize physical memory twice"
+    );
+
+    PHYSICAL_MEMORY_POOL.init_once(|| unsafe {
+        Mutex::new(BuddyFrameAllocator::from_base_unchecked(
+            segment_base,
+            PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING,
+            MAX_PHYSICAL_MEM_BLK_SIZE,
+        ))
+    });
+}
+
+// TODO: add allocation flags (urgent allocation that panic if lock is held, ...)
+pub fn alloc_page(alloc_size: usize) -> Result<FrameAllocation, FrameAllocationError> {
+    if let Some(mem_pool) = PHYSICAL_MEMORY_POOL.get() {
+        mem_pool.lock().allocate(alloc_size)
+    } else {
+        Err(FrameAllocationError::NoAvailableFrame)
+    }
+}
+
+pub fn free_page(alloc: FrameAllocation) {
+    if let Some(mem_pool) = PHYSICAL_MEMORY_POOL.get() {
+        mem_pool.lock().deallocate(alloc)
     }
 }
 
@@ -71,7 +158,7 @@ pub struct BuddyFrameAllocator<const N: usize, M: MemoryMapping> {
 
     mapping: M,
 
-    free_lists: [*mut FreePageBlock; N],
+    free_lists: [AtomicPtr<FreePageBlock>; N],
 }
 
 impl<const N: usize, M: MemoryMapping> FrameAllocator for BuddyFrameAllocator<N, M> {
@@ -97,6 +184,9 @@ impl<const N: usize, M: MemoryMapping> FrameAllocator for BuddyFrameAllocator<N,
 
 impl<const N: usize, M: MemoryMapping> BuddyFrameAllocator<N, M> {
     pub const fn new(base_addr: PhyAddr, mapping: M, max_blk_size: usize) -> Self {
+        let min_blk_size = max_blk_size >> (N - 1);
+        assert!(min_blk_size == 4096);
+
         unsafe { Self::from_base_unchecked(base_addr, mapping, max_blk_size) }
     }
 
@@ -107,9 +197,18 @@ impl<const N: usize, M: MemoryMapping> BuddyFrameAllocator<N, M> {
     ) -> Self {
         let min_blk_size = max_blk_size >> (N - 1);
 
-        let mut free_lists = [null_mut(); N];
+        let mut init_free_list = MaybeUninit::uninit_array::<N>();
+        let mut i = 0;
+        loop {
+            init_free_list[i].write(AtomicPtr::new(null_mut()));
+            i += 1;
+            if i == N {
+                break;
+            }
+        }
+        let mut free_lists = unsafe { MaybeUninit::array_assume_init(init_free_list) };
 
-        free_lists[N - 1] = base_addr.const_mut_convert::<FreePageBlock>();
+        free_lists[N - 1] = AtomicPtr::new(base_addr.const_mut_convert::<FreePageBlock>());
 
         let log2_min_blk_size = log2(min_blk_size);
 
@@ -145,9 +244,9 @@ impl<const N: usize, M: MemoryMapping> BuddyFrameAllocator<N, M> {
 
         let mut full_block = block;
         for level in alloc_level..self.free_lists.len() {
-            if let Some(buddy) = self.buddy(block, level as u8) {
+            if let Some(buddy) = self.buddy(full_block, level as u8) {
                 if self.remove_blk(buddy, level as u8) {
-                    full_block = min(buddy, block);
+                    full_block = min(buddy, full_block);
                     continue;
                 }
             }
@@ -177,27 +276,30 @@ impl<const N: usize, M: MemoryMapping> BuddyFrameAllocator<N, M> {
             .convert(PhyAddr::from(blk_header))
             .as_mut_ptr::<FreePageBlock>();
 
-        let mut curr_blk = self.free_lists[level as usize];
+        let mut curr_blk = &mut self.free_lists[level as usize];
+        let mut curr_blk_ptr = curr_blk.load(Ordering::Acquire);
 
-        while !curr_blk.is_null() {
-            let mut virt_curr_blk = &mut self
+        while !curr_blk_ptr.is_null() {
+            let mut virt_curr_blk = self
                 .mapping
-                .convert(PhyAddr::from(curr_blk))
+                .convert(PhyAddr::from(curr_blk_ptr))
                 .as_mut_ptr::<FreePageBlock>();
 
-            if curr_blk == blk_header {
-                unsafe { *virt_curr_blk = (*blk_header).next_blk }
+            if curr_blk_ptr == blk_header {
+                unsafe {
+                    *curr_blk = AtomicPtr::new((*blk_header).next_blk.load(Ordering::Relaxed))
+                }
                 return true;
             }
 
-            curr_blk = unsafe { (*(*virt_curr_blk)).next_blk };
+            curr_blk = unsafe { &mut (*virt_curr_blk).next_blk };
         }
 
         false
     }
 
     unsafe fn pop_blk_with_level(&mut self, level: u8) -> Option<*mut u8> {
-        let head = self.free_lists[level as usize];
+        let head = self.free_lists[level as usize].load(Ordering::Acquire);
         let virt_head = self
             .mapping
             .convert(PhyAddr::from(head))
@@ -205,9 +307,10 @@ impl<const N: usize, M: MemoryMapping> BuddyFrameAllocator<N, M> {
 
         if !head.is_null() {
             if level as usize == N - 1 {
-                self.free_lists[level as usize] = null_mut();
+                self.free_lists[level as usize] = AtomicPtr::new(null_mut());
             } else {
-                self.free_lists[level as usize] = (*virt_head).next_blk;
+                self.free_lists[level as usize] =
+                    AtomicPtr::new((*virt_head).next_blk.load(Ordering::Relaxed));
             }
 
             return Some(head as *mut u8);
@@ -222,9 +325,11 @@ impl<const N: usize, M: MemoryMapping> BuddyFrameAllocator<N, M> {
             .mapping
             .convert(PhyAddr::from(block))
             .as_mut_ptr::<FreePageBlock>();
-        *virt_blk_header = FreePageBlock::new(self.free_lists[level as usize]);
+        *virt_blk_header = FreePageBlock::new(AtomicPtr::new(
+            self.free_lists[level as usize].load(Ordering::Relaxed),
+        ));
 
-        self.free_lists[level as usize] = blk_header;
+        self.free_lists[level as usize] = AtomicPtr::new(blk_header);
     }
 
     unsafe fn split_blk(&mut self, block: *mut u8, mut level: u8, new_level: u8) {
