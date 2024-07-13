@@ -58,4 +58,5 @@ pub mod kernel_syms {
 
     pub const KERNEL_LOAD_ADDR: PhyAddr = PhyAddr::new(0x800_000);
     pub const KERNEL_SECTOR_SZ: usize = 0x20 * 0x800;
+    pub const PAGE_SIZE: usize = 0x1000;
 }
