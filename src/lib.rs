@@ -54,9 +54,15 @@ extern crate alloc;
 extern crate rlibc;
 
 pub mod kernel_syms {
-    use crate::mem::PhyAddr;
+    use crate::mem::{PhyAddr, VirtAddr};
 
     pub const KERNEL_LOAD_ADDR: PhyAddr = PhyAddr::new(0x800_000);
     pub const KERNEL_SECTOR_SZ: usize = 0x20 * 0x800;
+
+    pub const KERNEL_CODE_MAPPING_BASE: VirtAddr = VirtAddr::new(0xFFFF_8C00_0000_0000);
+
+    /// Base virtual address for the physical memory mapping.
+    pub const KERNEL_PHYS_MAPPING_BASE: VirtAddr = VirtAddr::new(0xFFFF_CF80_0000_0000);
+
     pub const PAGE_SIZE: usize = 0x1000;
 }

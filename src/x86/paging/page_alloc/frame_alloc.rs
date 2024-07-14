@@ -42,8 +42,8 @@ pub trait FrameAllocator {
 /// Contains information about a physical memory `Frame` after it has been allocated by a [`FrameAllocator`].
 #[derive(Debug)]
 pub struct FrameAllocation {
-    start: PhyAddr,
-    length: usize,
+    pub start: PhyAddr,
+    pub length: usize,
 }
 
 /// Errors that may happen during the physical memory `Frame` allocation process.

@@ -55,7 +55,7 @@ pub struct Cr0 {
     cache_disable: bool,
 
     /// Enables paging.
-    paging: bool,
+    pub paging: bool,
 
     #[skip]
     __: B32,
@@ -143,6 +143,7 @@ impl ControlRegister for Cr0 {
 
 #[cfg(feature = "x86_64")]
 #[bitfield]
+#[repr(u64)]
 pub struct Cr3 {
     #[skip]
     __: B3,
@@ -233,7 +234,6 @@ impl Cr3 {
     }
 }
 
-#[cfg(not(feature = "x86_64"))]
 impl ControlRegister for Cr3 {
     fn read() -> Self {
         #[cfg(not(target_arch = "x86_64"))]

@@ -5,12 +5,77 @@
 //! _5-level paging_), that can be used in different contexts.
 
 use crate::errors::BaseError;
-use crate::mem::{PhyAddr, VirtAddr};
+use crate::mem::{MemoryAddress, PhyAddr, VirtAddr};
 
 pub mod page_alloc;
 pub mod page_table;
 
+use conquer_once::spin::OnceCell;
+use page_table::mapper::{PageTableMapper, PhysicalMemoryMapping};
+use page_table::translate::PageAddressTranslator;
 pub use page_table::{PageTable, PageTableFlags};
+use spin::Mutex;
+
+use super::msr::{Ia32ExtendedFeature, ModelSpecificRegister};
+use super::registers::control::{ControlRegister, Cr0, Cr3, Cr4};
+
+static VIRT_MEMORY_MAPPER: OnceCell<
+    Mutex<PageTableMapper<PageAddressTranslator, PhysicalMemoryMapping>>,
+> = OnceCell::uninit();
+
+#[cfg(feature = "x86_64")]
+pub unsafe fn init_global_mapper(page_table_address: PhyAddr) {
+    use crate::kernel_syms::{KERNEL_CODE_MAPPING_BASE, KERNEL_PHYS_MAPPING_BASE};
+
+    VIRT_MEMORY_MAPPER.init_once(|| {
+        Mutex::new(PageTableMapper::new_from_raw(
+            page_table_address.as_mut_ptr(),
+            PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING,
+        ))
+    });
+
+    // TODO: to be removed when better handling of stack ptr
+    VIRT_MEMORY_MAPPER
+        .get_unchecked()
+        .lock()
+        .map_physical_memory(
+            PhyAddr::new(0x0),
+            VirtAddr::NULL_PTR,
+            PageTableFlags::new().with_write(true),
+            0x400_000,
+        );
+
+    VIRT_MEMORY_MAPPER
+        .get_unchecked()
+        .lock()
+        .map_physical_memory(
+            PhyAddr::new(0x0),
+            KERNEL_PHYS_MAPPING_BASE,
+            PageTableFlags::new().with_write(true),
+            0x200_000_000,
+        );
+
+    VIRT_MEMORY_MAPPER
+        .get_unchecked()
+        .lock()
+        .map_physical_memory(
+            PhyAddr::new(0x800_000),
+            KERNEL_CODE_MAPPING_BASE,
+            PageTableFlags::new().with_write(true),
+            0x400_000,
+        );
+
+    Cr3::write(Cr3::new().set_page_table_addr(page_table_address).unwrap());
+}
+
+pub fn get_memory_mapper(
+) -> &'static Mutex<PageTableMapper<PageAddressTranslator, PhysicalMemoryMapping>> {
+    if let Some(mapper) = VIRT_MEMORY_MAPPER.get() {
+        return mapper;
+    } else {
+        panic!("attempt to access virtual memory mappings before initialization")
+    }
+}
 
 /// Represents a memory (or virtual) page.
 ///

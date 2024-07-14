@@ -15,8 +15,9 @@ use fzboot::{
     exceptions::{panic::panic_entry_no_exception, register_exception_handlers},
     irq::manager::get_interrupt_manager,
     mem::{bmalloc::heap::LockedBuddyAllocator, e820::E820MemoryMap, MemoryAddress, PhyAddr},
-    println, video,
+    video,
     x86::paging::{
+        init_global_mapper,
         page_alloc::frame_alloc::init_phys_memory_pool,
         page_table::mapper::{MemoryMapping, PhysicalMemoryMapping},
     },
@@ -76,6 +77,7 @@ unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
     );
 
     init_phys_memory_pool(memory_map);
+    init_global_mapper(PhyAddr::new(0x200_000));
 }
 
 #[panic_handler]
