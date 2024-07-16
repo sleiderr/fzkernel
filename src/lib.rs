@@ -59,10 +59,14 @@ pub mod kernel_syms {
     pub const KERNEL_LOAD_ADDR: PhyAddr = PhyAddr::new(0x800_000);
     pub const KERNEL_SECTOR_SZ: usize = 0x20 * 0x800;
 
+    pub const KERNEL_STACK_SIZE: usize = 0x800_000;
+
     pub const KERNEL_CODE_MAPPING_BASE: VirtAddr = VirtAddr::new(0xFFFF_8C00_0000_0000);
 
     /// Base virtual address for the physical memory mapping.
     pub const KERNEL_PHYS_MAPPING_BASE: VirtAddr = VirtAddr::new(0xFFFF_CF80_0000_0000);
+
+    pub const KERNEL_STACK_MAPPING_BASE: VirtAddr = VirtAddr::new(0xFFFF_9000_0000_0000);
 
     pub const PAGE_SIZE: usize = 0x1000;
 }
