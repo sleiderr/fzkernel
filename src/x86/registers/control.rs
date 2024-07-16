@@ -13,6 +13,7 @@ use crate::mem::{Alignment, MemoryAddress, PhyAddr, PhyAddr32};
 use core::arch::asm;
 use modular_bitfield::bitfield;
 use modular_bitfield::prelude::{B10, B20, B3, B32, B39, B52, B7};
+use modular_bitfield::specifiers::B38;
 
 #[cfg(feature = "x86_64")]
 #[bitfield]
@@ -340,6 +341,9 @@ pub struct Cr4 {
     /// SMX-Enable.
     pub smx: bool,
 
+    #[skip]
+    __: bool,
+
     /// Enables the _RDFSBASE_, _RDGSBASE_, _WRFSBASE_ and _WRGSBASE_ instructions.
     pub fsgsbase: bool,
 
@@ -380,7 +384,7 @@ pub struct Cr4 {
     pub uintr: bool,
 
     #[skip]
-    __: B39,
+    __: B38,
 }
 
 #[bitfield]

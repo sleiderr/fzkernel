@@ -170,11 +170,15 @@ impl<T: Translator, M: MemoryMapping> PageTableMapper<T, M> {
             return Err(PageTableCreationError::HugePage);
         }
 
-        PageTableMapper::<T, M>::get_next_table(entry).map_err(|_| PageTableCreationError::HugePage)
+        PageTableMapper::<T, M>::get_next_table(mapping, entry)
+            .map_err(|_| PageTableCreationError::HugePage)
     }
 
-    fn get_next_table(entry: &mut PageTableEntry) -> Result<&mut PageTable, NextPageTableFailed> {
-        let table_ptr = entry.frame().addr.as_mut_ptr();
+    fn get_next_table(
+        mapping: M,
+        entry: &mut PageTableEntry,
+    ) -> Result<&mut PageTable, NextPageTableFailed> {
+        let table_ptr = mapping.convert(entry.frame().addr).as_mut_ptr();
 
         Ok(unsafe { &mut *table_ptr })
     }
@@ -184,6 +188,7 @@ impl<T: Translator, M: MemoryMapping> PageTableMapper<T, M> {
         phys_base: PhyAddr,
         virt_base: VirtAddr,
         flags: PageTableFlags,
+        parent_flags: PageTableFlags,
         len: usize,
     ) {
         let table = self.pml4.as_mut();
@@ -212,7 +217,11 @@ impl<T: Translator, M: MemoryMapping> PageTableMapper<T, M> {
             }
 
             let page_table_dir = if table.get_mut(map_entry_id).used() {
-                PageTableMapper::<T, M>::get_next_table(table.get_mut(map_entry_id)).unwrap()
+                PageTableMapper::<T, M>::get_next_table(
+                    self.phys_mapping,
+                    table.get_mut(map_entry_id),
+                )
+                .unwrap()
             } else {
                 let page_table_dir_addr = alloc_page(PAGE_SIZE).unwrap();
                 *self
@@ -221,7 +230,7 @@ impl<T: Translator, M: MemoryMapping> PageTableMapper<T, M> {
                     .as_mut_ptr::<PageTable>() = PageTable::default();
                 table
                     .get_mut(phys_memory_base_translation.pml4_offset())
-                    .map_to_addr(page_table_dir_addr.start, flags.with_present(true));
+                    .map_to_addr(page_table_dir_addr.start, parent_flags.with_present(true));
 
                 &mut *self
                     .phys_mapping
@@ -240,6 +249,7 @@ impl<T: Translator, M: MemoryMapping> PageTableMapper<T, M> {
                 let directory_ptr_table_entry =
                     if page_table_dir.get_mut(directory_ptr_table_entry_id).used() {
                         PageTableMapper::<T, M>::get_next_table(
+                            self.phys_mapping,
                             page_table_dir.get_mut(directory_ptr_table_entry_id),
                         )
                         .unwrap()
@@ -249,7 +259,7 @@ impl<T: Translator, M: MemoryMapping> PageTableMapper<T, M> {
                             .get_mut(directory_ptr_table_entry_id)
                             .map_to_addr(
                                 directory_ptr_table_entry_addr.start,
-                                flags.with_present(true),
+                                parent_flags.with_present(true),
                             );
                         *self
                             .phys_mapping
@@ -314,30 +324,32 @@ impl<T: Translator, M: MemoryMapping> PageTableMapper<T, M> {
                                 flags.with_present(true).with_huge_page(true),
                             );
                     } else {
-                        let directory_entry = if directory_ptr_table_entry
-                            .get_mut(directory_entry_id)
-                            .used()
-                        {
-                            PageTableMapper::<T, M>::get_next_table(
-                                directory_ptr_table_entry.get_mut(directory_entry_id),
-                            )
-                            .unwrap()
-                        } else {
-                            let directory_entry_addr = alloc_page(PAGE_SIZE).unwrap();
-                            directory_ptr_table_entry
-                                .get_mut(directory_entry_id)
-                                .map_to_addr(directory_entry_addr.start, flags.with_present(true));
+                        let directory_entry =
+                            if directory_ptr_table_entry.get_mut(directory_entry_id).used() {
+                                PageTableMapper::<T, M>::get_next_table(
+                                    self.phys_mapping,
+                                    directory_ptr_table_entry.get_mut(directory_entry_id),
+                                )
+                                .unwrap()
+                            } else {
+                                let directory_entry_addr = alloc_page(PAGE_SIZE).unwrap();
+                                directory_ptr_table_entry
+                                    .get_mut(directory_entry_id)
+                                    .map_to_addr(
+                                        directory_entry_addr.start,
+                                        parent_flags.with_present(true),
+                                    );
 
-                            *self
-                                .phys_mapping
-                                .convert(directory_entry_addr.start)
-                                .as_mut_ptr::<PageTable>() = PageTable::default();
+                                *self
+                                    .phys_mapping
+                                    .convert(directory_entry_addr.start)
+                                    .as_mut_ptr::<PageTable>() = PageTable::default();
 
-                            &mut *self
-                                .phys_mapping
-                                .convert(directory_entry_addr.start)
-                                .as_mut_ptr::<PageTable>()
-                        };
+                                &mut *self
+                                    .phys_mapping
+                                    .convert(directory_entry_addr.start)
+                                    .as_mut_ptr::<PageTable>()
+                            };
                         let table_entry_range_start = table_entry_range.start;
 
                         for table_entry_id in table_entry_range {

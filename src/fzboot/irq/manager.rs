@@ -65,6 +65,7 @@ use super::handlers::{
 /// }
 /// ```
 #[cfg(feature = "x86_64")]
+#[inline(always)]
 pub fn get_interrupt_manager() -> &'static InterruptManager<PhyAddr> {
     get_long_interrupt_manager()
 }

@@ -8,13 +8,17 @@
 
 extern crate alloc;
 
-use core::{arch::asm, panic::PanicInfo, ptr::NonNull};
+use core::{arch::asm, mem::size_of, panic::PanicInfo, ptr::NonNull};
 
 use fzboot::{
     boot::multiboot::mb_information,
     exceptions::{panic::panic_entry_no_exception, register_exception_handlers},
     irq::manager::get_interrupt_manager,
-    mem::{bmalloc::heap::LockedBuddyAllocator, e820::E820MemoryMap, MemoryAddress, PhyAddr},
+    mem::{
+        bmalloc::heap::LockedBuddyAllocator, e820::E820MemoryMap,
+        kernel_sec::enable_kernel_mem_sec, stack::get_kernel_stack_allocator, MemoryAddress,
+        PhyAddr,
+    },
     video,
     x86::paging::{
         init_global_mapper,
@@ -53,18 +57,31 @@ pub extern "C" fn _start() -> ! {
         core::ptr::read(mb_information_ptr as *const mb_information::MultibootInformation)
     };
 
-    _kmain(mb_information);
-}
+    video::vesa::init_text_buffer_from_multiboot(mb_information.framebuffer().unwrap());
+    unsafe {
+        mem_init(&mb_information);
+    }
 
-extern "C" fn _kmain(mb_information_header: mb_information::MultibootInformation) -> ! {
-    video::vesa::init_text_buffer_from_multiboot(mb_information_header.framebuffer().unwrap());
+    let kernel_stack = get_kernel_stack_allocator().lock().alloc_stack();
 
     unsafe {
-        mem_init(&mb_information_header);
+        asm!("
+            mov rsp, {}
+            mov rbp, rsp
+        ", in(reg) kernel_stack.as_mut_ptr::<u8>());
+    }
+
+    _kmain();
+}
+
+#[no_mangle]
+#[inline(never)]
+extern "C" fn _kmain() -> ! {
+    unsafe {
         get_interrupt_manager().load_idt();
     }
     register_exception_handlers();
-    enable_interrupts();
+    // enable_interrupts();
 
     loop {}
 }
@@ -78,6 +95,7 @@ unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
 
     init_phys_memory_pool(memory_map);
     init_global_mapper(PhyAddr::new(0x200_000));
+    enable_kernel_mem_sec();
 }
 
 #[panic_handler]

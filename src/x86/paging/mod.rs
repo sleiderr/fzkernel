@@ -11,13 +11,13 @@ pub mod page_alloc;
 pub mod page_table;
 
 use conquer_once::spin::OnceCell;
+use page_alloc::frame_alloc::FrameAllocation;
 use page_table::mapper::{PageTableMapper, PhysicalMemoryMapping};
 use page_table::translate::PageAddressTranslator;
 pub use page_table::{PageTable, PageTableFlags};
 use spin::Mutex;
 
-use super::msr::{Ia32ExtendedFeature, ModelSpecificRegister};
-use super::registers::control::{ControlRegister, Cr0, Cr3, Cr4};
+use super::registers::control::{ControlRegister, Cr3};
 
 static VIRT_MEMORY_MAPPER: OnceCell<
     Mutex<PageTableMapper<PageAddressTranslator, PhysicalMemoryMapping>>,
@@ -42,7 +42,8 @@ pub unsafe fn init_global_mapper(page_table_address: PhyAddr) {
             PhyAddr::new(0x0),
             VirtAddr::NULL_PTR,
             PageTableFlags::new().with_write(true),
-            0x400_000,
+            PageTableFlags::new().with_write(true),
+            0x400_000_000,
         );
 
     VIRT_MEMORY_MAPPER
@@ -51,6 +52,7 @@ pub unsafe fn init_global_mapper(page_table_address: PhyAddr) {
         .map_physical_memory(
             PhyAddr::new(0x0),
             KERNEL_PHYS_MAPPING_BASE,
+            PageTableFlags::new().with_write(true),
             PageTableFlags::new().with_write(true),
             0x200_000_000,
         );
@@ -62,7 +64,8 @@ pub unsafe fn init_global_mapper(page_table_address: PhyAddr) {
             PhyAddr::new(0x800_000),
             KERNEL_CODE_MAPPING_BASE,
             PageTableFlags::new().with_write(true),
-            0x400_000,
+            PageTableFlags::new().with_write(true),
+            0x40_000_000,
         );
 
     Cr3::write(Cr3::new().set_page_table_addr(page_table_address).unwrap());
@@ -71,7 +74,7 @@ pub unsafe fn init_global_mapper(page_table_address: PhyAddr) {
 pub fn get_memory_mapper(
 ) -> &'static Mutex<PageTableMapper<PageAddressTranslator, PhysicalMemoryMapping>> {
     if let Some(mapper) = VIRT_MEMORY_MAPPER.get() {
-        return mapper;
+        mapper
     } else {
         panic!("attempt to access virtual memory mappings before initialization")
     }
@@ -109,6 +112,12 @@ pub struct Frame {
 impl Frame {
     pub(crate) fn new(start: PhyAddr) -> Self {
         Self { addr: start }
+    }
+}
+
+impl From<FrameAllocation> for Frame {
+    fn from(value: FrameAllocation) -> Self {
+        Self { addr: value.start }
     }
 }
 

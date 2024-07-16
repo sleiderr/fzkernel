@@ -74,7 +74,13 @@ impl PageTableEntry {
     }
 
     /// Maps this entry to the given physical memory [`Frame`], and updates the entry flags.
-    pub fn map_to_frame(&mut self, frame: Frame, flags: PageTableFlags) {}
+    pub fn map_to_frame(
+        &mut self,
+        frame: Frame,
+        flags: PageTableFlags,
+    ) -> CanFail<PageMappingError> {
+        self.map_to_addr(frame.addr, flags)
+    }
 
     /// Maps this entry to the physical memory [`Frame`] starting at the given address.
     ///

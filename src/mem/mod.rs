@@ -12,6 +12,8 @@ use conquer_once::spin::OnceCell;
 
 pub mod bmalloc;
 pub mod e820;
+pub mod kernel_sec;
+pub mod stack;
 pub mod utils;
 #[cfg(feature = "x86_64")]
 pub mod vmalloc;
