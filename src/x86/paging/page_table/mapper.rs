@@ -1,10 +1,12 @@
 use crate::kernel_syms::PAGE_SIZE;
 use crate::mem::{MemoryAddress, PhyAddr, VirtAddr};
+use crate::println;
 use crate::x86::paging::page_alloc::frame_alloc::alloc_page;
 use crate::x86::paging::page_table::translate::Translator;
 use crate::x86::paging::page_table::{PageTable, PageTableEntry, PageTableFlags};
 use crate::x86::paging::{Frame, Page, PageTableCreationError};
 use alloc::boxed::Box;
+use core::arch::asm;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 
@@ -41,7 +43,7 @@ pub trait MemoryMapping: Copy + Clone {
     fn convert(&self, phys: PhyAddr) -> VirtAddr;
 }
 
-pub(crate) struct PageTableMapper<T: Translator, M: MemoryMapping> {
+pub struct PageTableMapper<T: Translator, M: MemoryMapping> {
     pub(in crate::x86::paging) pml4: ManuallyDrop<Box<PageTable>>,
     phys_mapping: M,
     translator: PhantomData<T>,
@@ -371,6 +373,149 @@ impl<T: Translator, M: MemoryMapping> PageTableMapper<T, M> {
             }
         }
     }
+
+    pub unsafe fn unmap_physical_memory(&mut self, virt_base: VirtAddr, len: usize) {
+        let table = self.pml4.as_mut();
+
+        let phys_memory_base_translation = T::translate_address(virt_base);
+
+        let last_phys_memory_addr_translation = T::translate_address(virt_base + len);
+
+        for map_entry_id in phys_memory_base_translation.pml4_offset()
+            ..last_phys_memory_addr_translation.pml4_offset() + 1
+        {
+            let curr_phys_offset_map_level =
+                u64::from(map_entry_id - phys_memory_base_translation.pml4_offset())
+                    * 0x1000
+                    * 0x200
+                    * 0x200
+                    * 0x200;
+            let mut idx_range = 0..0x200;
+
+            if map_entry_id == phys_memory_base_translation.pml4_offset() {
+                idx_range.start = phys_memory_base_translation.pdpte_offset();
+            }
+
+            if map_entry_id == last_phys_memory_addr_translation.pml4_offset() {
+                idx_range.end = last_phys_memory_addr_translation.pdpte_offset() + 1;
+            }
+
+            let page_table_dir = if table.get_mut(map_entry_id).used() {
+                PageTableMapper::<T, M>::get_next_table(
+                    self.phys_mapping,
+                    table.get_mut(map_entry_id),
+                )
+                .unwrap()
+            } else {
+                return;
+            };
+
+            let idx_range_start = idx_range.start;
+
+            for directory_ptr_table_entry_id in idx_range {
+                let curr_phys_offset_dir_ptr_level =
+                    u64::from(directory_ptr_table_entry_id - idx_range_start)
+                        * 0x1000
+                        * 0x200
+                        * 0x200;
+                let directory_ptr_table_entry =
+                    if page_table_dir.get_mut(directory_ptr_table_entry_id).used() {
+                        PageTableMapper::<T, M>::get_next_table(
+                            self.phys_mapping,
+                            page_table_dir.get_mut(directory_ptr_table_entry_id),
+                        )
+                        .unwrap()
+                    } else {
+                        continue;
+                    };
+
+                let mut directory_idx_range = 0..0x200;
+
+                if map_entry_id == phys_memory_base_translation.pml4_offset()
+                    && directory_ptr_table_entry_id == phys_memory_base_translation.pdpte_offset()
+                {
+                    directory_idx_range.start = phys_memory_base_translation.pde_offset();
+                }
+
+                if map_entry_id == last_phys_memory_addr_translation.pml4_offset()
+                    && directory_ptr_table_entry_id
+                        == last_phys_memory_addr_translation.pdpte_offset()
+                {
+                    directory_idx_range.end = last_phys_memory_addr_translation.pde_offset() + 1;
+                }
+
+                let directory_idx_range_start = directory_idx_range.start;
+
+                for directory_entry_id in directory_idx_range {
+                    let curr_phys_offset_dir_level =
+                        u64::from(directory_entry_id - directory_idx_range_start) * 0x1000 * 0x200;
+                    let mut table_entry_range = 0..0x200;
+
+                    if map_entry_id == phys_memory_base_translation.pml4_offset()
+                        && directory_ptr_table_entry_id
+                            == phys_memory_base_translation.pdpte_offset()
+                        && directory_entry_id == phys_memory_base_translation.pde_offset()
+                    {
+                        table_entry_range.start = phys_memory_base_translation.pte_offset();
+                    }
+
+                    if map_entry_id == last_phys_memory_addr_translation.pml4_offset()
+                        && directory_ptr_table_entry_id
+                            == last_phys_memory_addr_translation.pdpte_offset()
+                        && directory_entry_id == last_phys_memory_addr_translation.pde_offset()
+                    {
+                        table_entry_range.end = last_phys_memory_addr_translation.pte_offset() + 1;
+                    }
+
+                    let directory_entry = directory_ptr_table_entry.get_mut(directory_entry_id);
+                    if directory_entry.used() && directory_entry.flags().huge_page() {
+                        *directory_entry = PageTableEntry::EMPTY_ENTRY;
+                        invalidate_tlb_entry(
+                            virt_base
+                                + VirtAddr::new(
+                                    curr_phys_offset_map_level
+                                        + curr_phys_offset_dir_ptr_level
+                                        + curr_phys_offset_dir_level,
+                                ),
+                        )
+                    } else {
+                        let directory_entry =
+                            if directory_ptr_table_entry.get_mut(directory_entry_id).used() {
+                                PageTableMapper::<T, M>::get_next_table(
+                                    self.phys_mapping,
+                                    directory_ptr_table_entry.get_mut(directory_entry_id),
+                                )
+                                .unwrap()
+                            } else {
+                                continue;
+                            };
+                        let table_entry_range_start = table_entry_range.start;
+
+                        for table_entry_id in table_entry_range {
+                            let curr_phys_offset_page_level =
+                                u64::from(table_entry_id - table_entry_range_start) * 0x1000;
+                            *directory_entry.get_mut(table_entry_id) = PageTableEntry::EMPTY_ENTRY;
+
+                            invalidate_tlb_entry(
+                                virt_base
+                                    + VirtAddr::new(
+                                        curr_phys_offset_map_level
+                                            + curr_phys_offset_dir_ptr_level
+                                            + curr_phys_offset_dir_level
+                                            + curr_phys_offset_page_level,
+                                    ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn invalidate_tlb_entry(mem: VirtAddr) {
+    let mem_ptr = mem.as_mut_ptr::<u8>();
+    unsafe { asm!("invlpg [{}]", in(reg) mem_ptr) }
 }
 
 #[derive(Debug)]

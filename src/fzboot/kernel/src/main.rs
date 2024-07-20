@@ -17,11 +17,11 @@ use fzboot::{
     mem::{
         bmalloc::heap::LockedBuddyAllocator, e820::E820MemoryMap,
         kernel_sec::enable_kernel_mem_sec, stack::get_kernel_stack_allocator, MemoryAddress,
-        PhyAddr,
+        PhyAddr, VirtAddr,
     },
     video,
     x86::paging::{
-        init_global_mapper,
+        get_memory_mapper, init_global_mapper,
         page_alloc::frame_alloc::init_phys_memory_pool,
         page_table::mapper::{MemoryMapping, PhysicalMemoryMapping},
     },
@@ -57,11 +57,11 @@ pub extern "C" fn _start() -> ! {
         core::ptr::read(mb_information_ptr as *const mb_information::MultibootInformation)
     };
 
-    video::vesa::init_text_buffer_from_multiboot(mb_information.framebuffer().unwrap());
     unsafe {
         mem_init(&mb_information);
     }
 
+    video::vesa::init_text_buffer_from_multiboot(mb_information.framebuffer().unwrap());
     let kernel_stack = get_kernel_stack_allocator().lock().alloc_stack();
 
     unsafe {
@@ -77,6 +77,13 @@ pub extern "C" fn _start() -> ! {
 #[no_mangle]
 #[inline(never)]
 extern "C" fn _kmain() -> ! {
+    unsafe {
+        get_memory_mapper()
+            .lock()
+            .unmap_physical_memory(VirtAddr::new(0), 0x400_000_000);
+    }
+    enable_kernel_mem_sec();
+    loop {}
     unsafe {
         get_interrupt_manager().load_idt();
     }
@@ -95,7 +102,6 @@ unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
 
     init_phys_memory_pool(memory_map);
     init_global_mapper(PhyAddr::new(0x200_000));
-    enable_kernel_mem_sec();
 }
 
 #[panic_handler]

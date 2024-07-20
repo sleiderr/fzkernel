@@ -593,7 +593,7 @@ pub fn cpu_id_support() -> bool {
             // Push it again, this time to modify it.
             "pushfq",
             // We flip the bit 21 of the EFLAGS register.
-            "xor dword ptr [esp], 0x200000",
+            "xor dword ptr [rsp], 0x200000",
             // We put it back in the EFLAGS register.
             "popfq",
             // We push it again, to check if the bit flip succeeded.
@@ -601,7 +601,7 @@ pub fn cpu_id_support() -> bool {
             // We put the initial EFLAGS value into eax.
             "pop rax",
             // And finally we compare it to the value after the bit flip.
-            "xor eax, [esp]",
+            "xor eax, [rsp]",
             "popfq",
             // If eax != 0, the bit flip was successful.
             "and eax, 0x200000",

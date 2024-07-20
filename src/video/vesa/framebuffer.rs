@@ -13,7 +13,7 @@ use unifont::{get_glyph, Glyph};
 
 use crate::{
     boot::multiboot::mb_information::FramebufferMultibootInformation,
-    mem::MemoryAddress,
+    mem::{MemoryAddress, VirtAddr},
     video::vesa::video_mode::{ModeInfoBlock, PixelLayout},
 };
 
@@ -136,7 +136,10 @@ impl<'b> TextFrameBuffer<'b> {
     /// Creates a `TextFrameBuffer` from information provided in a [`MultibootInformation`] block.
     ///
     /// The VESA mode must support a linear framebuffer.
-    pub fn from_multiboot_info(info: &FramebufferMultibootInformation) -> Self {
+    pub fn from_multiboot_info(
+        info: &FramebufferMultibootInformation,
+        mapping_addr: VirtAddr,
+    ) -> Self {
         let pixel_layout = match (
             info.red_field_pos,
             info.green_field_pos,
@@ -155,11 +158,9 @@ impl<'b> TextFrameBuffer<'b> {
             bg_color: Some(DEFAULT_BG_COLOR),
         };
 
-        let framebuffer_addr = info.addr;
-
         let buffer = unsafe {
             slice::from_raw_parts_mut(
-                framebuffer_addr.as_mut_ptr::<u8>(),
+                mapping_addr.as_mut_ptr::<u8>(),
                 (info.bpp as usize >> 3) * info.height as usize * info.width as usize,
             )
         };
