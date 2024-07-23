@@ -50,9 +50,9 @@ pub struct PageTableMapper<T: Translator, M: MemoryMapping> {
 }
 
 impl<T: Translator, M: MemoryMapping> PageTableMapper<T, M> {
-    pub(crate) unsafe fn new_from_raw(table_ptr: *mut PageTable, mapping: M) -> Self {
+    pub(crate) unsafe fn new_from_raw(table_ptr: PhyAddr, mapping: M) -> Self {
         Self {
-            pml4: ManuallyDrop::new(Box::from_raw(table_ptr)),
+            pml4: ManuallyDrop::new(Box::from_raw(mapping.convert(table_ptr).as_mut_ptr())),
             phys_mapping: mapping,
             translator: PhantomData,
         }

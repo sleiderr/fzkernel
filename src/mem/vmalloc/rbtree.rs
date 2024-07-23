@@ -204,6 +204,7 @@ impl<P: NodePayload> RbTree<P> {
                 walker = walker.get_node().right;
             }
         }
+
         if closest_size_match < value || closest_size_match == u64::MAX {
             return None;
         }

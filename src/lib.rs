@@ -68,5 +68,10 @@ pub mod kernel_syms {
 
     pub const KERNEL_STACK_MAPPING_BASE: VirtAddr = VirtAddr::new(0xFFFF_9000_0000_0000);
 
+    pub const KERNEL_HEAP_BASE: VirtAddr = VirtAddr::new(0xFFFF_B000_0000_0000);
+
+    #[cfg(target_pointer_width = "64")]
+    pub const KERNEL_HEAP_SIZE: usize = 0xBAB_0000_0000;
+
     pub const PAGE_SIZE: usize = 0x1000;
 }

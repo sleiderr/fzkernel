@@ -15,9 +15,11 @@ use fzboot::{
     exceptions::{panic::panic_entry_no_exception, register_exception_handlers},
     irq::manager::get_interrupt_manager,
     mem::{
-        bmalloc::heap::LockedBuddyAllocator, e820::E820MemoryMap,
-        kernel_sec::enable_kernel_mem_sec, stack::get_kernel_stack_allocator, MemoryAddress,
-        PhyAddr, VirtAddr,
+        e820::E820MemoryMap,
+        kernel_sec::enable_kernel_mem_sec,
+        stack::get_kernel_stack_allocator,
+        vmalloc::{init_kernel_heap, SyncKernelHeapAllocator},
+        MemoryAddress, PhyAddr, VirtAddr,
     },
     video,
     x86::paging::{
@@ -27,23 +29,8 @@ use fzboot::{
     },
 };
 
-static mut DEFAULT_HEAP_ADDR: usize = 0x5000000;
-const DEFAULT_HEAP_SIZE: usize = 0x1000000;
-
-/// Minimum heap size: 16KiB
-const MIN_HEAP_SIZE: usize = 0x4000;
-
-/// Maximum heap size: 2GiB
-const MAX_HEAP_SIZE: usize = 0x80000000;
-
-/// Default stack size, if enough RAM is available: 8 MiB
-const STACK_SIZE: usize = 0x800000;
-
 #[global_allocator]
-pub static BUDDY_ALLOCATOR: LockedBuddyAllocator<16> = LockedBuddyAllocator::new(
-    NonNull::new(unsafe { DEFAULT_HEAP_ADDR as *mut u8 }).unwrap(),
-    DEFAULT_HEAP_SIZE,
-);
+pub static KERNEL_HEAP_ALLOCATOR: SyncKernelHeapAllocator = SyncKernelHeapAllocator::new();
 
 #[no_mangle]
 #[link_section = ".start"]
@@ -80,7 +67,7 @@ extern "C" fn _kmain() -> ! {
     unsafe {
         get_memory_mapper()
             .lock()
-            .unmap_physical_memory(VirtAddr::new(0), 0x400_000_000);
+            .unmap_physical_memory(VirtAddr::new(0), 0x1_000_000);
     }
     enable_kernel_mem_sec();
     loop {}
@@ -102,6 +89,7 @@ unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
 
     init_phys_memory_pool(memory_map);
     init_global_mapper(PhyAddr::new(0x200_000));
+    init_kernel_heap();
 }
 
 #[panic_handler]

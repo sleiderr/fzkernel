@@ -29,7 +29,7 @@ pub unsafe fn init_global_mapper(page_table_address: PhyAddr) {
 
     VIRT_MEMORY_MAPPER.init_once(|| {
         Mutex::new(PageTableMapper::new_from_raw(
-            page_table_address.as_mut_ptr(),
+            page_table_address,
             PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING,
         ))
     });
@@ -43,7 +43,7 @@ pub unsafe fn init_global_mapper(page_table_address: PhyAddr) {
             VirtAddr::NULL_PTR,
             PageTableFlags::new().with_write(true),
             PageTableFlags::new().with_write(true),
-            0x400_000_000,
+            0x1_000_000,
         );
 
     VIRT_MEMORY_MAPPER

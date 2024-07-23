@@ -7,7 +7,7 @@ use core::{
 use crate::{
     kernel_syms::PAGE_SIZE,
     mem::{vmalloc::rbtree::Node, Alignment, MemoryAddress, VirtAddr},
-    x86::paging::page_alloc::frame_alloc::alloc_page,
+    x86::paging::{get_memory_mapper, page_alloc::frame_alloc::alloc_page, PageTableFlags},
 };
 
 use super::rbtree::{NodeColor, NodeLink, NodePayload, RbTree};
@@ -22,10 +22,13 @@ pub struct KernelHeapAllocator {
     unmapped_alloc_tree: RbTree<AllocHeader>,
 }
 
-#[repr(transparent)]
+unsafe impl Send for KernelHeapAllocator {}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AllocHeader {
     inner: u64,
+    extra: u64,
 }
 
 impl AllocHeader {
@@ -37,16 +40,28 @@ impl AllocHeader {
         self.inner &= !0x1;
     }
 
+    pub(crate) fn is_mapped(&self) -> bool {
+        self.inner & 0b1000 != 0
+    }
+
+    pub(crate) fn set_mapped(&mut self, mapped: bool) {
+        if mapped {
+            self.inner |= 0b1000;
+        } else {
+            self.inner &= !0b1000;
+        }
+    }
+
     pub(crate) fn is_allocated(&self) -> bool {
         self.inner & 0x1 != 0
     }
 
     pub(crate) fn get_size(&self) -> u64 {
-        self.inner & !0b111
+        self.inner & !0b1111
     }
 
     pub(crate) fn set_size(&mut self, size: u64) {
-        let header_attr = self.inner & 0b111;
+        let header_attr = self.inner & 0b1111;
         self.inner = size | header_attr;
     }
 
@@ -64,7 +79,7 @@ impl AllocHeader {
 }
 
 impl NodePayload for AllocHeader {
-    const NULL: Self = Self { inner: 0 };
+    const NULL: Self = Self { inner: 0, extra: 0 };
 
     fn get_color(&self) -> super::rbtree::NodeColor {
         if (self.inner >> 2) & 0x1 == 0 {
@@ -103,8 +118,9 @@ struct BlockMergeResult {
 }
 
 impl KernelHeapAllocator {
-    const MIN_KHEAP_ALIGN: usize = 0b1000;
-    const MIN_BLOCK_SIZE: u64 = 0x40;
+    const MIN_KHEAP_ALIGN: u64 = 0b10000;
+    const MIN_BLOCK_SIZE: u64 = 0x80;
+    const MIN_ALLOC_SIZE: usize = 0x40;
 
     pub(crate) unsafe fn init(heap_start: VirtAddr, heap_size: usize) -> Self {
         assert!(
@@ -120,16 +136,18 @@ impl KernelHeapAllocator {
         let heap_end = heap_start + heap_size - 2 * size_of::<Node<AllocHeader>>();
 
         let mut unmapped_alloc_tree: RbTree<AllocHeader> =
-            RbTree::new_raw(heap_start + size_of::<Node<AllocHeader>>(), heap_end);
+            RbTree::new_raw(heap_start, heap_end - size_of::<Node<AllocHeader>>());
 
         let mut mapped_alloc_tree: RbTree<AllocHeader> =
-            RbTree::new_raw(heap_start, heap_end + size_of::<Node<AllocHeader>>());
+            RbTree::new_raw(heap_end, heap_end + size_of::<Node<AllocHeader>>());
 
         unmapped_alloc_tree
             .black_nil
             .get_node_mut()
             .header
             .allocate();
+
+        mapped_alloc_tree.black_nil.get_node_mut().header.allocate();
 
         let mut heap = Self {
             start: heap_start,
@@ -141,16 +159,14 @@ impl KernelHeapAllocator {
 
         heap.init_node_header(
             heap.unmapped_alloc_tree.root,
-            u64::try_from(heap_size - (size_of::<Node<AllocHeader>>() + size_of::<AllocHeader>()))
-                .expect("infallible conversion"),
+            u64::try_from(heap_size - (PAGE_SIZE >> 1)).expect("infallible conversion"),
         );
 
         heap.init_node_header(heap.mapped_alloc_tree.root, 0);
 
         heap.init_node_end(
             heap.unmapped_alloc_tree.root,
-            u64::try_from(heap_size - (size_of::<Node<AllocHeader>>() + size_of::<AllocHeader>()))
-                .expect("infallible conversion"),
+            u64::try_from(heap_size - (PAGE_SIZE >> 1)).expect("infallible conversion"),
         );
 
         heap.init_node_end(heap.mapped_alloc_tree.root, 0);
@@ -159,13 +175,20 @@ impl KernelHeapAllocator {
     }
 
     pub(crate) unsafe fn kalloc_layout(&mut self, alloc_layout: Layout) -> VirtAddr {
-        let (alloc_size, alloc_align) = (alloc_layout.size(), alloc_layout.align());
+        let (mut alloc_size, alloc_align) = (alloc_layout.size(), alloc_layout.align());
 
         if alloc_size == 0 {
             return VirtAddr::NULL_PTR;
         }
 
-        let alloc_size64 = u64::try_from(alloc_size).expect("infallible conversion");
+        if alloc_align < Self::MIN_ALLOC_SIZE {
+            alloc_size = Self::MIN_ALLOC_SIZE;
+        }
+
+        let alloc_size64 =
+            self.alloc_size_req_align(u64::try_from(alloc_size).expect("infallible conversion"));
+
+        alloc_size = usize::try_from(alloc_size64).expect("invalid block allocation size");
 
         match self.mapped_alloc_tree.find_best_node_fit(alloc_size64) {
             Some(node) => self.split_alloc(node, alloc_size),
@@ -174,7 +197,7 @@ impl KernelHeapAllocator {
                     alloc_size / PAGE_SIZE + 1
                 } else {
                     alloc_size / PAGE_SIZE
-                };
+                } * PAGE_SIZE;
 
                 let page_aligned_alloc_size64 =
                     u64::try_from(page_aligned_alloc_size).expect("infallible conversion");
@@ -195,7 +218,8 @@ impl KernelHeapAllocator {
             return;
         }
 
-        let mut merge_result = self.merge_scan_neighbors(self.get_node_from_block_addr(block));
+        let mut merge_result =
+            self.merge_scan_neighbors(self.get_node_from_block_addr(block), true);
 
         self.merge(&mut merge_result, true);
         self.init_free_node(
@@ -203,6 +227,15 @@ impl KernelHeapAllocator {
             merge_result.current.get_node().header.get_size(),
             true,
         );
+    }
+
+    #[inline]
+    fn alloc_size_req_align(&self, size_req: u64) -> u64 {
+        if size_req % Self::MIN_KHEAP_ALIGN != 0 {
+            (size_req & !(Self::MIN_KHEAP_ALIGN - 1)) + Self::MIN_KHEAP_ALIGN
+        } else {
+            size_req
+        }
     }
 
     unsafe fn split_alloc_and_map(
@@ -213,20 +246,31 @@ impl KernelHeapAllocator {
         let block_size = free_block.get_node().header.get_size();
         let size_req_64 = u64::try_from(size_req).expect("infallible conversion");
 
-        let page_aligned_alloc_size = if size_req % PAGE_SIZE != 0 {
-            size_req / PAGE_SIZE + 1
-        } else {
-            size_req / PAGE_SIZE
-        } * PAGE_SIZE;
+        let page_aligned_start_addr = VirtAddr::new(
+            (u64::from(free_block.addr())
+                & !(u64::try_from(PAGE_SIZE).expect("infallible conversion") - 1))
+                + u64::try_from(PAGE_SIZE).unwrap(),
+        );
+
+        let page_aligned_alloc_size = (size_req / PAGE_SIZE + 1) * PAGE_SIZE;
 
         let pages = match alloc_page(page_aligned_alloc_size) {
             Ok(ptr) => ptr,
             Err(_) => return VirtAddr::NULL_PTR,
         };
 
-        // TODO: map physical pages to memory block
+        let extra_alloc_size = pages.length - size_req;
+
+        get_memory_mapper().lock().map_physical_memory(
+            pages.start,
+            page_aligned_start_addr,
+            PageTableFlags::new().with_write(true),
+            PageTableFlags::new(),
+            pages.length,
+        );
 
         if block_size >= size_req_64 + Self::MIN_BLOCK_SIZE {
+            let right_neighbor = self.get_block_right_neighbor(free_block, size_req_64);
             self.init_free_node(
                 self.get_block_right_neighbor(free_block, size_req_64),
                 block_size
@@ -234,6 +278,11 @@ impl KernelHeapAllocator {
                     - u64::try_from(size_of::<AllocHeader>()).expect("infallible conversion"),
                 false,
             );
+
+            self.get_block_right_neighbor(free_block, size_req_64)
+                .get_node_mut()
+                .header
+                .set_mapped(false);
             self.init_node_header(free_block, size_req_64);
             free_block.get_node_mut().header.allocate();
 
@@ -266,6 +315,10 @@ impl KernelHeapAllocator {
                 true,
             );
             self.init_node_header(free_block, size_req_64);
+            self.get_block_right_neighbor(free_block, size_req_64)
+                .get_node_mut()
+                .header
+                .set_mapped(true);
             free_block.get_node_mut().header.allocate();
 
             return self.get_block_start_addr(free_block);
@@ -280,7 +333,7 @@ impl KernelHeapAllocator {
         self.get_block_start_addr(free_block)
     }
 
-    fn merge_scan_neighbors(&self, node: NodeLink<AllocHeader>) -> BlockMergeResult {
+    fn merge_scan_neighbors(&self, node: NodeLink<AllocHeader>, mapped: bool) -> BlockMergeResult {
         let start_size = node.get_node().header.get_size();
         let mut merge_result = BlockMergeResult {
             current: node,
@@ -291,7 +344,9 @@ impl KernelHeapAllocator {
 
         let right_node = unsafe { self.get_block_right_neighbor(node, start_size) };
 
-        if !right_node.get_node().header.is_allocated() {
+        if !right_node.get_node().header.is_allocated()
+            && mapped == right_node.get_node().header.is_mapped()
+        {
             merge_result.new_size += right_node.get_node().header.get_size()
                 + u64::try_from(size_of::<AllocHeader>()).expect("infallible conversion");
 
