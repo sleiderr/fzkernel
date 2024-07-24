@@ -16,8 +16,10 @@ use core::fmt::{self, Write};
 use core::ptr;
 
 use crate::boot::multiboot::mb_information::FramebufferMultibootInformation;
+use crate::mem::VirtAddr;
 use crate::video::vesa::framebuffer::{LockedTextFrameBuffer, RgbaColor, TextFrameBuffer};
 use crate::video::vesa::video_mode::{ModeInfoBlock, VESA_MODE_BUFFER};
+use crate::x86::paging::{get_memory_mapper, PageTableFlags};
 
 #[macro_use]
 pub mod video_mode;
@@ -41,8 +43,24 @@ pub fn init_text_buffer_from_vesa() {
 }
 
 pub fn init_text_buffer_from_multiboot(header: FramebufferMultibootInformation) {
+    let framebuffer_addr = header.addr;
+    let framebuffer_size =
+        (header.bpp as usize >> 3) * header.height as usize * header.width as usize;
+    let mapping_addr = VirtAddr::new(0xFFFF_D800_0000_000);
+
+    let page_flags = PageTableFlags::new().with_cache_disable(true);
+    unsafe {
+        get_memory_mapper().lock().map_physical_memory(
+            framebuffer_addr,
+            mapping_addr,
+            page_flags,
+            PageTableFlags::new(),
+            framebuffer_size,
+        )
+    }
+
     TEXT_BUFFER.init_once(|| {
-        let framebuffer = TextFrameBuffer::from_multiboot_info(&header);
+        let framebuffer = TextFrameBuffer::from_multiboot_info(&header, mapping_addr);
         LockedTextFrameBuffer::new(framebuffer)
     });
 }

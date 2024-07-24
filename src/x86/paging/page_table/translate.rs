@@ -23,7 +23,7 @@ impl PageTableAddress {
     }
 }
 
-pub(crate) struct PageAddressTranslator {}
+pub struct PageAddressTranslator {}
 
 impl Translator for PageAddressTranslator {
     fn translate_address(virt_addr: VirtAddr) -> PageTableAddress {
@@ -41,6 +41,6 @@ impl Translator for PageAddressTranslator {
     }
 }
 
-pub(crate) trait Translator {
+pub trait Translator {
     fn translate_address(virt_addr: VirtAddr) -> PageTableAddress;
 }

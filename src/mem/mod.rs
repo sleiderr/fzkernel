@@ -4,18 +4,64 @@ use alloc::format;
 use bytemuck::{Pod, Zeroable};
 use core::cell::UnsafeCell;
 use core::fmt::{Display, Formatter};
-use core::ops::{Add, AddAssign, BitAnd, Rem, Shr};
+use core::ops::{Add, AddAssign, BitAnd, Rem, Shr, Sub};
 use core::ptr;
 use core::ptr::NonNull;
 
-use crate::Convertible;
 use conquer_once::spin::OnceCell;
+
+use crate::x86::paging::page_table::mapper::{MemoryMapping, PhysicalMemoryMapping};
 
 pub mod bmalloc;
 pub mod e820;
+pub mod kernel_sec;
+pub mod stack;
 pub mod utils;
+#[cfg(feature = "x86_64")]
+pub mod vmalloc;
 
 pub static MEM_STRUCTURE: OnceCell<MemoryStructure> = OnceCell::uninit();
+
+/// Returns a pointer to the physical memory located at address `addr`;
+///
+/// Uses the current physical memory mappings to make direct memory access, by converting the given physical address into
+/// a virtual address than can then be used to access the underlying physical memory.
+///
+/// # Examples
+///
+/// ```
+/// let idt_ptr = get_physical_memory(PhyAddr::new(0x0));
+/// ```
+#[inline]
+pub fn get_physical_memory(addr: PhyAddr) -> *mut u8 {
+    get_physical_memory_mapping().convert(addr).as_mut_ptr()
+}
+
+/// Returns a pointer to the physical memory located at address `addr`;
+///
+/// Uses the current physical memory mappings to make direct memory access, by converting the given physical address into
+/// a virtual address than can then be used to access the underlying physical memory.
+///
+/// # Examples
+///
+/// ```
+/// let idt_ptr = get_physical_memory(PhyAddr::new(0x0));
+/// ```
+#[inline(always)]
+pub fn get_physical_memory32(addr: PhyAddr32) -> *mut u8 {
+    get_physical_memory_mapping()
+        .convert(PhyAddr::from(addr))
+        .as_mut_ptr()
+}
+
+#[inline(always)]
+fn get_physical_memory_mapping() -> PhysicalMemoryMapping {
+    #[cfg(feature = "x86_64")]
+    return PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING;
+
+    #[cfg(not(feature = "x86_64"))]
+    return PhysicalMemoryMapping::IDENTITY;
+}
 
 pub struct LocklessCell<T> {
     data: UnsafeCell<T>,
@@ -76,7 +122,9 @@ pub struct VirtAddr(u64);
 
 impl VirtAddr {
     pub const fn new(addr: u64) -> Self {
-        Self(addr % (1 << 48))
+        let sg_extd = (addr & (1 << 47)) >> 47;
+
+        Self(addr | sg_extd * (0xFFFF << 48))
     }
 
     pub fn as_ptr<T>(&self) -> *const T {
@@ -101,6 +149,30 @@ impl Add<usize> for VirtAddr {
 
     fn add(self, rhs: usize) -> Self::Output {
         VirtAddr::new(self.0 + u64::try_from(rhs).expect("infaillible conversion"))
+    }
+}
+
+impl Add<u64> for VirtAddr {
+    type Output = Self;
+
+    fn add(self, rhs: u64) -> Self::Output {
+        VirtAddr::new(self.0 + rhs)
+    }
+}
+
+impl Sub<usize> for VirtAddr {
+    type Output = Self;
+
+    fn sub(self, rhs: usize) -> Self::Output {
+        VirtAddr::new(self.0 - u64::try_from(rhs).expect("infaillible conversion"))
+    }
+}
+
+impl Sub<u64> for VirtAddr {
+    type Output = Self;
+
+    fn sub(self, rhs: u64) -> Self::Output {
+        VirtAddr::new(self.0 - rhs)
     }
 }
 
@@ -148,6 +220,10 @@ impl PhyAddr {
     pub const fn new(addr: u64) -> Self {
         Self(addr % (1 << 52))
     }
+
+    pub const fn const_mut_convert<T>(&self) -> *mut T {
+        self.0 as *mut T
+    }
 }
 
 impl Display for PhyAddr {
@@ -178,6 +254,12 @@ impl MemoryAddress for PhyAddr {
 impl From<u64> for PhyAddr {
     fn from(value: u64) -> Self {
         Self::new(value)
+    }
+}
+
+impl From<PhyAddr32> for PhyAddr {
+    fn from(value: PhyAddr32) -> Self {
+        Self::new(value.0.into())
     }
 }
 
@@ -325,11 +407,11 @@ impl MemoryAddress for PhyAddr32 {
     type AsPrimitive = u32;
 
     fn as_ptr<T>(&self) -> *const T {
-        Self::AsPrimitive::from(*self) as *const T
+        get_physical_memory32(*self) as *const T
     }
 
     fn as_mut_ptr<T>(&self) -> *mut T {
-        Self::AsPrimitive::from(*self) as *mut T
+        get_physical_memory32(*self) as *mut T
     }
 
     fn is_null(&self) -> bool {

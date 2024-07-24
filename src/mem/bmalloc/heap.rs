@@ -36,6 +36,7 @@ impl<const N: usize> LockedBuddyAllocator<N> {
 unsafe impl<const N: usize> GlobalAlloc for LockedBuddyAllocator<N> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let mut allocator = self.alloc.lock();
+
         allocator.allocate(layout)
     }
 
@@ -210,9 +211,9 @@ impl<const N: usize> BuddyAllocator<N> {
         // it's also free. We keep doing that for each level
         // until the buddy is in use.
         for level in alloc_level..self.free_lists.len() {
-            if let Some(buddy) = self.buddy(block, level as u8) {
+            if let Some(buddy) = self.buddy(full_block, level as u8) {
                 if self.remove_blk(buddy, level as u8) {
-                    full_block = cmp::min(buddy, block);
+                    full_block = cmp::min(buddy, full_block);
                     continue;
                 }
             }
@@ -221,6 +222,7 @@ impl<const N: usize> BuddyAllocator<N> {
             // list, which means it is currently in used,
             // we can stop merging here.
             self.free_blk(full_block, level as u8);
+
             return;
         }
     }
@@ -265,7 +267,7 @@ impl<const N: usize> BuddyAllocator<N> {
     /// Remove a given `FreeBlock` from free lists.
     ///
     /// Returns `false` if the operation was unsuccessful,
-    /// it usually means that the `FreeBlock is in use`.
+    /// it usually means that the `FreeBlock` is in use.
     pub fn remove_blk(&mut self, block: *mut u8, level: u8) -> bool {
         let blk_header = block as *mut FreeBlock;
 
@@ -382,7 +384,7 @@ impl<const N: usize> BuddyAllocator<N> {
 /// are not [`Send`] or [`Sync`].
 /// It does nothing but simulate the implementation
 /// of `Send` and `Sync`
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct NullLock<T: Clone + Copy> {
     inner: T,
 }

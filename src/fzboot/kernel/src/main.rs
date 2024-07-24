@@ -8,34 +8,33 @@
 
 extern crate alloc;
 
-use core::{arch::asm, panic::PanicInfo, ptr::NonNull};
+use core::{arch::asm, mem::size_of, panic::PanicInfo, ptr::NonNull};
 
 use fzboot::{
     boot::multiboot::mb_information,
     exceptions::{panic::panic_entry_no_exception, register_exception_handlers},
     irq::manager::get_interrupt_manager,
-    mem::bmalloc::heap::LockedBuddyAllocator,
+    mem::{
+        e820::E820MemoryMap,
+        kernel_sec::enable_kernel_mem_sec,
+        stack::get_kernel_stack_allocator,
+        vmalloc::{init_kernel_heap, SyncKernelHeapAllocator},
+        MemoryAddress, PhyAddr, VirtAddr,
+    },
     video,
-    x86::int::enable_interrupts,
+    x86::{
+        descriptors::gdt::{long_init_gdt, LONG_GDT_ADDR},
+        int::enable_interrupts,
+        paging::{
+            get_memory_mapper, init_global_mapper,
+            page_alloc::frame_alloc::init_phys_memory_pool,
+            page_table::mapper::{MemoryMapping, PhysicalMemoryMapping},
+        },
+    },
 };
 
-static mut DEFAULT_HEAP_ADDR: usize = 0x5000000;
-const DEFAULT_HEAP_SIZE: usize = 0x1000000;
-
-/// Minimum heap size: 16KiB
-const MIN_HEAP_SIZE: usize = 0x4000;
-
-/// Maximum heap size: 2GiB
-const MAX_HEAP_SIZE: usize = 0x80000000;
-
-/// Default stack size, if enough RAM is available: 8 MiB
-const STACK_SIZE: usize = 0x800000;
-
 #[global_allocator]
-pub static BUDDY_ALLOCATOR: LockedBuddyAllocator<16> = LockedBuddyAllocator::new(
-    NonNull::new(unsafe { DEFAULT_HEAP_ADDR as *mut u8 }).unwrap(),
-    DEFAULT_HEAP_SIZE,
-);
+pub static KERNEL_HEAP_ALLOCATOR: SyncKernelHeapAllocator = SyncKernelHeapAllocator::new();
 
 #[no_mangle]
 #[link_section = ".start"]
@@ -49,19 +48,58 @@ pub extern "C" fn _start() -> ! {
         core::ptr::read(mb_information_ptr as *const mb_information::MultibootInformation)
     };
 
-    _kmain(mb_information);
+    unsafe {
+        mem_init(&mb_information);
+    }
+
+    video::vesa::init_text_buffer_from_multiboot(mb_information.framebuffer().unwrap());
+    let kernel_stack = get_kernel_stack_allocator().lock().alloc_stack();
+
+    unsafe {
+        asm!("
+            mov rsp, {}
+            mov rbp, rsp
+        ", in(reg) kernel_stack.as_mut_ptr::<u8>());
+    }
+
+    _kmain();
 }
 
-extern "C" fn _kmain(mb_information_header: mb_information::MultibootInformation) -> ! {
-    video::vesa::init_text_buffer_from_multiboot(mb_information_header.framebuffer().unwrap());
+#[no_mangle]
+#[inline(never)]
+extern "C" fn _kmain() -> ! {
+    unsafe {
+        get_memory_mapper()
+            .lock()
+            .unmap_physical_memory(VirtAddr::new(0), 0x1_000_000);
+    }
+
+    enable_kernel_mem_sec();
 
     unsafe {
         get_interrupt_manager().load_idt();
     }
     register_exception_handlers();
+
     enable_interrupts();
 
     loop {}
+}
+
+unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
+    let memory_map = E820MemoryMap::new(
+        PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING
+            .convert(PhyAddr::from(mb_information.get_mmap_addr()))
+            .as_mut_ptr(),
+    );
+
+    long_init_gdt(
+        PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING.convert(PhyAddr::new(LONG_GDT_ADDR)),
+    );
+
+    init_phys_memory_pool(memory_map);
+    init_global_mapper(PhyAddr::new(0x200_000));
+    init_kernel_heap();
 }
 
 #[panic_handler]

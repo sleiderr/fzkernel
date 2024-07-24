@@ -2,6 +2,7 @@
 
 #[cfg(feature = "kernel")]
 mod frame_alloc;
+pub mod mapper;
 pub mod translate;
 
 use crate::errors::CanFail;
@@ -55,6 +56,7 @@ pub struct PageTableEntry {
 }
 
 impl PageTableEntry {
+    pub const EMPTY_ENTRY: Self = Self { entry: 0 };
     /// 64-bit number with all bits corresponding to the address part of the entry set.
     const ADDR_BITS: PhyAddr = PhyAddr::new(0x000f_ffff_ffff_f000);
 
@@ -68,12 +70,18 @@ impl PageTableEntry {
     #[must_use]
     pub fn frame(&self) -> Frame {
         Frame {
-            addr: PhyAddr::new(0),
+            addr: PhyAddr::new(self.entry & u64::from(Self::ADDR_BITS)),
         }
     }
 
     /// Maps this entry to the given physical memory [`Frame`], and updates the entry flags.
-    pub fn map_to_frame(&mut self, frame: Frame, flags: PageTableFlags) {}
+    pub fn map_to_frame(
+        &mut self,
+        frame: Frame,
+        flags: PageTableFlags,
+    ) -> CanFail<PageMappingError> {
+        self.map_to_addr(frame.addr, flags)
+    }
 
     /// Maps this entry to the physical memory [`Frame`] starting at the given address.
     ///

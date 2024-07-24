@@ -2,12 +2,10 @@ pub mod headers;
 
 /// Kernel loading related code.
 pub mod fzkernel {
-    pub const KERNEL_LOAD_ADDR: PhyAddr = PhyAddr::new(0x800_000);
-    pub const KERNEL_SECTOR_SZ: usize = 0x200 * 0x100;
-
     use core::cmp::min;
 
     use alloc::format;
+    use fzboot::kernel_syms::{KERNEL_LOAD_ADDR, KERNEL_SECTOR_SZ};
     use fzboot::x86::paging::bootinit_paging;
     use fzboot::{
         drivers::{
@@ -78,7 +76,7 @@ pub mod fzkernel {
         while sectors_read < KERNEL_SECTOR_SZ {
             let read = device.read(
                 partition.start_lba() + u64::try_from(sectors_read).expect("invalid sectors count"),
-                0x200,
+                0x100,
             );
             let result = read.complete();
             let read_data = result.data.expect(
@@ -97,7 +95,7 @@ pub mod fzkernel {
                 mem_slice.copy_from_slice(&read_data);
             }
 
-            sectors_read += 0x200;
+            sectors_read += 0x100;
         }
 
         info!(

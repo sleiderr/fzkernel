@@ -5,6 +5,7 @@ use crate::video::vesa::text_buffer;
 use crate::x86::apic::local_apic::local_apic;
 use crate::x86::registers::x86_64::GeneralPurposeRegisters;
 
+#[cfg(feature = "alloc")]
 pub mod manager;
 
 #[cfg(feature = "alloc")]
@@ -15,7 +16,7 @@ pub mod handlers;
 /// Interrupt handlers receive this structure as their first argument.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct InterruptStackFrame {
+pub struct InterruptStackFrame {
     /// Saved content of the `RIP` (_instruction pointer_ register) prior to the interrupt.
     pub(crate) rip: VirtAddr,
 

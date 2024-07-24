@@ -7,7 +7,7 @@
 //!
 //! Follows the _Intel 1.4 MultiProcessor Specification_
 
-use crate::mem::{MemoryAddress, PhyAddr32};
+use crate::mem::{get_physical_memory32, MemoryAddress, PhyAddr32};
 use crate::x86::apic::local_apic::{DeliveryMode, PinPolarity, ProcLocalApicID, TriggerMode};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -435,7 +435,7 @@ impl MPTable {
 
         let mp_table_header: MPConfigurationTableHeader = *from_bytes(unsafe {
             slice::from_raw_parts(
-                mp_table_ptr.as_ptr(),
+                get_physical_memory32(mp_table_ptr),
                 size_of::<MPConfigurationTableHeader>(),
             )
         });
@@ -683,9 +683,9 @@ impl MPTable {
     /// Verifies that the structure's checksum (sum of all bits being null) is valid.
     fn verify_chksum(&self) -> bool {
         let table_length = self.header.base_table_length;
-        let table_addr = self.floating_ptr.mp_table_ptr;
+        let table_addr = get_physical_memory32(self.floating_ptr.mp_table_ptr);
         let table_bytes: &[u8] =
-            unsafe { slice::from_raw_parts(table_addr.as_ptr(), usize::from(table_length)) };
+            unsafe { slice::from_raw_parts(table_addr, usize::from(table_length)) };
 
         let mut chksum = 0;
 
@@ -769,50 +769,62 @@ pub(super) struct MPFeatureInformation {
 
 /// Loads a `MP Configuration Table` ([`MPTable`]) from a memory address.
 fn load_mp_conf_entry(addr: &mut PhyAddr32) -> Option<MPConfigurationEntry> {
-    let entry_type: MPConfigurationEntryType = unsafe { *addr.as_ptr() };
+    let entry_type: MPConfigurationEntryType =
+        unsafe { *addr.as_ptr::<MPConfigurationEntryType>() };
 
     return match entry_type {
-        MPConfigurationEntryType::Processor => {
-            let entry_bytes: &[u8] =
-                unsafe { slice::from_raw_parts(addr.as_ptr(), size_of::<MPProcessorEntry>()) };
+        MPConfigurationEntryType::Processor => unsafe {
+            let entry_bytes: &[u8] = unsafe {
+                slice::from_raw_parts(get_physical_memory32(*addr), size_of::<MPProcessorEntry>())
+            };
             *addr += u32::try_from(entry_bytes.len()).expect("invalid entry size");
 
             Some(MPConfigurationEntry::Processor(*from_bytes(entry_bytes)))
-        }
+        },
 
-        MPConfigurationEntryType::Bus => {
-            let entry_bytes: &[u8] =
-                unsafe { slice::from_raw_parts(addr.as_ptr(), size_of::<MPBusEntry>()) };
+        MPConfigurationEntryType::Bus => unsafe {
+            let entry_bytes: &[u8] = unsafe {
+                slice::from_raw_parts(get_physical_memory32(*addr), size_of::<MPBusEntry>())
+            };
             *addr += u32::try_from(entry_bytes.len()).expect("invalid entry size");
 
             Some(MPConfigurationEntry::Bus(*from_bytes(entry_bytes)))
-        }
+        },
 
-        MPConfigurationEntryType::IOApic => {
-            let entry_bytes: &[u8] =
-                unsafe { slice::from_raw_parts(addr.as_ptr(), size_of::<MPIOApicEntry>()) };
+        MPConfigurationEntryType::IOApic => unsafe {
+            let entry_bytes: &[u8] = unsafe {
+                slice::from_raw_parts(get_physical_memory32(*addr), size_of::<MPIOApicEntry>())
+            };
             *addr += u32::try_from(entry_bytes.len()).expect("invalid entry size");
 
             Some(MPConfigurationEntry::IOApic(*from_bytes(entry_bytes)))
-        }
+        },
 
-        MPConfigurationEntryType::IOInterrupt => {
-            let entry_bytes: &[u8] =
-                unsafe { slice::from_raw_parts(addr.as_ptr(), size_of::<MPIOInterruptEntry>()) };
+        MPConfigurationEntryType::IOInterrupt => unsafe {
+            let entry_bytes: &[u8] = unsafe {
+                slice::from_raw_parts(
+                    get_physical_memory32(*addr),
+                    size_of::<MPIOInterruptEntry>(),
+                )
+            };
             *addr += u32::try_from(entry_bytes.len()).expect("invalid entry size");
 
             Some(MPConfigurationEntry::IOInterrupt(*from_bytes(entry_bytes)))
-        }
+        },
 
-        MPConfigurationEntryType::LocalInterrupt => {
-            let entry_bytes: &[u8] =
-                unsafe { slice::from_raw_parts(addr.as_ptr(), size_of::<MPLocalInterruptEntry>()) };
+        MPConfigurationEntryType::LocalInterrupt => unsafe {
+            let entry_bytes: &[u8] = unsafe {
+                slice::from_raw_parts(
+                    get_physical_memory32(*addr),
+                    size_of::<MPLocalInterruptEntry>(),
+                )
+            };
             *addr += u32::try_from(entry_bytes.len()).expect("invalid entry size");
 
             Some(MPConfigurationEntry::LocalInterrupt(*from_bytes(
                 entry_bytes,
             )))
-        }
+        },
 
         _ => None,
     };
@@ -834,10 +846,12 @@ pub(crate) fn locate_struct_in_mem<T: Pod + Zeroable>(
         let mut curr_addr = range.0;
 
         while curr_addr < range.1 {
-            let entry: &[u8] = unsafe { slice::from_raw_parts(curr_addr.as_ptr(), sig.len()) };
+            let entry: &[u8] =
+                unsafe { slice::from_raw_parts(get_physical_memory32(curr_addr), sig.len()) };
             if entry == sig {
-                let entry_bytes: &[u8] =
-                    unsafe { slice::from_raw_parts(curr_addr.as_ptr(), size_of::<T>()) };
+                let entry_bytes: &[u8] = unsafe {
+                    slice::from_raw_parts(get_physical_memory32(curr_addr), size_of::<T>())
+                };
 
                 return try_from_bytes(entry_bytes).ok().copied();
             }
