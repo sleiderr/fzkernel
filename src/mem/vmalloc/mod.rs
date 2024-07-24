@@ -1,3 +1,8 @@
+//! Kernel virtual memory allocator and associated data structures.
+//!
+//! `vmalloc` manages every heap allocations made in kernel-space. It mainly relies on a Red-black tree allocator, along with serveral buddy
+//! allocators. It dynamically allocates and maps physical memory when necessary.
+
 use core::alloc::GlobalAlloc;
 
 use conquer_once::spin::OnceCell;
@@ -16,28 +21,32 @@ pub(crate) mod rbtree;
 
 static KERNEL_HEAP_ALLOCATOR: OnceCell<Mutex<KernelHeapAllocator>> = OnceCell::uninit();
 
+/// Initializes the Kernel heap.
+///
+/// Creates the initial mappings required by the Kernel heap allocator `vmalloc`, and initializes the allocator.
+/// Should be only run once.
 pub unsafe fn init_kernel_heap() {
-    let initial_heap_page = alloc_page(PAGE_SIZE).unwrap();
-
-    get_memory_mapper().lock().map_physical_memory(
-        initial_heap_page.start,
-        KERNEL_HEAP_BASE,
-        PageTableFlags::new().with_write(true),
-        PageTableFlags::new(),
-        initial_heap_page.length,
-    );
-
-    let last_heap_page = alloc_page(PAGE_SIZE).unwrap();
-
-    get_memory_mapper().lock().map_physical_memory(
-        last_heap_page.start,
-        KERNEL_HEAP_BASE + KERNEL_HEAP_SIZE - PAGE_SIZE,
-        PageTableFlags::new().with_write(true),
-        PageTableFlags::new(),
-        last_heap_page.length,
-    );
-
     KERNEL_HEAP_ALLOCATOR.init_once(|| {
+        let initial_heap_page = alloc_page(PAGE_SIZE).unwrap();
+
+        get_memory_mapper().lock().map_physical_memory(
+            initial_heap_page.start,
+            KERNEL_HEAP_BASE,
+            PageTableFlags::new().with_write(true),
+            PageTableFlags::new(),
+            initial_heap_page.length,
+        );
+
+        let last_heap_page = alloc_page(PAGE_SIZE).unwrap();
+
+        get_memory_mapper().lock().map_physical_memory(
+            last_heap_page.start,
+            KERNEL_HEAP_BASE + KERNEL_HEAP_SIZE - PAGE_SIZE,
+            PageTableFlags::new().with_write(true),
+            PageTableFlags::new(),
+            last_heap_page.length,
+        );
+
         Mutex::new(KernelHeapAllocator::init(
             KERNEL_HEAP_BASE,
             KERNEL_HEAP_SIZE,

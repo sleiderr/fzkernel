@@ -22,10 +22,31 @@ pub mod vmalloc;
 
 pub static MEM_STRUCTURE: OnceCell<MemoryStructure> = OnceCell::uninit();
 
+/// Returns a pointer to the physical memory located at address `addr`;
+///
+/// Uses the current physical memory mappings to make direct memory access, by converting the given physical address into
+/// a virtual address than can then be used to access the underlying physical memory.
+///
+/// # Examples
+///
+/// ```
+/// let idt_ptr = get_physical_memory(PhyAddr::new(0x0));
+/// ```
+#[inline]
 pub fn get_physical_memory(addr: PhyAddr) -> *mut u8 {
     get_physical_memory_mapping().convert(addr).as_mut_ptr()
 }
 
+/// Returns a pointer to the physical memory located at address `addr`;
+///
+/// Uses the current physical memory mappings to make direct memory access, by converting the given physical address into
+/// a virtual address than can then be used to access the underlying physical memory.
+///
+/// # Examples
+///
+/// ```
+/// let idt_ptr = get_physical_memory(PhyAddr::new(0x0));
+/// ```
 #[inline(always)]
 pub fn get_physical_memory32(addr: PhyAddr32) -> *mut u8 {
     get_physical_memory_mapping()

@@ -1,3 +1,8 @@
+//! Main Kernel heap allocator.
+//!
+//! The actual data structures (Red-black trees) used by the allocator are defined in the [`mem::vmalloc::rbtree`]
+//! module.
+
 use core::{
     alloc::Layout,
     mem::size_of,
@@ -14,6 +19,12 @@ use super::rbtree::{NodeColor, NodeLink, NodePayload, RbTree};
 
 const MIN_HEAP_SIZE: usize = 0x1_000;
 
+/// Kernel virtual memory allocator.
+///
+/// Manages the Kernel heap virtual memory address space.
+///
+/// It relies on two Red-black tree based allocators, that track available virtual memory (mapped to physical
+/// memory or not). Takes care of mapping physical memory to virtual memory if necessary.
 pub struct KernelHeapAllocator {
     start: VirtAddr,
     end: VirtAddr,
@@ -24,6 +35,10 @@ pub struct KernelHeapAllocator {
 
 unsafe impl Send for KernelHeapAllocator {}
 
+/// Header contained in every virtual memory block, allocated or not.
+///
+/// It contains metadata relative to the Red-black tree (colour, block size, allocation status) as well as physical
+/// memory mapping information (is the block already mapped to physical memory?).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AllocHeader {
@@ -122,6 +137,9 @@ impl KernelHeapAllocator {
     const MIN_BLOCK_SIZE: u64 = 0x80;
     const MIN_ALLOC_SIZE: usize = 0x40;
 
+    /// Initializes a Kernel heap, with the provided base address and size.
+    ///
+    /// Creates the data structure used to manage memory (Red-black trees).
     pub(crate) unsafe fn init(heap_start: VirtAddr, heap_size: usize) -> Self {
         assert!(
             heap_start.is_aligned_with(Alignment::ALIGN_4KB),
@@ -174,6 +192,10 @@ impl KernelHeapAllocator {
         heap
     }
 
+    /// Allocates memory from the Kernel heap as described by the given [`Layout`].
+    ///
+    /// Returns a null pointer ([`VirtAddr::NULL_PTR`]) if the allocation failed (it usually means that
+    /// the system is running very low on memory).
     pub(crate) unsafe fn kalloc_layout(&mut self, alloc_layout: Layout) -> VirtAddr {
         let (mut alloc_size, alloc_align) = (alloc_layout.size(), alloc_layout.align());
 
@@ -213,6 +235,10 @@ impl KernelHeapAllocator {
         }
     }
 
+    /// Frees memory allocated from the Kernel heap.
+    ///
+    /// Uses the [`AllocHeader`] associated with the allocation to retrieve the allocation size, which does not necessarily need to be
+    /// tracked by the compiler.
     pub(crate) unsafe fn kfree(&mut self, block: VirtAddr) {
         if block == VirtAddr::NULL_PTR {
             return;
@@ -229,6 +255,7 @@ impl KernelHeapAllocator {
         );
     }
 
+    /// Aligns the requested allocation size with the minimum alignment required by the heap.
     #[inline]
     fn alloc_size_req_align(&self, size_req: u64) -> u64 {
         if size_req % Self::MIN_KHEAP_ALIGN != 0 {
@@ -238,6 +265,10 @@ impl KernelHeapAllocator {
         }
     }
 
+    /// Splits a virtual memory block to match the requested allocation size (`size_req`). Maps the memory block to be returned
+    /// to the user to physical memory as well.
+    ///
+    /// This must be used when retrieving a block from the unmapped tree.
     unsafe fn split_alloc_and_map(
         &mut self,
         free_block: NodeLink<AllocHeader>,
@@ -269,6 +300,7 @@ impl KernelHeapAllocator {
             pages.length,
         );
 
+        // block can only be split if the new block will be at least as big as then minimum block size
         if block_size >= size_req_64 + Self::MIN_BLOCK_SIZE {
             let right_neighbor = self.get_block_right_neighbor(free_block, size_req_64);
             self.init_free_node(
@@ -298,6 +330,9 @@ impl KernelHeapAllocator {
         self.get_block_start_addr(free_block)
     }
 
+    /// Splits a virtual memory block to match the requested allocation size (`size_req`).
+    ///
+    /// Assumes that the memory is already mapped, this must be used when retrieving a block from the mapped tree.
     unsafe fn split_alloc(
         &mut self,
         free_block: NodeLink<AllocHeader>,
