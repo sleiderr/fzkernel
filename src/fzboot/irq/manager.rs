@@ -41,6 +41,7 @@ use crate::{
             idt::{GateDescriptor, GateType, InterruptDescriptorTable},
         },
         int::{disable_interrupts, enable_interrupts, interrupts_disabled},
+        paging::page_table::mapper::{MemoryMapping, PhysicalMemoryMapping},
         privilege::PrivilegeLevel,
     },
 };
@@ -66,7 +67,7 @@ use super::handlers::{
 /// ```
 #[cfg(feature = "x86_64")]
 #[inline(always)]
-pub fn get_interrupt_manager() -> &'static InterruptManager<PhyAddr> {
+pub fn get_interrupt_manager() -> &'static InterruptManager<VirtAddr> {
     get_long_interrupt_manager()
 }
 
@@ -106,7 +107,7 @@ pub fn get_interrupt_manager() -> &'static InterruptManager<PhyAddr32> {
 pub fn get_prot_interrupt_manager() -> &'static InterruptManager<PhyAddr32> {
     static INT_MANAGER: OnceCell<InterruptManager<PhyAddr32>> = OnceCell::uninit();
 
-    INT_MANAGER.get_or_init(|| InterruptManager::new())
+    INT_MANAGER.get_or_init(|| InterruptManager::new(PhyAddr32::NULL_PTR))
 }
 
 /// Returns a `64-bit` compatible `InterruptManager`, to be used in protected mode.
@@ -123,10 +124,14 @@ pub fn get_prot_interrupt_manager() -> &'static InterruptManager<PhyAddr32> {
 ///     int_mgr.load_idt();
 /// }
 /// ```
-pub fn get_long_interrupt_manager() -> &'static InterruptManager<PhyAddr> {
-    static INT_MANAGER: OnceCell<InterruptManager<PhyAddr>> = OnceCell::uninit();
+pub fn get_long_interrupt_manager() -> &'static InterruptManager<VirtAddr> {
+    static INT_MANAGER: OnceCell<InterruptManager<VirtAddr>> = OnceCell::uninit();
 
-    INT_MANAGER.get_or_init(|| InterruptManager::new())
+    INT_MANAGER.get_or_init(|| {
+        InterruptManager::new(
+            PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING.convert(PhyAddr::NULL_PTR),
+        )
+    })
 }
 
 /// The `InterruptManager` provides an interface to interact with the system `IDT` (_Interrupt Descriptor Table_).
@@ -145,9 +150,9 @@ pub struct InterruptManager<A: MemoryAddress> {
 }
 
 impl<A: MemoryAddress> InterruptManager<A> {
-    fn new() -> Self {
+    fn new(base_addr: A) -> Self {
         let imgr = Self {
-            idt: Mutex::new(InterruptDescriptorTable::new(A::NULL_PTR)),
+            idt: Mutex::new(InterruptDescriptorTable::new(base_addr)),
             handler_registry: RwLock::new(BTreeMap::new()),
         };
 

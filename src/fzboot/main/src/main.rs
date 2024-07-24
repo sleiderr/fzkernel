@@ -18,10 +18,10 @@ use fzboot::drivers::ide::AtaDeviceIdentifier;
 use fzboot::fs::partitions::mbr;
 use fzboot::irq::manager::{get_interrupt_manager, get_prot_interrupt_manager};
 use fzboot::mem::e820::{e820_entries_bootloader, E820_MAP_ADDR};
-use fzboot::mem::{MemoryAddress, VirtAddr};
+use fzboot::mem::{MemoryAddress, PhyAddr, VirtAddr};
 use fzboot::video::vesa::{init_text_buffer_from_vesa, text_buffer};
 use fzboot::x86::apic::InterruptVector;
-use fzboot::x86::descriptors::gdt::long_init_gdt;
+use fzboot::x86::descriptors::gdt::{long_init_gdt, LONG_GDT_ADDR};
 use fzboot::x86::int::enable_interrupts;
 use fzboot::x86::paging::bootinit_paging;
 use fzboot::{
@@ -85,7 +85,7 @@ pub fn boot_main() -> ! {
     info!("kernel", "jumping to kernel main (addr = 0x80000)");
 
     unsafe {
-        long_init_gdt();
+        long_init_gdt(PhyAddr::new(LONG_GDT_ADDR));
         asm!("mov ecx, {}", in(reg) mb_information_hdr_addr);
         asm!("mov ebp, 0", "push 0x10", "push 0x800000", "retf");
         core::unreachable!();

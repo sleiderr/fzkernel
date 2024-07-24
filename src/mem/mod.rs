@@ -10,6 +10,8 @@ use core::ptr::NonNull;
 
 use conquer_once::spin::OnceCell;
 
+use crate::x86::paging::page_table::mapper::{MemoryMapping, PhysicalMemoryMapping};
+
 pub mod bmalloc;
 pub mod e820;
 pub mod kernel_sec;
@@ -19,6 +21,26 @@ pub mod utils;
 pub mod vmalloc;
 
 pub static MEM_STRUCTURE: OnceCell<MemoryStructure> = OnceCell::uninit();
+
+pub fn get_physical_memory(addr: PhyAddr) -> *mut u8 {
+    get_physical_memory_mapping().convert(addr).as_mut_ptr()
+}
+
+#[inline(always)]
+pub fn get_physical_memory32(addr: PhyAddr32) -> *mut u8 {
+    get_physical_memory_mapping()
+        .convert(PhyAddr::from(addr))
+        .as_mut_ptr()
+}
+
+#[inline(always)]
+fn get_physical_memory_mapping() -> PhysicalMemoryMapping {
+    #[cfg(feature = "x86_64")]
+    return PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING;
+
+    #[cfg(not(feature = "x86_64"))]
+    return PhysicalMemoryMapping::IDENTITY;
+}
 
 pub struct LocklessCell<T> {
     data: UnsafeCell<T>,
@@ -364,11 +386,11 @@ impl MemoryAddress for PhyAddr32 {
     type AsPrimitive = u32;
 
     fn as_ptr<T>(&self) -> *const T {
-        Self::AsPrimitive::from(*self) as *const T
+        get_physical_memory32(*self) as *const T
     }
 
     fn as_mut_ptr<T>(&self) -> *mut T {
-        Self::AsPrimitive::from(*self) as *mut T
+        get_physical_memory32(*self) as *mut T
     }
 
     fn is_null(&self) -> bool {

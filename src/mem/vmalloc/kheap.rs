@@ -181,7 +181,7 @@ impl KernelHeapAllocator {
             return VirtAddr::NULL_PTR;
         }
 
-        if alloc_align < Self::MIN_ALLOC_SIZE {
+        if alloc_size < Self::MIN_ALLOC_SIZE {
             alloc_size = Self::MIN_ALLOC_SIZE;
         }
 
@@ -232,7 +232,7 @@ impl KernelHeapAllocator {
     #[inline]
     fn alloc_size_req_align(&self, size_req: u64) -> u64 {
         if size_req % Self::MIN_KHEAP_ALIGN != 0 {
-            (size_req & !(Self::MIN_KHEAP_ALIGN - 1)) + Self::MIN_KHEAP_ALIGN
+            (size_req - (size_req % Self::MIN_KHEAP_ALIGN)) + Self::MIN_KHEAP_ALIGN
         } else {
             size_req
         }

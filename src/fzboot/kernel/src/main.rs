@@ -22,10 +22,14 @@ use fzboot::{
         MemoryAddress, PhyAddr, VirtAddr,
     },
     video,
-    x86::paging::{
-        get_memory_mapper, init_global_mapper,
-        page_alloc::frame_alloc::init_phys_memory_pool,
-        page_table::mapper::{MemoryMapping, PhysicalMemoryMapping},
+    x86::{
+        descriptors::gdt::{long_init_gdt, LONG_GDT_ADDR},
+        int::enable_interrupts,
+        paging::{
+            get_memory_mapper, init_global_mapper,
+            page_alloc::frame_alloc::init_phys_memory_pool,
+            page_table::mapper::{MemoryMapping, PhysicalMemoryMapping},
+        },
     },
 };
 
@@ -69,13 +73,15 @@ extern "C" fn _kmain() -> ! {
             .lock()
             .unmap_physical_memory(VirtAddr::new(0), 0x1_000_000);
     }
+
     enable_kernel_mem_sec();
-    loop {}
+
     unsafe {
         get_interrupt_manager().load_idt();
     }
     register_exception_handlers();
-    // enable_interrupts();
+
+    enable_interrupts();
 
     loop {}
 }
@@ -85,6 +91,10 @@ unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
         PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING
             .convert(PhyAddr::from(mb_information.get_mmap_addr()))
             .as_mut_ptr(),
+    );
+
+    long_init_gdt(
+        PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING.convert(PhyAddr::new(LONG_GDT_ADDR)),
     );
 
     init_phys_memory_pool(memory_map);

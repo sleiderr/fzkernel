@@ -8,7 +8,7 @@ use crate::fs::partitions::mbr::{load_drive_mbr, PartitionType};
 use crate::fs::partitions::{Partition, PartitionMetadata, PartitionTable};
 use crate::io::{inb, inw, outb, outw, IOPort};
 use crate::mem::utils::Convertible;
-use crate::{println, wait};
+use crate::wait;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;

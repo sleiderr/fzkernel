@@ -31,8 +31,8 @@ pub const LONG_GDT_ADDR: u64 = 0x4000;
 ///
 /// Overwrites anything in memory at [`LONG_GDT_ADDR`].
 #[allow(clippy::missing_panics_doc)]
-pub unsafe fn long_init_gdt() {
-    let mut gdt = GlobalDescriptorTable::new(PhyAddr::new(LONG_GDT_ADDR));
+pub unsafe fn long_init_gdt<A: MemoryAddress>(base_address: A) {
+    let mut gdt = GlobalDescriptorTable::new(base_address);
     gdt.add_entry::<DataSegmentType>(
         SegmentDescriptor::new_segment::<DataSegmentType>(DataSegmentType::ReadWrite)
             .with_present(true)
