@@ -117,7 +117,7 @@ impl TryFrom<Alignment> for u64 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
 pub struct VirtAddr(u64);
 
 impl VirtAddr {

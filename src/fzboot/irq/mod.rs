@@ -1,3 +1,5 @@
+use core::arch::asm;
+
 use crate::io::outb;
 use crate::io::IOPort;
 use crate::mem::VirtAddr;
@@ -15,7 +17,7 @@ pub mod handlers;
 ///
 /// Interrupt handlers receive this structure as their first argument.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct InterruptStackFrame {
     /// Saved content of the `RIP` (_instruction pointer_ register) prior to the interrupt.
     pub(crate) rip: VirtAddr,
@@ -34,6 +36,73 @@ pub struct InterruptStackFrame {
 
     /// Saved values of all general purpose registers.
     pub(crate) registers: GeneralPurposeRegisters,
+}
+
+impl InterruptStackFrame {
+    /// Performs an `iret`.
+    ///
+    /// Restores the previous execution context using the value defined in the structure.
+    ///
+    /// Used to return to original execution context after an interrupt was processed.
+    /// Can also be used to change the current privilege level (`CPL`) of the CPU.
+    pub unsafe fn iret(&self) {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            asm!("push {0:r}",
+                "push {1:r}",
+                "push {2:r}",
+                "push {3:r}",
+                "push {4:r}",
+                "iretq",
+                in(reg) self.stack_segment,
+                in(reg) u64::from(self.stack_ptr),
+                in(reg) self.rflags,
+                in(reg) self.cs,
+                in(reg) u64::from(self.rip),
+                options(noreturn)
+            )
+        }
+    }
+
+    /// Performs an `iret`, preserving the current value of `RFLAGS` (and of the stack pointer, if `stack_ptr_override` is set to false).
+    ///
+    /// Restores the previous execution context using the value defined in the structure.
+    ///
+    /// Used to return to original execution context after an interrupt was processed.
+    /// Can also be used to change the current privilege level (`CPL`) of the CPU.
+    pub unsafe fn iret_preserve_flags(&self, stack_ptr_override: bool) -> ! {
+        // emulates a fake InterruptStackFrame with data and code segment selector set to `CPL` = 3
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            if !stack_ptr_override {
+                asm!("push {0:r}",
+                    "push rsp",
+                    "pushfq",
+                    "push {1:r}",
+                    "push {2:r}",
+                    "iretq",
+                    in(reg) self.stack_segment,
+                    in(reg) self.cs,
+                    in(reg) u64::from(self.rip),
+                    options(noreturn)
+                )
+            } else {
+                asm!("push {0:r}",
+                    "push {1:r}",
+                    "pushfq",
+                    "push {2:r}",
+                    "push {3:r}",
+                    "iretq",
+                    in(reg) self.stack_segment,
+                    in(reg) u64::from(self.stack_ptr),
+                    in(reg) self.cs,
+                    in(reg) u64::from(self.rip),
+                    options(noreturn))
+            }
+        }
+
+        unreachable!()
+    }
 }
 
 /// Content of the _Exception Stack Frame_, set up by the CPU when an exception that defines an error code

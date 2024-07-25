@@ -11,9 +11,10 @@ use crate::errors::CanFail;
 use crate::mem::{MemoryAddress, MemoryError, PhyAddr};
 use crate::x86::msr::{Ia32ExtendedFeature, ModelSpecificRegister};
 use crate::x86::privilege::PrivilegeLevel;
-use crate::{error, BitIndex, Convertible};
+use crate::{BitIndex, Convertible};
 use alloc::vec::Vec;
 use alloc::{format, vec};
+use conquer_once::spin::Lazy;
 use core::arch::asm;
 use core::fmt::{Debug, Display, Formatter};
 use core::mem;
@@ -29,7 +30,7 @@ pub const LONG_GDT_ADDR: u64 = 0x4000;
 ///
 /// # Safety
 ///
-/// Overwrites anything in memory at [`LONG_GDT_ADDR`].
+/// Overwrites anything in memory at [`base_address`].
 #[allow(clippy::missing_panics_doc)]
 pub unsafe fn long_init_gdt<A: MemoryAddress>(base_address: A) {
     let mut gdt = GlobalDescriptorTable::new(base_address);
@@ -53,6 +54,62 @@ pub unsafe fn long_init_gdt<A: MemoryAddress>(base_address: A) {
             .unwrap(),
     )
     .unwrap();
+    gdt.update();
+}
+
+/// Initializes the Kernel mode [`GlobalDescriptorTable`], with long code segment along with Usermode (`CPL` = 3) segments.
+///
+/// # Safety
+///
+/// Overwrites anything in memory at [`base_address`].
+pub unsafe fn kernel_init_gdt<A: MemoryAddress>(base_address: A) {
+    let mut gdt = GlobalDescriptorTable::new(base_address);
+    gdt.add_entry::<DataSegmentType>(
+        SegmentDescriptor::new_segment::<DataSegmentType>(DataSegmentType::ReadWrite)
+            .with_present(true)
+            .with_base(PhyAddr::new(0))
+            .unwrap()
+            .with_limit(0xFF_FFF)
+            .unwrap(),
+    )
+    .unwrap();
+
+    gdt.add_entry::<CodeSegmentType>(
+        SegmentDescriptor::new_segment::<CodeSegmentType>(CodeSegmentType::ExecuteRead)
+            .with_present(true)
+            .with_base(PhyAddr::new(0))
+            .unwrap()
+            .with_limit(0xFF_FFF)
+            .unwrap()
+            .enable_long()
+            .unwrap(),
+    )
+    .unwrap();
+
+    gdt.add_entry::<DataSegmentType>(
+        SegmentDescriptor::new_segment::<DataSegmentType>(DataSegmentType::ReadWrite)
+            .with_present(true)
+            .with_privilege_level(PrivilegeLevel::Ring3)
+            .with_base(PhyAddr::new(0))
+            .unwrap()
+            .with_limit(0xFF_FFF)
+            .unwrap(),
+    )
+    .unwrap();
+
+    gdt.add_entry::<CodeSegmentType>(
+        SegmentDescriptor::new_segment::<CodeSegmentType>(CodeSegmentType::ExecuteRead)
+            .with_present(true)
+            .with_privilege_level(PrivilegeLevel::Ring3)
+            .with_base(PhyAddr::new(0))
+            .unwrap()
+            .with_limit(0xFF_FFF)
+            .unwrap()
+            .enable_long()
+            .unwrap(),
+    )
+    .unwrap();
+
     gdt.update();
 }
 
@@ -553,12 +610,13 @@ impl SegmentDescriptor {
             return Err(InvalidSegmentDescriptor::InvalidAddressSizeSpecifier);
         }
 
-        if !Ia32ExtendedFeature::read()
-            .ok_or(InvalidSegmentDescriptor::UnsupportedLongMode)?
-            .ia32e_active()
-        {
-            return Err(InvalidSegmentDescriptor::InvalidProcessorMode);
-        }
+        // TODO: Fix this, it causes weird behaviour ?
+        // if !Ia32ExtendedFeature::read()
+        //     .ok_or(InvalidSegmentDescriptor::UnsupportedLongMode)?
+        //     .ia32e_active()
+        // {
+        //     return Err(InvalidSegmentDescriptor::InvalidProcessorMode);
+        // }
 
         Ok(Self::with_inner(self.inner.with_long_mode(true)))
     }
@@ -910,25 +968,65 @@ impl SegmentType for SystemSegmentType {
     }
 }
 
-#[derive(Debug)]
+pub static KERNEL_DATA_SELECTOR: Lazy<SegmentSelector> = Lazy::new(|| {
+    match SegmentSelector::gdt_selector()
+        .with_rpl(PrivilegeLevel::Ring0)
+        .with_index(0x08)
+    {
+        Ok(ds) => ds,
+        Err(_) => panic!("invalid kernel data selector"),
+    }
+});
+
+pub static KERNEL_CODE_SELECTOR: Lazy<SegmentSelector> = Lazy::new(|| {
+    match SegmentSelector::gdt_selector()
+        .with_rpl(PrivilegeLevel::Ring0)
+        .with_index(0x10)
+    {
+        Ok(ds) => ds,
+        Err(_) => panic!("invalid kernel code selector"),
+    }
+});
+
+pub static USERMODE_DATA_SELECTOR: Lazy<SegmentSelector> = Lazy::new(|| {
+    match SegmentSelector::gdt_selector()
+        .with_rpl(PrivilegeLevel::Ring3)
+        .with_index(0x18)
+    {
+        Ok(ds) => ds,
+        Err(_) => panic!("invalid usermode data selector"),
+    }
+});
+
+pub static USERMODE_CODE_SELECTOR: Lazy<SegmentSelector> = Lazy::new(|| {
+    match SegmentSelector::gdt_selector()
+        .with_rpl(PrivilegeLevel::Ring3)
+        .with_index(0x20)
+    {
+        Ok(ds) => ds,
+        Err(_) => panic!("invalid usermode code selector"),
+    }
+});
+
+#[derive(Clone, Copy, Debug)]
 pub struct SegmentSelector {
     pub(super) inner: SegmentSelectorInner,
 }
 
 #[bitfield]
-#[derive(BitfieldSpecifier, Debug)]
+#[derive(BitfieldSpecifier, Clone, Copy, Debug)]
 #[repr(u16)]
 pub(super) struct SegmentSelectorInner {
-    /// Specifies the index of the `GDT` or `LDT` entry referenced by this _selector_.   
-    index: B13,
-
-    /// Specifies which descriptor table to use, if clear the `GDT` is used, otherwise the `LDT` is used.
-    ti: bool,
-
     /// Requested privilege level of the selector ([`x86::privilege::PrivilegeLevel`]).
     ///
     /// Determines if the selector is valid during permission checks and may set execution or memoy access privilege.
     rpl: B2,
+
+    /// Specifies which descriptor table to use, if clear the `GDT` is used, otherwise the `LDT` is used.
+    ti: bool,
+
+    /// Specifies the index of the `GDT` or `LDT` entry referenced by this _selector_.   
+    index: B13,
 }
 
 impl SegmentSelector {
@@ -943,6 +1041,10 @@ impl SegmentSelector {
         Self {
             inner: self.inner.with_rpl(rpl_bits),
         }
+    }
+
+    pub fn bytes(&self) -> u16 {
+        self.inner.into()
     }
 
     pub fn gdt_selector() -> Self {
@@ -963,7 +1065,7 @@ impl SegmentSelector {
         }
 
         Ok(Self {
-            inner: self.inner.with_index(index),
+            inner: self.inner.with_index(index >> 3),
         })
     }
 }
