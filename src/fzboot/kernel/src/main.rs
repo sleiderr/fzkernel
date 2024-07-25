@@ -23,7 +23,7 @@ use fzboot::{
     },
     video,
     x86::{
-        descriptors::gdt::{long_init_gdt, LONG_GDT_ADDR},
+        descriptors::gdt::{kernel_init_gdt, LONG_GDT_ADDR},
         int::enable_interrupts,
         paging::{
             get_memory_mapper, init_global_mapper,
@@ -93,7 +93,7 @@ unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
             .as_mut_ptr(),
     );
 
-    long_init_gdt(
+    kernel_init_gdt(
         PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING.convert(PhyAddr::new(LONG_GDT_ADDR)),
     );
 

@@ -37,7 +37,7 @@ use crate::{
     x86::{
         apic::local_apic::InterruptVector,
         descriptors::{
-            gdt::SegmentSelector,
+            gdt::KERNEL_CODE_SELECTOR,
             idt::{GateDescriptor, GateType, InterruptDescriptorTable},
         },
         int::{disable_interrupts, enable_interrupts, interrupts_disabled},
@@ -166,12 +166,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
                 .with_dpl(PrivilegeLevel::Ring0)
                 .with_offset(handler_ptr)
                 .with_present(true)
-                .with_segment_selector(
-                    SegmentSelector::gdt_selector()
-                        .with_index(0x10)
-                        .expect("invalid segment selector while registering static handler")
-                        .with_rpl(PrivilegeLevel::Ring0),
-                )
+                .with_segment_selector(*KERNEL_CODE_SELECTOR)
         } else {
             let handler_ptr = PhyAddr::new(
                 u64::try_from(default_handler_ptr as usize).expect("invalid handler pointer"),
@@ -181,12 +176,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
                 .with_dpl(PrivilegeLevel::Ring0)
                 .with_offset(handler_ptr)
                 .with_present(true)
-                .with_segment_selector(
-                    SegmentSelector::gdt_selector()
-                        .with_index(0x10)
-                        .expect("invalid segment selector while registering static handler")
-                        .with_rpl(PrivilegeLevel::Ring0),
-                )
+                .with_segment_selector(*KERNEL_CODE_SELECTOR)
         };
 
         // Setup default handlers for every interrupt vector when first loading the table.
@@ -309,12 +299,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
                 .with_dpl(PrivilegeLevel::Ring0)
                 .with_offset(handler_ptr)
                 .with_present(true)
-                .with_segment_selector(
-                    SegmentSelector::gdt_selector()
-                        .with_index(0x10)
-                        .expect("invalid segment selector while registering static handler")
-                        .with_rpl(PrivilegeLevel::Ring0),
-                )
+                .with_segment_selector(*KERNEL_CODE_SELECTOR)
         } else {
             let handler_ptr = PhyAddr::new(
                 u64::try_from(runtime_entry_ptr as usize).expect("invalid handler pointer"),
@@ -324,12 +309,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
                 .with_dpl(PrivilegeLevel::Ring0)
                 .with_offset(handler_ptr)
                 .with_present(true)
-                .with_segment_selector(
-                    SegmentSelector::gdt_selector()
-                        .with_index(0x10)
-                        .expect("invalid segment selector while registering static handler")
-                        .with_rpl(PrivilegeLevel::Ring0),
-                )
+                .with_segment_selector(*KERNEL_CODE_SELECTOR)
         };
 
         self.idt
@@ -400,12 +380,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
                 .with_dpl(PrivilegeLevel::Ring0)
                 .with_offset(handler_ptr)
                 .with_present(true)
-                .with_segment_selector(
-                    SegmentSelector::gdt_selector()
-                        .with_index(0x10)
-                        .expect("invalid segment selector while registering static handler")
-                        .with_rpl(PrivilegeLevel::Ring0),
-                )
+                .with_segment_selector(*KERNEL_CODE_SELECTOR)
         } else {
             let handler_ptr =
                 PhyAddr::new(u64::try_from(handler as usize).expect("invalid handler pointer"));
@@ -414,12 +389,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
                 .with_dpl(PrivilegeLevel::Ring0)
                 .with_offset(handler_ptr)
                 .with_present(true)
-                .with_segment_selector(
-                    SegmentSelector::gdt_selector()
-                        .with_index(0x10)
-                        .expect("invalid segment selector while registering static handler")
-                        .with_rpl(PrivilegeLevel::Ring0),
-                )
+                .with_segment_selector(*KERNEL_CODE_SELECTOR)
         };
 
         self.idt

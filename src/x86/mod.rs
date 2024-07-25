@@ -10,6 +10,9 @@ pub mod flags;
 pub mod msr;
 pub mod tsc;
 
+// #[cfg(target_arch = "x86_64")]
+pub mod usermode;
+
 #[cfg(feature = "alloc")]
 pub mod apic;
 
