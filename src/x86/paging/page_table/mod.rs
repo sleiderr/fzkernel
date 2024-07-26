@@ -12,6 +12,8 @@ use core::ops::BitOr;
 use modular_bitfield::bitfield;
 use modular_bitfield::prelude::{B3, B51};
 
+use super::get_memory_mapper;
+
 /// Stores mapping information between virtual [`Page`] and physical memory [`Frame`].
 ///
 /// The structure of the table is hierarchical, and it contains several layers depending on the current execution
@@ -29,6 +31,18 @@ impl PageTable {
     /// Returns a mutable reference to an entry in this table.
     pub fn get_mut(&mut self, id: u16) -> &mut PageTableEntry {
         &mut self.entries[id as usize]
+    }
+
+    pub fn create_process_table() -> Self {
+        let mut table = PageTable::default();
+
+        let kernel_page_table = get_memory_mapper().lock().pml4.entries;
+
+        for i in 0x100..0x200 {
+            table.entries[i] = kernel_page_table[i];
+        }
+
+        table
     }
 }
 

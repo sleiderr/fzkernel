@@ -3,16 +3,17 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use alloc::collections::btree_map::BTreeMap;
+use alloc::{collections::btree_map::BTreeMap, sync::Arc};
 use conquer_once::spin::OnceCell;
 use spin::{rwlock::RwLock, Mutex};
 
 use crate::{
     mem::{stack::get_kernel_stack_allocator, VirtAddr},
+    process::{get_process, Process, ProcessId},
     x86::registers::x86_64::GeneralPurposeRegisters,
 };
 
-type LockedTaskTree = RwLock<BTreeMap<TaskId, Mutex<Task>>>;
+type LockedTaskTree = RwLock<BTreeMap<TaskId, Arc<Mutex<Task>>>>;
 
 static TASKS: OnceCell<LockedTaskTree> = OnceCell::uninit();
 
@@ -23,10 +24,18 @@ pub fn get_tasks() -> &'static LockedTaskTree {
     TASKS.get_or_init(|| {
         let mut task_map = BTreeMap::new();
 
-        task_map.insert(TaskId::INIT_TASK, Mutex::new(Task::default()));
+        task_map.insert(TaskId::INIT_TASK, Arc::new(Mutex::new(Task::default())));
 
         RwLock::new(task_map)
     })
+}
+
+pub fn get_task(task_id: TaskId) -> Option<Arc<Mutex<Task>>> {
+    get_tasks().read().get(&task_id).cloned()
+}
+
+pub fn get_current_task() -> Arc<Mutex<Task>> {
+    get_task(TaskId::new(CURRENT_TASK_ID.load(Ordering::Relaxed))).unwrap()
 }
 
 /// First available [`Task`] ID.
@@ -66,7 +75,8 @@ impl From<TaskId> for usize {
 /// virtual memory mappings).
 #[derive(Debug, Default)]
 pub struct Task {
-    pub(super) id: TaskId,
+    pub(crate) id: TaskId,
+    pub(crate) pid: ProcessId,
     pub(super) state: TaskState,
     pub(super) kernel_stack: VirtAddr,
     pub(super) stack: VirtAddr,
@@ -82,6 +92,7 @@ impl Task {
 
         let mut task = Task {
             id: task_id,
+            pid: ProcessId::KERNEL_INIT_PID,
             state: TaskState::Uninitialized,
             rip: entry_fn_addr,
             ..Default::default()
@@ -91,9 +102,15 @@ impl Task {
 
         task.stack = kernel_stack;
 
-        get_tasks().write().insert(task_id, Mutex::new(task));
+        get_tasks()
+            .write()
+            .insert(task_id, Arc::new(Mutex::new(task)));
 
         task_id
+    }
+
+    pub fn process(&self) -> Arc<Mutex<Process>> {
+        get_process(self.pid).expect("attempted to access process of orphan task")
     }
 }
 

@@ -61,7 +61,7 @@ pub mod kernel_syms {
     pub const KERNEL_LOAD_ADDR: PhyAddr = PhyAddr::new(0x800_000);
 
     /// Size of the Kernel in sectors (512 bytes chunks).
-    pub const KERNEL_SECTOR_SZ: usize = 0x20 * 0x800;
+    pub const KERNEL_SECTOR_SZ: usize = 0x20 * 0x100;
 
     /// Standard size for every Kernel stack.
     pub const KERNEL_STACK_SIZE: usize = 0x800_000;
@@ -77,6 +77,9 @@ pub mod kernel_syms {
 
     /// Base virtual address of the Kernel heap.
     pub const KERNEL_HEAP_BASE: VirtAddr = VirtAddr::new(0xFFFF_B000_0000_0000);
+
+    /// Physical address at which the Kernel [`PageTable`] is located.
+    pub const KERNEL_PAGE_TABLE: PhyAddr = PhyAddr::new(0x200_000);
 
     /// Default size for the Kernel heap.
     ///

@@ -115,9 +115,6 @@ impl GlobalScheduler {
                 _pic_eoi();
 
                 unsafe {
-                    text_buffer().buffer.force_unlock();
-                    println!("returning to {:x?}", new_task_frame);
-
                     new_task_frame.iret();
                 }
             }
