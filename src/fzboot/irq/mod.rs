@@ -45,22 +45,30 @@ impl InterruptStackFrame {
     ///
     /// Used to return to original execution context after an interrupt was processed.
     /// Can also be used to change the current privilege level (`CPL`) of the CPU.
-    pub unsafe fn iret(&self) {
+    pub unsafe fn iret(self) {
+        let frame_ptr = core::ptr::addr_of!(self);
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            asm!("push {0:r}",
-                "push {1:r}",
-                "push {2:r}",
-                "push {3:r}",
-                "push {4:r}",
-                "iretq",
-                in(reg) self.stack_segment,
-                in(reg) u64::from(self.stack_ptr),
-                in(reg) self.rflags,
-                in(reg) self.cs,
-                in(reg) u64::from(self.rip),
-                options(noreturn)
-            )
+            asm!(
+             "mov rsp, r8",
+             "mov rax, [rsp + 0x28]
+                mov rbx, [rsp + 0x30]
+                mov rcx, [rsp + 0x38]
+                mov rdx, [rsp + 0x40]
+                mov rsi, [rsp + 0x48]
+                mov rdi, [rsp + 0x50]
+                mov rbp, [rsp + 0x58]
+                mov r8, [rsp + 0x60]
+                mov r9, [rsp + 0x68]
+                mov r10, [rsp + 0x70]
+                mov r11, [rsp + 0x78]
+                mov r12, [rsp + 0x80]
+                mov r13, [rsp + 0x88]
+                mov r14, [rsp + 0x90]
+                mov r15, [rsp + 0x98]",
+             "iretq",
+             in("r8") frame_ptr
+            );
         }
     }
 

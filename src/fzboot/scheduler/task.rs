@@ -33,7 +33,7 @@ pub fn get_tasks() -> &'static LockedTaskTree {
 static LAST_TASK_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// [`Task`] ID of the current running task.
-static CURRENT_TASK_ID: AtomicUsize = AtomicUsize::new(0);
+pub static CURRENT_TASK_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier is associated with every task.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -42,11 +42,21 @@ pub struct TaskId(usize);
 impl TaskId {
     /// Task ID of the first Kernel task created.
     pub const INIT_TASK: Self = Self(0);
+
+    pub fn new(id: usize) -> Self {
+        Self(id)
+    }
 }
 
 impl From<TaskId> for u64 {
     fn from(value: TaskId) -> Self {
         u64::try_from(value.0).expect("invalid task id")
+    }
+}
+
+impl From<TaskId> for usize {
+    fn from(value: TaskId) -> Self {
+        value.0
     }
 }
 
@@ -56,12 +66,12 @@ impl From<TaskId> for u64 {
 /// virtual memory mappings).
 #[derive(Debug, Default)]
 pub struct Task {
-    id: TaskId,
-    state: TaskState,
-    kernel_stack: VirtAddr,
-    stack: VirtAddr,
-    rip: VirtAddr,
-    gpr: GeneralPurposeRegisters,
+    pub(super) id: TaskId,
+    pub(super) state: TaskState,
+    pub(super) kernel_stack: VirtAddr,
+    pub(super) stack: VirtAddr,
+    pub(super) rip: VirtAddr,
+    pub(super) gpr: GeneralPurposeRegisters,
 }
 
 impl Task {
@@ -116,7 +126,7 @@ pub enum TaskState {
 macro_rules! task_switch {
     ($task_id: tt) => {
         unsafe {
-            asm!(
+            core::arch::asm!(
                 "push rax",
                 "call __task_state_snapshot",
                 in("rax") u64::from($task_id)
