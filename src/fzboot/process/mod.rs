@@ -1,10 +1,13 @@
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::{
+    ops::BitAnd,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use alloc::{collections::btree_map::BTreeMap, string::String, sync::Arc};
 use conquer_once::spin::OnceCell;
 use hashbrown::HashMap;
 use spin::{Mutex, RwLock};
-use thread::{Thread, ThreadGroup, ThreadId, THREAD_REGISTRY};
+use thread::{Thread, ThreadFlags, ThreadGroup, ThreadId, THREAD_REGISTRY};
 
 use crate::{
     kernel_syms::{KERNEL_PAGE_TABLE, PAGE_SIZE},
@@ -45,6 +48,7 @@ pub fn init_kernel_process() {
     let mut kernel_thread = Arc::new(Mutex::new(Thread {
         id: ThreadId::KERNEL_INIT_TID,
         task: kernel_init_task,
+        flags: ThreadFlags::default(),
     }));
 
     THREAD_REGISTRY.init_once(|| RwLock::new(HashMap::new()));
@@ -81,16 +85,32 @@ pub struct ProcessId(usize);
 
 impl ProcessId {
     pub const KERNEL_INIT_PID: Self = Self(0);
+
+    pub fn new(id: usize) -> Self {
+        Self(id)
+    }
+}
+
+impl From<ProcessId> for usize {
+    fn from(value: ProcessId) -> Self {
+        value.0
+    }
+}
+
+impl From<usize> for ProcessId {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
 }
 
 #[derive(Debug)]
 pub struct Process {
-    id: ProcessId,
-    name: String,
+    pub(crate) id: ProcessId,
+    pub(crate) name: String,
     threads: ThreadGroup,
     parent: Option<ProcessId>,
     page_table: PhyAddr,
-    flags: ProcessFlags,
+    pub(crate) flags: ProcessFlags,
 }
 
 impl Process {
@@ -130,8 +150,36 @@ impl Process {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Various flags that can be applied to processes.
+///
+/// Provides specific information about a process (state, permissions, ...).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProcessFlags(u64);
+
+impl ProcessFlags {
+    const NO_FLAGS: Self = Self(0);
+
+    /// User or system process (permission related flag)
+    pub const USER_PROCESS: Self = Self(1 << 4);
+
+    /// If this flag is set, the [`Process`] cannot be pre-empted, and will run until it manually yields back control to
+    /// the scheduler.
+    ///
+    /// Applies to all [`Thread`] associated with this process.
+    pub const NO_PREEMPT: Self = Self(1 << 32);
+
+    pub fn contains(self, mode: Self) -> bool {
+        self & mode != Self::NO_FLAGS
+    }
+}
+
+impl BitAnd for ProcessFlags {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
 
 impl Default for ProcessFlags {
     fn default() -> Self {

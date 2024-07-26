@@ -9,7 +9,7 @@ use spin::{rwlock::RwLock, Mutex};
 
 use crate::{
     mem::{stack::get_kernel_stack_allocator, VirtAddr},
-    process::{get_process, Process, ProcessId},
+    process::{get_process, thread::ThreadId, Process, ProcessId},
     x86::registers::x86_64::GeneralPurposeRegisters,
 };
 
@@ -36,6 +36,10 @@ pub fn get_task(task_id: TaskId) -> Option<Arc<Mutex<Task>>> {
 
 pub fn get_current_task() -> Arc<Mutex<Task>> {
     get_task(TaskId::new(CURRENT_TASK_ID.load(Ordering::Relaxed))).unwrap()
+}
+
+pub fn current_task_id() -> TaskId {
+    TaskId(CURRENT_TASK_ID.load(Ordering::Relaxed))
 }
 
 /// First available [`Task`] ID.
@@ -77,6 +81,7 @@ impl From<TaskId> for usize {
 pub struct Task {
     pub(crate) id: TaskId,
     pub(crate) pid: ProcessId,
+    pub(crate) tid: ThreadId,
     pub(super) state: TaskState,
     pub(super) kernel_stack: VirtAddr,
     pub(super) stack: VirtAddr,
@@ -86,13 +91,14 @@ pub struct Task {
 
 impl Task {
     /// Creates a new Kernel `Task` and schedules it for execution.
-    pub fn init_kernel_task(entry_fn: fn() -> !) -> TaskId {
+    pub fn init_kernel_task(entry_fn: fn() -> !, thread_id: ThreadId) -> TaskId {
         let task_id = TaskId(LAST_TASK_ID.fetch_add(1, Ordering::Relaxed));
         let entry_fn_addr = VirtAddr::new(entry_fn as u64);
 
         let mut task = Task {
             id: task_id,
             pid: ProcessId::KERNEL_INIT_PID,
+            tid: thread_id,
             state: TaskState::Uninitialized,
             rip: entry_fn_addr,
             ..Default::default()
