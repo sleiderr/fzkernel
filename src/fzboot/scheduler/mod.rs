@@ -142,7 +142,9 @@ impl GlobalScheduler {
 
                 let mut next_task = locked_next_task.lock();
 
-                next_task.state = TaskState::Running;
+                if !matches!(next_task.state, TaskState::Uninitialized(_)) {
+                    next_task.state = TaskState::Running;
+                }
 
                 let new_task_frame = InterruptStackFrame {
                     rip: next_task.rip.into(),

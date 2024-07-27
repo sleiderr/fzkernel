@@ -8,12 +8,13 @@
 
 extern crate alloc;
 
-use core::{arch::asm, mem::size_of, panic::PanicInfo, ptr::NonNull};
+use core::{arch::asm, panic::PanicInfo};
 
 use fzboot::{
     boot::multiboot::mb_information,
     exceptions::{panic::panic_entry_no_exception, register_exception_handlers},
     irq::manager::get_interrupt_manager,
+    kernel_syms::KERNEL_PAGE_TABLE,
     mem::{
         e820::E820MemoryMap,
         kernel_sec::enable_kernel_mem_sec,
@@ -21,7 +22,9 @@ use fzboot::{
         vmalloc::{init_kernel_heap, SyncKernelHeapAllocator},
         MemoryAddress, PhyAddr, VirtAddr,
     },
-    video,
+    process::init_kernel_process,
+    scheduler::init_global_scheduler,
+    video::{self},
     x86::{
         descriptors::gdt::{kernel_init_gdt, LONG_GDT_ADDR},
         int::enable_interrupts,
@@ -80,6 +83,8 @@ extern "C" fn _kmain() -> ! {
         get_interrupt_manager().load_idt();
     }
     register_exception_handlers();
+    init_global_scheduler();
+    init_kernel_process();
 
     enable_interrupts();
 
@@ -98,7 +103,7 @@ unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
     );
 
     init_phys_memory_pool(memory_map);
-    init_global_mapper(PhyAddr::new(0x200_000));
+    init_global_mapper(KERNEL_PAGE_TABLE);
     init_kernel_heap();
 }
 

@@ -80,6 +80,11 @@ pub fn get_process(process_id: ProcessId) -> Option<Arc<Mutex<Process>>> {
     }
 }
 
+#[no_mangle]
+pub fn __process_init() -> ! {
+    loop {}
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProcessId(usize);
 

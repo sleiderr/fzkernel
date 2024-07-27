@@ -11,12 +11,12 @@ use spin::{Mutex, RwLock};
 use crate::{
     mem::VirtAddr,
     scheduler::{
-        get_global_scheduler,
-        task::{get_task, Task},
+        current_thread_id, get_global_scheduler,
+        task::{get_task, Task, TaskId, TaskState::Uninitialized},
     },
 };
 
-use super::{get_process, ProcessId};
+use super::{get_process, ProcessId, __process_init};
 
 static FIRST_AVAILABLE_TGID: AtomicUsize = AtomicUsize::new(1);
 static FIRST_AVAILABLE_TID: AtomicUsize = AtomicUsize::new(1);
@@ -32,6 +32,29 @@ pub fn get_thread(thread_id: ThreadId) -> Option<Arc<Mutex<Thread>>> {
             .get(&thread_id)
             .cloned()
     }
+}
+
+pub fn __thread_init() -> ! {
+    let thread_info_locked =
+        get_thread(current_thread_id()).expect("failed to load current thread context");
+
+    let thread_info = thread_info_locked.lock();
+
+    let task_state = thread_info.task.lock().state;
+
+    drop(thread_info);
+
+    match task_state {
+        Uninitialized(entry) => {
+            let thread_entry_fn =
+                unsafe { core::mem::transmute::<*const u8, fn() -> !>(entry.as_ptr::<u8>()) };
+
+            thread_entry_fn()
+        }
+        _ => {
+            panic!("attempt to initialize already initialized thread")
+        }
+    };
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -82,26 +105,27 @@ impl Thread {
             .schedule_sys_task(self.task.lock().id);
     }
 
-    pub fn spawn_kernel_thread(thread_entry: VirtAddr) -> Arc<Mutex<Self>> {
+    fn spawn_thread(
+        pid: ProcessId,
+        thread_entry: VirtAddr,
+        thread_flags: ThreadFlags,
+        task_init_fn: fn(fn() -> !, fn() -> !, ThreadId) -> TaskId,
+        init_fn: fn() -> !,
+    ) -> Arc<Mutex<Self>> {
         let tid = ThreadId(FIRST_AVAILABLE_TID.fetch_add(1, Ordering::Relaxed));
 
-        let mut thread_task = get_task(Task::init_kernel_task(
-            unsafe { core::mem::transmute::<*const u8, fn() -> !>(thread_entry.as_ptr::<u8>()) },
-            tid,
-        ))
-        .unwrap();
+        let thread_entry_fn =
+            unsafe { core::mem::transmute::<*const u8, fn() -> !>(thread_entry.as_ptr::<u8>()) };
+
+        let mut thread_task = get_task(task_init_fn(init_fn, thread_entry_fn, tid)).unwrap();
 
         let mut thread = Thread {
             id: tid,
             task: thread_task,
-            flags: ThreadFlags::default(),
+            flags: thread_flags,
         };
 
-        let kernel_process = get_process(ProcessId::KERNEL_INIT_PID)
-            .unwrap()
-            .lock()
-            .threads
-            .insert_thread(tid);
+        let process = get_process(pid).unwrap().lock().threads.insert_thread(tid);
 
         let thread = Arc::new(Mutex::new(thread));
 
@@ -113,6 +137,34 @@ impl Thread {
         }
 
         thread
+    }
+
+    /// Creates the main (first) [`Process`] `Thread`.
+    ///
+    /// This thread is in charge of performing process' initialization when first scheduled, and then calls the process entry
+    /// point.
+    pub fn spawn_process_main_thread(
+        pid: ProcessId,
+        thread_entry: VirtAddr,
+        thread_flags: ThreadFlags,
+    ) -> Arc<Mutex<Self>> {
+        Self::spawn_thread(
+            pid,
+            thread_entry,
+            thread_flags,
+            Task::init_kernel_task,
+            __process_init,
+        )
+    }
+
+    pub fn spawn_kernel_thread(thread_entry: VirtAddr) -> Arc<Mutex<Self>> {
+        Self::spawn_thread(
+            ProcessId::KERNEL_INIT_PID,
+            thread_entry,
+            ThreadFlags::default(),
+            Task::init_kernel_task,
+            __thread_init,
+        )
     }
 }
 

@@ -8,7 +8,7 @@ use conquer_once::spin::OnceCell;
 use spin::{rwlock::RwLock, Mutex};
 
 use crate::{
-    mem::{stack::get_kernel_stack_allocator, VirtAddr},
+    mem::{stack::get_kernel_stack_allocator, MemoryAddress, VirtAddr},
     process::{get_process, thread::ThreadId, Process, ProcessId},
     x86::registers::x86_64::GeneralPurposeRegisters,
 };
@@ -82,7 +82,7 @@ pub struct Task {
     pub(crate) id: TaskId,
     pub(crate) pid: ProcessId,
     pub(crate) tid: ThreadId,
-    pub(super) state: TaskState,
+    pub(crate) state: TaskState,
     pub(super) kernel_stack: VirtAddr,
     pub(super) stack: VirtAddr,
     pub(super) rip: VirtAddr,
@@ -91,16 +91,21 @@ pub struct Task {
 
 impl Task {
     /// Creates a new Kernel `Task` and schedules it for execution.
-    pub fn init_kernel_task(entry_fn: fn() -> !, thread_id: ThreadId) -> TaskId {
+    pub fn init_kernel_task(
+        init_fn: fn() -> !,
+        entry_fn: fn() -> !,
+        thread_id: ThreadId,
+    ) -> TaskId {
         let task_id = TaskId(LAST_TASK_ID.fetch_add(1, Ordering::Relaxed));
         let entry_fn_addr = VirtAddr::new(entry_fn as u64);
+        let init_fn_addr = VirtAddr::new(init_fn as u64);
 
         let mut task = Task {
             id: task_id,
             pid: ProcessId::KERNEL_INIT_PID,
             tid: thread_id,
-            state: TaskState::Uninitialized,
-            rip: entry_fn_addr,
+            state: TaskState::Uninitialized(entry_fn_addr),
+            rip: init_fn_addr,
             ..Default::default()
         };
 
@@ -129,7 +134,7 @@ struct TaskStateSnapshot {
 }
 
 /// Current running status of a [`Task`]
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub enum TaskState {
     /// The [`Task`] is currently being executed by a CPU.
     Running,
@@ -138,8 +143,13 @@ pub enum TaskState {
     Waiting,
 
     /// This [`Task`] is new and never got any CPU time allocated.
-    #[default]
-    Uninitialized,
+    Uninitialized(VirtAddr),
+}
+
+impl Default for TaskState {
+    fn default() -> Self {
+        Self::Uninitialized(VirtAddr::NULL_PTR)
+    }
 }
 
 /// Performs a task switch, manually changing the current execution context to another task.
