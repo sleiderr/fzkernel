@@ -1,4 +1,4 @@
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use conquer_once::spin::OnceCell;
 use fzproc_macros::interrupt_handler;
@@ -8,16 +8,22 @@ use strategies::round_robin::{RoundRobinMetadata, RoundRobinScheduling};
 use task::{get_tasks, TaskId, TaskState, CURRENT_TASK_ID};
 
 use crate::{
+    error,
     irq::_pic_eoi,
-    println,
-    video::vesa::text_buffer,
     x86::{
         apic::InterruptVector,
         int::{disable_interrupts, enable_interrupts},
     },
 };
 
-use super::irq::{manager::get_interrupt_manager, InterruptStackFrame};
+use super::{
+    irq::{manager::get_interrupt_manager, InterruptStackFrame},
+    process::{
+        get_process,
+        thread::{get_thread, ThreadFlags, ThreadId},
+        ProcessFlags, ProcessId,
+    },
+};
 
 pub mod task;
 
@@ -26,12 +32,44 @@ pub mod strategies;
 
 static GLOBAL_SCHEDULER: OnceCell<Mutex<GlobalScheduler>> = OnceCell::uninit();
 
+pub static CURRENT_PROCESS_ID: AtomicUsize = AtomicUsize::new(0);
+pub static CURRENT_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
+
+static FAILED_SCHEDULING: AtomicUsize = AtomicUsize::new(0);
+
 #[interrupt_handler]
 pub fn timer_irq_entry(frame: InterruptStackFrame) {
-    unsafe {
-        get_global_scheduler().force_unlock();
+    if let Some(mut scheduler) = get_global_scheduler().try_lock() {
+        let current_process = ProcessId::new(CURRENT_PROCESS_ID.load(Ordering::Relaxed));
+        if let Some(process) = get_process(current_process) {
+            // We cannot access information about the current process for some reason, we skip this scheduler run for this time.
+            if let Some(process) = process.try_lock() {
+                // we cannot pre-empt this process, skipping this run as well
+                if process.flags.contains(ProcessFlags::NO_PREEMPT) {
+                    return;
+                }
+
+                let current_thread = ThreadId::new(CURRENT_THREAD_ID.load(Ordering::Relaxed));
+                if let Some(thread) = get_thread(current_thread) {
+                    if let Some(thread) = thread.try_lock() {
+                        if !thread.flags.contains(ThreadFlags::NO_PREEMPT) {
+                            drop(thread);
+                            drop(process);
+                            FAILED_SCHEDULING.store(0, Ordering::Relaxed);
+                            return scheduler.irq_schedule_next_task(frame);
+                        }
+                    }
+                }
+            }
+            FAILED_SCHEDULING.fetch_add(1, Ordering::Relaxed);
+            return;
+        } else {
+            FAILED_SCHEDULING.fetch_add(1, Ordering::Relaxed);
+            error!("scheduler", "invalid current running process");
+        }
     }
-    get_global_scheduler().lock().irq_schedule_next_task(frame);
+
+    // scheduler lock is held somewhere else, we cannot use it to update the current task
 }
 
 pub fn init_global_scheduler() {
@@ -43,6 +81,16 @@ pub fn init_global_scheduler() {
 
 pub fn get_global_scheduler() -> &'static Mutex<GlobalScheduler> {
     GLOBAL_SCHEDULER.get_or_init(|| Mutex::new(GlobalScheduler::new()))
+}
+
+/// Returns the [`ThreadId`] of the currently executing [`Thread`]
+pub fn current_thread_id() -> ThreadId {
+    CURRENT_THREAD_ID.load(Ordering::Relaxed).into()
+}
+
+/// Returns the [`ProcessId`] of the currently executing [`Process`]
+pub fn current_process_id() -> ProcessId {
+    CURRENT_PROCESS_ID.load(Ordering::Relaxed).into()
 }
 
 pub struct GlobalScheduler {
@@ -94,7 +142,9 @@ impl GlobalScheduler {
 
                 let mut next_task = locked_next_task.lock();
 
-                next_task.state = TaskState::Running;
+                if !matches!(next_task.state, TaskState::Uninitialized(_)) {
+                    next_task.state = TaskState::Running;
+                }
 
                 let new_task_frame = InterruptStackFrame {
                     rip: next_task.rip.into(),
@@ -106,18 +156,21 @@ impl GlobalScheduler {
                 };
 
                 CURRENT_TASK_ID.store(next_task_id.into(), Ordering::Relaxed);
+                CURRENT_PROCESS_ID.store(next_task.pid.into(), Ordering::Relaxed);
+                CURRENT_THREAD_ID.store(next_task.tid.into(), Ordering::Relaxed);
 
                 drop(next_task);
                 drop(current_task_locked);
                 drop(locked_next_task);
                 drop(tasks);
 
+                unsafe {
+                    GLOBAL_SCHEDULER.get_unchecked().force_unlock();
+                }
+
                 _pic_eoi();
 
                 unsafe {
-                    text_buffer().buffer.force_unlock();
-                    println!("returning to {:x?}", new_task_frame);
-
                     new_task_frame.iret();
                 }
             }

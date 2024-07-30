@@ -1,6 +1,5 @@
 use crate::kernel_syms::PAGE_SIZE;
 use crate::mem::{MemoryAddress, PhyAddr, VirtAddr};
-use crate::println;
 use crate::x86::paging::page_alloc::frame_alloc::alloc_page;
 use crate::x86::paging::page_table::translate::Translator;
 use crate::x86::paging::page_table::{PageTable, PageTableEntry, PageTableFlags};

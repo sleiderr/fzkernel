@@ -3,16 +3,17 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use alloc::collections::btree_map::BTreeMap;
+use alloc::{collections::btree_map::BTreeMap, sync::Arc};
 use conquer_once::spin::OnceCell;
 use spin::{rwlock::RwLock, Mutex};
 
 use crate::{
-    mem::{stack::get_kernel_stack_allocator, VirtAddr},
+    mem::{stack::get_kernel_stack_allocator, MemoryAddress, VirtAddr},
+    process::{get_process, thread::ThreadId, Process, ProcessId},
     x86::registers::x86_64::GeneralPurposeRegisters,
 };
 
-type LockedTaskTree = RwLock<BTreeMap<TaskId, Mutex<Task>>>;
+type LockedTaskTree = RwLock<BTreeMap<TaskId, Arc<Mutex<Task>>>>;
 
 static TASKS: OnceCell<LockedTaskTree> = OnceCell::uninit();
 
@@ -23,10 +24,22 @@ pub fn get_tasks() -> &'static LockedTaskTree {
     TASKS.get_or_init(|| {
         let mut task_map = BTreeMap::new();
 
-        task_map.insert(TaskId::INIT_TASK, Mutex::new(Task::default()));
+        task_map.insert(TaskId::INIT_TASK, Arc::new(Mutex::new(Task::default())));
 
         RwLock::new(task_map)
     })
+}
+
+pub fn get_task(task_id: TaskId) -> Option<Arc<Mutex<Task>>> {
+    get_tasks().read().get(&task_id).cloned()
+}
+
+pub fn get_current_task() -> Arc<Mutex<Task>> {
+    get_task(TaskId::new(CURRENT_TASK_ID.load(Ordering::Relaxed))).unwrap()
+}
+
+pub fn current_task_id() -> TaskId {
+    TaskId(CURRENT_TASK_ID.load(Ordering::Relaxed))
 }
 
 /// First available [`Task`] ID.
@@ -66,8 +79,10 @@ impl From<TaskId> for usize {
 /// virtual memory mappings).
 #[derive(Debug, Default)]
 pub struct Task {
-    pub(super) id: TaskId,
-    pub(super) state: TaskState,
+    pub(crate) id: TaskId,
+    pub(crate) pid: ProcessId,
+    pub(crate) tid: ThreadId,
+    pub(crate) state: TaskState,
     pub(super) kernel_stack: VirtAddr,
     pub(super) stack: VirtAddr,
     pub(super) rip: VirtAddr,
@@ -76,14 +91,21 @@ pub struct Task {
 
 impl Task {
     /// Creates a new Kernel `Task` and schedules it for execution.
-    pub fn init_kernel_task(entry_fn: fn() -> !) -> TaskId {
+    pub fn init_kernel_task(
+        init_fn: fn() -> !,
+        entry_fn: fn() -> !,
+        thread_id: ThreadId,
+    ) -> TaskId {
         let task_id = TaskId(LAST_TASK_ID.fetch_add(1, Ordering::Relaxed));
         let entry_fn_addr = VirtAddr::new(entry_fn as u64);
+        let init_fn_addr = VirtAddr::new(init_fn as u64);
 
         let mut task = Task {
             id: task_id,
-            state: TaskState::Uninitialized,
-            rip: entry_fn_addr,
+            pid: ProcessId::KERNEL_INIT_PID,
+            tid: thread_id,
+            state: TaskState::Uninitialized(entry_fn_addr),
+            rip: init_fn_addr,
             ..Default::default()
         };
 
@@ -91,9 +113,15 @@ impl Task {
 
         task.stack = kernel_stack;
 
-        get_tasks().write().insert(task_id, Mutex::new(task));
+        get_tasks()
+            .write()
+            .insert(task_id, Arc::new(Mutex::new(task)));
 
         task_id
+    }
+
+    pub fn process(&self) -> Arc<Mutex<Process>> {
+        get_process(self.pid).expect("attempted to access process of orphan task")
     }
 }
 
@@ -106,7 +134,7 @@ struct TaskStateSnapshot {
 }
 
 /// Current running status of a [`Task`]
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub enum TaskState {
     /// The [`Task`] is currently being executed by a CPU.
     Running,
@@ -115,8 +143,13 @@ pub enum TaskState {
     Waiting,
 
     /// This [`Task`] is new and never got any CPU time allocated.
-    #[default]
-    Uninitialized,
+    Uninitialized(VirtAddr),
+}
+
+impl Default for TaskState {
+    fn default() -> Self {
+        Self::Uninitialized(VirtAddr::NULL_PTR)
+    }
 }
 
 /// Performs a task switch, manually changing the current execution context to another task.
