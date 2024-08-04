@@ -16,6 +16,7 @@ use crate::{
     errors::{BaseError, CanFail},
     mem::MemoryAddress,
     x86::{
+        apic::InterruptVector,
         int::{disable_interrupts, enable_interrupts, interrupts_disabled},
         privilege::PrivilegeLevel,
     },
@@ -131,15 +132,24 @@ impl<A: MemoryAddress> InterruptDescriptorTable<A> {
         }
     }
 
-    pub fn set_entry(&mut self, ivt: usize, descriptor: GateDescriptor) -> CanFail<IDTError> {
+    pub unsafe fn set_entry_unchecked(&mut self, ivt: usize, descriptor: GateDescriptor) {
+        *self
+            .entries
+            .get_mut(ivt)
+            .ok_or(IDTError::OutOfBoundsVector)
+            .unwrap() = descriptor;
+    }
+
+    pub fn set_entry(
+        &mut self,
+        ivt: InterruptVector,
+        descriptor: GateDescriptor,
+    ) -> CanFail<IDTError> {
         if !descriptor.present() {
             return Err(IDTError::InvalidEntry);
         }
 
-        *self
-            .entries
-            .get_mut(ivt)
-            .ok_or(IDTError::OutOfBoundsVector)? = descriptor;
+        unsafe { self.set_entry_unchecked(ivt.into(), descriptor) }
 
         Ok(())
     }

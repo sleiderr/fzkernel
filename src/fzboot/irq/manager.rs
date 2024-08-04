@@ -183,7 +183,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
         for int_vec in 0..=255 {
             imgr.idt
                 .lock()
-                .set_entry(usize::from(u8::from(int_vec)), descriptor)
+                .set_entry(InterruptVector::from(int_vec), descriptor)
                 .unwrap();
         }
 
@@ -314,7 +314,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
 
         self.idt
             .lock()
-            .set_entry(usize::from(u8::from(int_vector)), descriptor)
+            .set_entry(int_vector, descriptor)
             .map_err(|_| HandlerRegistrationError::IDTWriteError)?;
 
         unsafe {
@@ -365,7 +365,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
         disable_interrupts();
 
         if self.handler_registry.read().get(&int_vector).is_some() {
-            todo!()
+            self.register_dynamic_handler(int_vector, handler, InterruptHandlerPriority::MAX)?;
         }
 
         self.handler_registry
@@ -394,7 +394,7 @@ impl<A: MemoryAddress> InterruptManager<A> {
 
         self.idt
             .lock()
-            .set_entry(usize::from(u8::from(int_vector)), descriptor)
+            .set_entry(int_vector, descriptor)
             .map_err(|_| HandlerRegistrationError::IDTWriteError)?;
 
         unsafe {

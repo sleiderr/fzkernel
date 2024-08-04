@@ -1,7 +1,6 @@
 use core::{
     arch::asm,
     fmt::Write,
-    hint,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -10,12 +9,13 @@ use fzproc_macros::interrupt_handler;
 
 use crate::{
     irq::{manager::get_interrupt_manager, ExceptionStackFrame},
-    mem::{MemoryAddress, PhyAddr},
+    mem::{MemoryAddress, PhyAddr, VirtAddr},
     video::vesa::{framebuffer::RgbaColor, text_buffer},
     x86::{
         apic::InterruptVector,
         descriptors::idt::{GateDescriptor, GateType, InterruptDescriptorTable},
         int::enable_interrupts,
+        paging::page_table::mapper::{MemoryMapping, PhysicalMemoryMapping},
     },
 };
 
@@ -109,7 +109,9 @@ fn print_stack_trace(mut frame_base_ptr: *const usize) {
     text_buffer.write_str_bitmap("\n\nStack trace: \n");
 
     let mut stack_frame_pos = 0;
-    while !frame_base_ptr.is_null() {
+    // as long as the pointer is not null and we have a higher half address (kernel stack is located in the higher half of the virtual
+    // memory address space).
+    while !frame_base_ptr.is_null() && (((frame_base_ptr as u64) & 1 << 63) != 0) {
         if stack_frame_pos > 6 {
             break;
         }
@@ -159,14 +161,16 @@ fn any_key_or_reboot() -> ! {
         get_interrupt_manager().load_idt();
     }
 
-    while !KEY_PRESSED.load(Ordering::Relaxed) {
-        hint::spin_loop();
-    }
+    while !KEY_PRESSED.load(Ordering::Acquire) {}
 
     unsafe {
-        let mut dummy_idt =
-            InterruptDescriptorTable::<PhyAddr>::new(PhyAddr::NULL_PTR + 0x1000_usize);
-        dummy_idt.set_entry(0x20, GateDescriptor::new(GateType::InterruptGate));
+        let mut dummy_idt = InterruptDescriptorTable::<VirtAddr>::new(
+            PhysicalMemoryMapping::KERNEL_DEFAULT_MAPPING.convert(PhyAddr::NULL_PTR + 0x1000_usize),
+        );
+        dummy_idt.set_entry_unchecked(
+            InterruptVector::TIMER_IRQ.into(),
+            GateDescriptor::new(GateType::InterruptGate),
+        );
 
         dummy_idt.write_table();
         dummy_idt.enable();

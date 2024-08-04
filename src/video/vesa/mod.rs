@@ -48,7 +48,10 @@ pub fn init_text_buffer_from_multiboot(header: FramebufferMultibootInformation) 
         (header.bpp as usize >> 3) * header.height as usize * header.width as usize;
     let mapping_addr = VirtAddr::new(0xFFFF_D800_0000_000);
 
-    let page_flags = PageTableFlags::new().with_cache_disable(true);
+    let page_flags = PageTableFlags::new()
+        .with_cache_disable(true)
+        .with_write(true);
+
     unsafe {
         get_memory_mapper().lock().map_physical_memory(
             framebuffer_addr,

@@ -260,6 +260,7 @@ pub struct InterruptVector(u8);
 impl InterruptVector {
     /// Spurious vector interrupt vector.
     pub(super) const SPURIOUS_VECTOR: Self = Self(0xFF);
+    pub(crate) const TIMER_IRQ: Self = Self(0x20);
 
     pub const fn new(vector: u8) -> Self {
         Self(vector)
@@ -269,6 +270,12 @@ impl InterruptVector {
 impl From<u8> for InterruptVector {
     fn from(value: u8) -> Self {
         Self(value)
+    }
+}
+
+impl From<InterruptVector> for usize {
+    fn from(value: InterruptVector) -> Self {
+        usize::from(value.0)
     }
 }
 
