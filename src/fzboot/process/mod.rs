@@ -17,6 +17,7 @@ use crate::{
 
 use super::scheduler::task::{get_task, TaskId};
 
+pub mod loader;
 pub mod thread;
 
 static FIRST_AVAILABLE_PID: AtomicUsize = AtomicUsize::new(1);
