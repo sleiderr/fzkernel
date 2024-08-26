@@ -43,6 +43,8 @@ pub mod fzboot;
 pub mod io;
 pub mod mem;
 pub mod x86;
+#[cfg(feature = "alloc")]
+pub mod network;
 
 pub use crate::fzboot::*;
 pub use crate::mem::utils::*;
