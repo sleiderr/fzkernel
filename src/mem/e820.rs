@@ -4,29 +4,34 @@ use bitfield::bitfield;
 
 use crate::{errors::E820Error, hex_print, video::io::cprint_info};
 
-pub const E820_MAP_ADDR: u16 = 0x4002;
-pub static mut E820_MAP_LENGTH: u16 = 0;
+pub const E820_MAP_ADDR: u32 = 0x4804;
+pub static mut E820_MAP_LENGTH: u32 = 0;
 
 #[cfg(feature = "alloc")]
 /// Returns the list of memory entries returned by BIOS 0xE820 function.
-pub fn e820_entries() -> alloc::vec::Vec<AddressRangeDescriptor> {
-    let map = E820MemoryMap::new();
+pub fn e820_entries_bootloader() -> alloc::vec::Vec<AddressRangeDescriptor> {
+    let map = E820MemoryMap::new(E820_MAP_ADDR as *mut u8);
     map.into_iter().collect()
 }
 
+#[derive(Debug)]
 pub struct E820MemoryMap {
-    cursor: u16,
+    base_addr: *mut u8,
+    cursor: u32,
 }
 
 impl E820MemoryMap {
-    pub fn new() -> Self {
-        Self { cursor: 0 }
+    pub fn new(base_addr: *mut u8) -> Self {
+        Self {
+            base_addr,
+            cursor: 0,
+        }
     }
 }
 
 impl Default for E820MemoryMap {
     fn default() -> Self {
-        Self::new()
+        Self::new(E820_MAP_ADDR as *mut u8)
     }
 }
 
@@ -34,7 +39,7 @@ impl Iterator for E820MemoryMap {
     type Item = AddressRangeDescriptor;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let map_len = unsafe { ptr::read((E820_MAP_ADDR - 0x2) as *mut u16) };
+        let map_len = unsafe { ptr::read(self.base_addr.sub(0x4) as *mut u32) };
         assert_ne!(map_len, 0);
 
         if map_len <= self.cursor {
@@ -42,7 +47,12 @@ impl Iterator for E820MemoryMap {
             return None;
         }
 
-        let current_elem = (E820_MAP_ADDR + 24 * (self.cursor)) as *mut AddressRangeDescriptor;
+        let current_elem = unsafe {
+            (self
+                .base_addr
+                .add(usize::try_from(24 * (self.cursor)).unwrap()))
+                as *mut AddressRangeDescriptor
+        };
         let ard: AddressRangeDescriptor = unsafe { ptr::read(current_elem) };
 
         self.cursor += 1;
@@ -108,7 +118,8 @@ bitfield! {
     non_volatile, _: 1, 1;
 }
 
-fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, E820Error> {
+#[cfg(not(feature = "x86_64"))]
+fn __mem_entry_e820(mut ebx: u32, buffer: u32) -> Result<u32, E820Error> {
     let cf: u32;
 
     unsafe {
@@ -125,9 +136,9 @@ fn __mem_entry_e820(mut ebx: u32, buffer: u16) -> Result<u32, E820Error> {
         "mov ecx, 24",
         "int 0x15",
         "xor edx, edx",
-        "jnc 1f",
+        "jnc 2f",
         "mov edx, 1",
-        "1: mov eax, ebx",
+        "2: mov eax, ebx",
         "pop ecx",
         "pop di",
         "pop es",
@@ -179,7 +190,7 @@ fn e820_type_print(descriptor: &AddressRangeDescriptor) {
 pub fn memory_map() {
     use crate::rinfo;
 
-    let mut entry_count: u16 = 0;
+    let mut entry_count: u32 = 0;
     let mut ebx: u32 = 0;
 
     while let Ok(result) = __mem_entry_e820(ebx, E820_MAP_ADDR + entry_count * 24) {
@@ -200,5 +211,5 @@ pub fn memory_map() {
         e820_type_print(descriptor);
     }
 
-    unsafe { ptr::write((E820_MAP_ADDR - 0x2) as *mut u16, entry_count) }
+    unsafe { ptr::write((E820_MAP_ADDR - 0x2) as *mut u32, entry_count) }
 }

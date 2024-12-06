@@ -5,55 +5,57 @@
 #![feature(proc_macro_hygiene)]
 #![feature(naked_functions)]
 
+mod boot;
+
 extern crate alloc;
 
-use core::{
-    arch::{asm, global_asm},
-    ptr,
-};
+use boot::fzkernel;
+use core::arch::asm;
 use core::{panic::PanicInfo, ptr::NonNull};
+use fzboot::boot::multiboot;
+use fzboot::drivers::generics::dev_disk::{sata_drives, DiskDevice};
+use fzboot::drivers::ide::AtaDeviceIdentifier;
+use fzboot::fs::partitions::mbr;
+use fzboot::irq::manager::{get_interrupt_manager, get_prot_interrupt_manager};
+use fzboot::mem::e820::{e820_entries_bootloader, E820_MAP_ADDR};
+use fzboot::mem::{MemoryAddress, PhyAddr, VirtAddr};
+use fzboot::video::vesa::{init_text_buffer_from_vesa, text_buffer};
+use fzboot::x86::apic::InterruptVector;
+use fzboot::x86::descriptors::gdt::{long_init_gdt, LONG_GDT_ADDR};
+use fzboot::x86::int::enable_interrupts;
+use fzboot::x86::paging::bootinit_paging;
 use fzboot::{
     drivers::pci::pci_devices_init,
     mem::{
         e820::{AddressRangeDescriptor, E820MemType, E820MemoryMap},
         MemoryStructure, MEM_STRUCTURE,
     },
-    x86::idt::{load_idt, IDTDescriptor},
 };
 use fzboot::{drivers::pci::pci_enumerate, io::pic::PIC};
+use fzboot::{error, println};
 use fzboot::{
     info,
     io::acpi::{acpi_init, hpet::hpet_clk_init},
     mem::bmalloc::heap::LockedBuddyAllocator,
     time,
-    video::vesa::video_mode::ModeInfoBlock,
     x86::tsc::TSCClock,
 };
-use fzboot::{
-    println,
-    video::vesa::{
-        framebuffer::{LockedTextFrameBuffer, TextFrameBuffer},
-        video_mode::VESA_MODE_BUFFER,
-        TEXT_BUFFER,
-    },
-};
-
-global_asm!(include_str!("arch/x86/setup.S"));
+use fzproc_macros::interrupt_handler;
 
 static mut DEFAULT_HEAP_ADDR: usize = 0x5000000;
+/// Default heap size: 512KiB
 const DEFAULT_HEAP_SIZE: usize = 0x1000000;
 
-/// Minimum heap size: 16KiB
-const MIN_HEAP_SIZE: usize = 0x4000;
+/// Minimum heap size: 4KiB
+const MIN_HEAP_SIZE: usize = 0x1000;
 
-/// Maximum heap size: 2GiB
-const MAX_HEAP_SIZE: usize = 0x80000000;
+const MAX_HEAP_SIZE: usize = 0x1000000;
 
-/// Default stack size, if enough RAM is available: 8 MiB
-const STACK_SIZE: usize = 0x800000;
+/// Default stack size, if enough RAM is available: 32KiB
+const STACK_SIZE: usize = 0x8000;
 
 #[global_allocator]
-pub static BUDDY_ALLOCATOR: LockedBuddyAllocator<16> = LockedBuddyAllocator::new(
+pub static BUDDY_ALLOCATOR: LockedBuddyAllocator<14> = LockedBuddyAllocator::new(
     NonNull::new(unsafe { DEFAULT_HEAP_ADDR as *mut u8 }).unwrap(),
     DEFAULT_HEAP_SIZE,
 );
@@ -65,8 +67,8 @@ pub extern "C" fn _start() -> ! {
 }
 
 pub fn boot_main() -> ! {
+    init_text_buffer_from_vesa();
     fzboot::mem::zero_bss();
-    init_framebuffer();
     heap_init();
     acpi_init();
     clock_init();
@@ -74,21 +76,20 @@ pub fn boot_main() -> ! {
     pci_enumerate();
     pci_devices_init();
 
-    info!(
-        "mem",
-        "relocated heap (addr = {:#x}    size = {:#x})",
-        MEM_STRUCTURE.get().unwrap().heap_addr,
-        MEM_STRUCTURE.get().unwrap().heap_size
-    );
+    let kernel_part = boot::fzkernel::locate_kernel_partition();
+    boot::fzkernel::load_kernel(kernel_part.0, kernel_part.1);
 
-    loop {}
-}
+    let mb_information_hdr_addr = boot::headers::dump_multiboot_information_header();
+    bootinit_paging::init_paging();
 
-pub fn init_framebuffer() {
-    let vesamode_info_ptr = VESA_MODE_BUFFER as *mut ModeInfoBlock;
-    let vesamode_info = unsafe { ptr::read(vesamode_info_ptr) };
-    let mut framebuffer = TextFrameBuffer::from_vesamode_info(&vesamode_info);
-    TEXT_BUFFER.init_once(|| LockedTextFrameBuffer::new(framebuffer));
+    info!("kernel", "jumping to kernel main (addr = 0x80000)");
+
+    unsafe {
+        long_init_gdt(PhyAddr::new(LONG_GDT_ADDR));
+        asm!("mov ecx, {}", in(reg) mb_information_hdr_addr);
+        asm!("mov ebp, 0", "push 0x10", "push 0x800000", "retf");
+        core::unreachable!();
+    }
 }
 
 pub fn clock_init() {
@@ -107,17 +108,19 @@ pub fn clock_init() {
 }
 
 pub fn interrupts_init() {
-    let mut idtr = IDTDescriptor::new();
-    idtr.set_offset(0x8);
-    idtr.store(0x0);
     let pic = PIC::default();
     pic.remap(0x20, 0x28);
-    fzboot::irq::generate_idt();
-    load_idt(0x0);
+
+    let int_mgr = get_interrupt_manager();
+
+    unsafe {
+        int_mgr.load_idt();
+    }
+    enable_interrupts();
 }
 
 pub fn heap_init() {
-    let e820_map = E820MemoryMap::new();
+    let e820_map = E820MemoryMap::new(E820_MAP_ADDR as *mut u8);
     let mut best_entry = AddressRangeDescriptor::default();
 
     for entry in e820_map {
@@ -149,6 +152,10 @@ pub fn heap_init() {
         heap_addr: heap_addr as usize,
         heap_size,
     };
+    info!(
+        "mem",
+        "relocated heap (addr = {:#x}    size = {:#x})", heap_addr as u64, heap_size
+    );
 
     MEM_STRUCTURE.init_once(|| mem_struct);
 
@@ -167,8 +174,8 @@ pub fn heap_init() {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     unsafe {
-        TEXT_BUFFER.get().unwrap().buffer.force_unlock();
+        text_buffer().buffer.force_unlock();
     }
-    println!("fatal: {info}");
+    error!("fatal: {info}");
     loop {}
 }

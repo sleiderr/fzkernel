@@ -11,18 +11,62 @@
 //! when entering protected mode, as well as general
 //! purpose macros to write formatted text to the screen.
 
-use core::fmt::{self, Write};
-
 use conquer_once::spin::OnceCell;
+use core::fmt::{self, Write};
+use core::ptr;
 
-use crate::video::vesa::framebuffer::{LockedTextFrameBuffer, RgbaColor};
+use crate::boot::multiboot::mb_information::FramebufferMultibootInformation;
+use crate::mem::VirtAddr;
+use crate::video::vesa::framebuffer::{LockedTextFrameBuffer, RgbaColor, TextFrameBuffer};
+use crate::video::vesa::video_mode::{ModeInfoBlock, VESA_MODE_BUFFER};
+use crate::x86::paging::{get_memory_mapper, PageTableFlags};
 
 #[macro_use]
 pub mod video_mode;
 pub mod framebuffer;
 pub mod macros;
 
-pub static TEXT_BUFFER: OnceCell<LockedTextFrameBuffer> = OnceCell::uninit();
+static TEXT_BUFFER: OnceCell<LockedTextFrameBuffer> = OnceCell::uninit();
+
+pub fn text_buffer() -> &'static LockedTextFrameBuffer<'static> {
+    TEXT_BUFFER.try_get().unwrap()
+}
+
+pub fn init_text_buffer_from_vesa() {
+    TEXT_BUFFER.try_init_once(|| {
+        let vesamode_info_ptr = VESA_MODE_BUFFER as *mut ModeInfoBlock;
+        let vesamode_info = unsafe { ptr::read(vesamode_info_ptr) };
+        let framebuffer = TextFrameBuffer::from_vesamode_info(&vesamode_info);
+
+        LockedTextFrameBuffer::new(framebuffer)
+    });
+}
+
+pub fn init_text_buffer_from_multiboot(header: FramebufferMultibootInformation) {
+    let framebuffer_addr = header.addr;
+    let framebuffer_size =
+        (header.bpp as usize >> 3) * header.height as usize * header.width as usize;
+    let mapping_addr = VirtAddr::new(0xFFFF_D800_0000_000);
+
+    let page_flags = PageTableFlags::new()
+        .with_cache_disable(true)
+        .with_write(true);
+
+    unsafe {
+        get_memory_mapper().lock().map_physical_memory(
+            framebuffer_addr,
+            mapping_addr,
+            page_flags,
+            PageTableFlags::new(),
+            framebuffer_size,
+        )
+    }
+
+    TEXT_BUFFER.init_once(|| {
+        let framebuffer = TextFrameBuffer::from_multiboot_info(&header, mapping_addr);
+        LockedTextFrameBuffer::new(framebuffer)
+    });
+}
 
 /// Prints a formatted text input to the shared [`TextFrameBuffer`].
 ///
@@ -30,13 +74,7 @@ pub static TEXT_BUFFER: OnceCell<LockedTextFrameBuffer> = OnceCell::uninit();
 ///
 /// Panics if called before the shared buffer was initialized.
 pub fn arg_print(args: fmt::Arguments) {
-    TEXT_BUFFER
-        .get()
-        .unwrap()
-        .buffer
-        .lock()
-        .write_fmt(args)
-        .unwrap();
+    text_buffer().buffer.lock().write_fmt(args).unwrap();
 }
 
 /// Prints a string slice to the shared [`TextFrameBuffer`]
@@ -45,13 +83,7 @@ pub fn arg_print(args: fmt::Arguments) {
 ///
 /// Panics if called before the shared buffer was initialized
 pub fn print(str: &str) {
-    TEXT_BUFFER
-        .get()
-        .unwrap()
-        .buffer
-        .lock()
-        .write_str(str)
-        .unwrap();
+    text_buffer().buffer.lock().write_str(str).unwrap();
 }
 
 /// Prints a string slice to the shared [`TextFrameBuffer`],
@@ -62,12 +94,7 @@ pub fn print(str: &str) {
 ///
 /// Panics if called before the shared buffer was initialized
 pub fn print_colored(str: &str, color: &RgbaColor) {
-    TEXT_BUFFER
-        .get()
-        .unwrap()
-        .buffer
-        .lock()
-        .write_str_with_color(str, color)
+    text_buffer().buffer.lock().write_str_with_color(str, color)
 }
 
 /// Changes the VESA video mode to the closest one given

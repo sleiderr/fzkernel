@@ -12,15 +12,23 @@ workspace = "build/"
 
 [dependencies]
 bitfield = "0.14"
+bytemuck = { version = "1.14", features = ["derive", "min_const_generics"] }
+pod-enum = { path = "src/deps/pod-enum" }
+futures-lite = { version = "2.2", default-features = false, features = ["alloc"] }
 numtoa = "0.2"
 rlibc = "1"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
 spin = "0.9"
+hashbrown = "0.14.5"
 modular-bitfield = "0.11"
 noto-sans-mono-bitmap = "0.2"
 conquer-once = { version = "0.4", default-features = false }
+unifont = "1.1"
 fzproc_macros = { path = "src/fzboot/proc_macros" }
+vob = { path = "src/deps/vob", features = ["unsafe_internals"] }
+acpi = { path = "src/deps/acpi/acpi" }
 
 [features]
 alloc = []
 real = []
+x86_64 = ["fzproc_macros/x86_64"]

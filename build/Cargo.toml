@@ -12,9 +12,8 @@ categories = ["no-std", "embedded"]
 [workspace]
 members = [
     "../",
-    "../src/fzboot/mbr",
-    "../src/fzboot/real",
     "../src/fzboot/main",
+    "../src/fzboot/kernel",
     "../src/fzboot/proc_macros"
 ]
 
@@ -28,11 +27,13 @@ categories = ["no-std", "embedded"]
 
 [dependencies]
 crossterm = "0.27"
+config = "0.14"
 anyhow = "1.0"
-ratatui = { version = "0.22.0", features = ["all-widgets"]}
+ratatui = { version = "0.22.0", features = ["all-widgets"] }
 argh = "0.1"
 crossbeam = "0.8"
 tokio = { version = "1.31.0", features = ["full"] }
+gpt = "3.1"
 async-trait = "0.1"
 conquer-once = "0.4"
 futures = "0.3"
@@ -42,21 +43,6 @@ parking_lot = "0.12"
 
 [build-dependencies]
 llvm-tools = "0.1.1"
-
-[profile.mbr]
-inherits = "release"
-opt-level = "z"
-codegen-units = 1
-lto = true
-debug = false
-panic = "abort"
-overflow-checks = false
-
-[profile.real]
-inherits = "release"
-opt-level = "s"
-panic = "abort"
-codegen-units = 1
 
 [profile.main]
 inherits = "release"

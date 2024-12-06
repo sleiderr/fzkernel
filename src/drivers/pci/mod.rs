@@ -3,6 +3,7 @@ use core::mem;
 use alloc::vec::Vec;
 use conquer_once::spin::OnceCell;
 
+use crate::drivers::ide::ide_init;
 use crate::{
     drivers::{
         ahci::ahci_init,
@@ -17,7 +18,14 @@ pub mod device;
 /// List of available PCI devices, after initial enumeration
 pub static PCI_DEVICES: OnceCell<PCIDevices> = OnceCell::uninit();
 
+pub fn pci_devices() -> &'static PCIDevices {
+    PCI_DEVICES
+        .try_get_or_init(pci_enumerate_traversal)
+        .expect("failed to enumerate pci devices")
+}
+
 pub fn pci_devices_init() {
+    ide_init();
     ahci_init();
 }
 
@@ -83,7 +91,9 @@ pci_device_class_def!(
         SCSIStorageDeviceNVME,
         "SCSI storage device (NVME)"
     ),
+    // TODO: Progamming interface for IDE controller can take multiple values.
     (0x010100, IDEController, "IDE controller"),
+    (0x010180, IDEControllerBusMaster, "IDE controller (bus master)"),
     (0x010200, FloppyController, "Floppy disk controller"),
     (0x010300, IPIBusController, "IPI bus controller"),
     (0x010400, RAIDController, "RAID controller"),

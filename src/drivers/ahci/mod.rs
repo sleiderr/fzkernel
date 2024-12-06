@@ -1,26 +1,31 @@
 //! AHCI driver for `FrozenBoot`.
 
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use conquer_once::spin::OnceCell;
+use fzproc_macros::interrupt_handler;
+use spin::RwLock;
 
 use crate::{
     drivers::{
         ahci::{
             command::{AHCICommandHeader, AHCITransaction},
-            device::SATADrive,
+            device::AHCIDrive,
             port::{AHCIDeviceDetection, HBAPort, HBAPortReceivedFIS, SATA_ATA_SIG},
         },
+        ide::AtaDeviceIdentifier,
         pci::{
             device::{MappedRegister, PCIDevice, PCIMappedMemory},
             DeviceClass, PCI_DEVICES,
         },
     },
-    error, info, wait_for, wait_for_or,
+    error, info,
+    irq::{manager::get_interrupt_manager, InterruptStackFrame},
+    wait_for, wait_for_or,
+    x86::apic::{io_apic::get_all_io_apics, mp_table::IOApicIntPin, InterruptVector},
 };
 
 pub mod device;
 
-mod ata_command;
 mod command;
 mod fis;
 mod port;
@@ -35,22 +40,18 @@ pub const PORT_REG_OFFSET: isize = 0x100;
 /// available on the system.
 pub static AHCI_CONTROLLER: OnceCell<spin::Mutex<AHCIController>> = OnceCell::uninit();
 
-/// List of available `SATA` drives on the system, usable after [`AHCIController`] initialization.
-pub static SATA_DRIVES: OnceCell<Vec<spin::Mutex<SATADrive>>> = OnceCell::uninit();
-
 /// Global `SATA` commands queue. Contains all commands sent to the [`AHCIController`] awaiting
 /// completion.
 pub static SATA_COMMAND_QUEUE: spin::Mutex<BTreeMap<u8, AHCITransaction>> =
     spin::Mutex::new(BTreeMap::new());
 
-/// Returns a locked [`SATADrive`] given its internal identifier.
-pub fn get_sata_drive(id: usize) -> &'static spin::Mutex<SATADrive> {
-    &SATA_DRIVES.get().unwrap()[id]
-}
+pub fn ahci_devices() -> &'static RwLock<BTreeMap<AtaDeviceIdentifier, Arc<AHCIDrive>>> {
+    static AHCI_DEVICES: OnceCell<RwLock<BTreeMap<AtaDeviceIdentifier, Arc<AHCIDrive>>>> =
+        OnceCell::uninit();
 
-/// Returns the list of [`SATADrive`] identifiers.
-pub fn sata_drive_ids() -> core::ops::Range<usize> {
-    0..SATA_DRIVES.get().unwrap().len()
+    AHCI_DEVICES
+        .try_get_or_init(|| RwLock::new(BTreeMap::<AtaDeviceIdentifier, Arc<AHCIDrive>>::new()))
+        .unwrap()
 }
 
 /// Initialize the [`AHCIController`] into a minimal working state.
@@ -68,6 +69,14 @@ pub fn ahci_init() {
         Some(dev) => dev,
         None => return,
     };
+
+    for io_apic in get_all_io_apics().unwrap() {
+        io_apic.1.lock().map_pin_to_irq(
+            IOApicIntPin::from(pci_dev.interrupt_line()),
+            InterruptVector::from(0x77),
+        );
+    }
+    get_interrupt_manager().register_static_handler(InterruptVector::from(0x77), irq_entry);
 
     pci_dev.set_memory_space_access(true).unwrap();
     pci_dev.set_interrupt_disable(false).unwrap();
@@ -158,7 +167,8 @@ pub fn ahci_init() {
 }
 
 /// AHCI controller related IRQs entry point.
-pub fn irq_entry() {
+#[interrupt_handler]
+pub fn irq_entry(frame: InterruptStackFrame) {
     unsafe { AHCI_CONTROLLER.get_unchecked().force_unlock() };
     let ahci_ctrl = AHCI_CONTROLLER.get().unwrap().lock();
 
@@ -224,11 +234,10 @@ impl AHCIController {
         None
     }
 
-    /// Initializes the [`SATADrive`] that are attached to the [`AHCIController`].
+    /// Initializes the [`AHCIDrive`] that are attached to the [`AHCIController`].
     ///
     /// Fills the [`SATA_DRIVES`] vector of devices.
     pub fn load_sata_drives(&mut self) {
-        let mut drives = alloc::vec![];
         for port in self.read_ghc().ports_implemented() {
             let port_reg = self.read_port_register(port);
             if let AHCIDeviceDetection::DeviceDetectedPhysicalCom =
@@ -237,21 +246,26 @@ impl AHCIController {
                 if port_reg.port_device_sig() == SATA_ATA_SIG {
                     info!(
                         "ahci",
-                        "found SATA device (id = {}    port = {})",
-                        drives.len(),
-                        port
+                        "found SATA device (id = {}    port = {})", port, port
                     );
-                    let drive = spin::Mutex::new(SATADrive::build_from_ahci(port, drives.len()));
-                    drives.push(drive);
+                    let drive = AHCIDrive::build_from_ahci(port, port.into());
+
+                    let mut devices = ahci_devices().write();
+                    devices.insert(
+                        AtaDeviceIdentifier::new(
+                            crate::drivers::generics::dev_disk::SataDeviceType::AHCI,
+                            0,
+                            port.into(),
+                        ),
+                        Arc::new(drive),
+                    );
                 }
             }
         }
-        SATA_DRIVES.init_once(|| drives);
+        let drives = ahci_devices().read();
 
-        let drives = SATA_DRIVES.get().unwrap();
-
-        for drive in drives {
-            drive.lock().load_partition_table();
+        for drive in drives.values() {
+            drive.load_partition_table();
         }
     }
 

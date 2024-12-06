@@ -1,10 +1,20 @@
 //! SATA-related utilities
 
-use alloc::{string::String, vec::Vec};
+use core::cell::UnsafeCell;
+use core::sync::atomic::AtomicBool;
 
+use alloc::vec::Vec;
+
+use crate::drivers::generics::dev_disk::DiskDevice;
+use crate::drivers::ide::ata_command::{
+    ATA_EXECUTE_DEVICE_DIAGNOSTIC, ATA_IDENTIFY_DEVICE, ATA_READ_DMA, ATA_WRITE_DMA,
+};
+use crate::drivers::ide::ata_pio::{
+    AtaError, AtaErrorCode, AtaIdentify, AtaIoRequest, AtaIoResult,
+};
+use crate::drivers::ide::AtaDeviceIdentifier;
 use crate::{
     drivers::ahci::{
-        ata_command::*,
         command::{AHCIPhysicalRegionDescriptor, AHCITransaction},
         fis::RegisterHostDeviceFIS,
         port::HBAPort,
@@ -39,29 +49,100 @@ use crate::{
 /// let mut buffer = [0u8; 1024];
 /// drive.read(0, 2, &mut buffer);
 /// ```
-#[derive(Debug)]
-pub struct SATADrive {
-    id: usize,
-    device_info: [u16; 256],
+pub struct AHCIDrive {
+    pub id: AtaDeviceIdentifier,
+    pub device_info: AtaIdentify,
     ahci_data: AHCIDriveInfo,
-    partition_table: PartitionTable,
-    partitions: Vec<Partition>,
+    partition_table: UnsafeCell<PartitionTable>,
+    partitions: UnsafeCell<Vec<Partition>>,
 }
+
+unsafe impl Sync for AHCIDrive {}
 
 #[derive(Debug)]
 struct AHCIDriveInfo {
     port: u8,
 }
 
-impl SATADrive {
+impl DiskDevice for AHCIDrive {
+    fn read(&self, start_lba: u64, sectors_count: u16) -> AtaIoRequest {
+        let mut io_req = AtaIoRequest::new(AtomicBool::new(true));
+        let mut data_buf: Vec<u8> = alloc::vec![];
+        data_buf.resize(
+            usize::from(sectors_count)
+                * usize::try_from(self.logical_sector_size()).expect("invalid sector size"),
+            0,
+        );
+        // TODO: Improve error codes, they need to be more explicit.
+        let read_result = match self.read_to_buf(start_lba, sectors_count, &mut data_buf) {
+            Ok(_) => crate::drivers::ide::ata_pio::AtaResult::Success,
+            Err(e) => crate::drivers::ide::ata_pio::AtaResult::Error(AtaError {
+                code: AtaErrorCode::CommandAbort,
+                lba: 0,
+            }),
+        };
+
+        let mut result = AtaIoResult {
+            result: read_result,
+            command: crate::drivers::ide::ata_command::AtaCommand::AtaReadSectors,
+            data: Some(data_buf),
+        };
+        *io_req.inner.result.lock() = Some(result);
+
+        io_req
+    }
+
+    fn write(&self, start_lba: u64, sectors_count: u16, data: Vec<u8>) -> AtaIoRequest {
+        let mut io_req = AtaIoRequest::new(AtomicBool::new(true));
+
+        let write_result = match self.write_from_buf(start_lba, sectors_count, &data) {
+            Ok(_) => crate::drivers::ide::ata_pio::AtaResult::Success,
+            Err(e) => crate::drivers::ide::ata_pio::AtaResult::Error(AtaError {
+                code: AtaErrorCode::CommandAbort,
+                lba: 0,
+            }),
+        };
+
+        let mut result = AtaIoResult {
+            result: write_result,
+            command: crate::drivers::ide::ata_command::AtaCommand::AtaWriteSectors,
+            data: None,
+        };
+        *io_req.inner.result.lock() = Some(result);
+
+        io_req
+    }
+
+    fn partitions(&self) -> &Vec<Partition> {
+        unsafe { &(*self.partitions.get()) }
+    }
+
+    fn identifier(&self) -> AtaDeviceIdentifier {
+        self.id
+    }
+
+    fn max_sector(&self) -> usize {
+        self.device_info.maximum_addressable_lba()
+    }
+
+    fn logical_sector_size(&self) -> u64 {
+        self.device_info.logical_sector_size().into()
+    }
+}
+
+impl AHCIDrive {
     pub fn build_from_ahci(port: u8, id: usize) -> Self {
         let ahci_data = AHCIDriveInfo { port };
         let mut drive = Self {
-            id,
-            device_info: [0u16; 256],
+            id: AtaDeviceIdentifier::new(
+                crate::drivers::generics::dev_disk::SataDeviceType::AHCI,
+                id,
+                0,
+            ),
+            device_info: AtaIdentify::from_bytes([0u16; 256]),
             ahci_data,
-            partition_table: PartitionTable::Unknown,
-            partitions: alloc::vec![],
+            partition_table: UnsafeCell::new(PartitionTable::Unknown),
+            partitions: UnsafeCell::new(alloc::vec![]),
         };
 
         drive.load_identification();
@@ -71,201 +152,67 @@ impl SATADrive {
 
     /// Loads the partitions contained on this device, whether the partition scheme is _MBR_ or
     /// _GPT_.
-    pub fn load_partition_table(&mut self) {
+    pub fn load_partition_table(&self) {
         let mbr = load_drive_mbr(self, 0);
 
         if mbr.is_pmbr() {
             let gpt = load_drive_gpt(self);
 
-            if let Some(gpt) = gpt {
-                self.partitions = gpt.get_partitions();
-                self.partition_table = PartitionTable::GPT(gpt);
-                return;
-            }
-        }
+            unsafe {
+                if let Some(gpt) = gpt {
+                    *self.partitions.get() = gpt.get_partitions();
+                    *self.partition_table.get() = PartitionTable::GPT(gpt);
 
-        self.partitions = mbr.get_partitions();
-
-        for partition in self.partitions.clone().iter() {
-            if let PartitionMetadata::MBR(mut meta) = partition.metadata() {
-                // if this device uses _EPBR_, we traverse the linked list to find all partitions.
-                if matches!(meta.partition_type(), PartitionType::Extended)
-                    || matches!(meta.partition_type(), PartitionType::ExtendedLBA)
-                {
-                    while load_drive_mbr(self, meta.start_lba() as u64).get_partition_metadata()[1]
-                        .is_used()
-                        || load_drive_mbr(self, meta.start_lba() as u64).get_partition_metadata()[0]
-                            .is_used()
-                    {
-                        let partitions =
-                            load_drive_mbr(self, meta.start_lba() as u64).get_partition_metadata();
-
-                        let mut ext_part = partitions[0];
-
-                        ext_part.set_start_lba(ext_part.start_lba() + meta.start_lba());
-
-                        self.partitions
-                            .push(Partition::from_metadata(PartitionMetadata::MBR(ext_part)));
-                        meta = partitions[1];
+                    for partition in &mut (*self.partitions.get()) {
+                        partition.load_fs().unwrap();
                     }
+
+                    return;
                 }
             }
         }
 
-        self.partition_table = PartitionTable::MBR(mbr);
-    }
-
-    /// Returns the `maximum queue depth` supported by the device.
-    ///
-    /// The queue depth includes all command for which acceptance has occured but not completion.
-    /// Should be 0 if the `NCQ` feature set is not supported.
-    pub fn queue_depth(&self) -> u8 {
-        (self.device_info[75] & 0b11111) as u8 + 1
-    }
-
-    /// Returns the `Minimum Multiword DMA transfer cycle time per word`
-    ///
-    /// Defines, in nanoseconds, the minimum cycle time that the device supports when performing
-    /// Multiword DMA transfer on a per word basis.
-    ///
-    /// Shall be set to `0x78` ns for `SATA` devices.
-    pub fn minimum_multiword_dma_transfer_cycle_time_per_word(&self) -> u16 {
-        self.device_info[65]
-    }
-
-    /// Returns the maximum number of logical sectors per `DRQ` data block that the device supports
-    /// for `READ MULTIPLE`, `WRITE MULTIPLE`, ... commands.
-    pub fn maximum_count_logical_sectors_per_drq(&self) -> u8 {
-        (self.device_info[47] & 0xff) as u8
-    }
-
-    /// Indicates if:
-    ///
-    /// - the device has more than one logical sector per physical sector
-    /// - the `Logical to Physical sector relationship` field is supported
-    fn logical_physical_relationship_supported(&self) -> bool {
-        self.device_info[106] & (1 << 13) != 0
-    }
-
-    /// Returns the size of a physical sector in number of logical sectors.
-    pub fn logical_sectors_per_physical_sector(&self) -> u8 {
-        if !self.logical_physical_relationship_supported() {
-            return 1;
+        unsafe {
+            *self.partitions.get() = mbr.get_partitions();
         }
 
-        1 << ((self.device_info[106] & (0b1111)) as u8)
-    }
+        unsafe {
+            for partition in (*self.partitions.get()).clone().iter() {
+                if let PartitionMetadata::MBR(mut meta) = partition.metadata() {
+                    // if this device uses _EPBR_, we traverse the linked list to find all partitions.
+                    if matches!(meta.partition_type(), PartitionType::Extended)
+                        || matches!(meta.partition_type(), PartitionType::ExtendedLBA)
+                    {
+                        while load_drive_mbr(self, meta.start_lba() as u64).get_partition_metadata()
+                            [1]
+                        .is_used()
+                            || load_drive_mbr(self, meta.start_lba() as u64)
+                                .get_partition_metadata()[0]
+                                .is_used()
+                        {
+                            let partitions = load_drive_mbr(self, meta.start_lba() as u64)
+                                .get_partition_metadata();
 
-    /// Indicates the nominal media rotation rate of the device in rpm, if available.
-    pub fn nominal_rotation_rate(&self) -> ATAMediaRotationRate {
-        match self.device_info[217] {
-            0x0001 => ATAMediaRotationRate::NonRotating,
-            speed if (0x0401..0xFFFE).contains(&speed) => {
-                ATAMediaRotationRate::Rotating(speed as usize)
+                            let mut ext_part = partitions[0];
+
+                            ext_part.set_start_lba(ext_part.start_lba() + meta.start_lba());
+
+                            (*self.partitions.get()).push(
+                                Partition::from_metadata(
+                                    0,
+                                    self.id,
+                                    PartitionMetadata::MBR(ext_part),
+                                )
+                                .unwrap(),
+                            );
+                            meta = partitions[1];
+                        }
+                    }
+                }
             }
-            _ => ATAMediaRotationRate::NotReported,
+
+            *self.partition_table.get() = PartitionTable::MBR(mbr);
         }
-    }
-
-    /// Returns the physical device size, in bytes.
-    pub fn device_size(&self, format: SizeFormat) -> u64 {
-        let bytes_size = self.maximum_addressable_lba() as u64 * self.logical_sector_size() as u64;
-        match format {
-            SizeFormat::Bytes => bytes_size,
-            SizeFormat::Kilobytes => bytes_size >> 10,
-            SizeFormat::Megabytes => bytes_size >> 20,
-            SizeFormat::Gigabytes => bytes_size >> 30,
-            SizeFormat::Terabytes => bytes_size >> 40,
-        }
-    }
-
-    /// Returns the number of bytes per logical sector.
-    pub fn logical_sector_size(&self) -> u32 {
-        // if the logical_sector_size bit is set, the sector size is higher than 512 bytes, and the
-        // value is contained is the `Logical sector size` (117..118) field.
-        let logical_sector_size_supported = self.device_info[106] & (1 << 12) != 0;
-
-        if logical_sector_size_supported {
-            return ((self.device_info[118] as u32) << 16) | (self.device_info[117] as u32);
-        }
-
-        0x200
-    }
-
-    /// Returns the maximum LBA in user accessible space.
-    pub fn maximum_addressable_lba(&self) -> usize {
-        let max_lba = ((self.device_info[61] as u32) << 16) | (self.device_info[60] as u32);
-
-        if max_lba == 0x0fff_ffff && (self.device_info[69] & 0b1000) != 0 {
-            // use extended number instead
-            return (((self.device_info[233] as u64) << 48)
-                | ((self.device_info[232] as u64) << 32)
-                | ((self.device_info[231] as u64) << 16)
-                | (self.device_info[230] as u64)) as usize;
-        }
-
-        max_lba as usize
-    }
-
-    /// Returns the current `media serial number`.
-    ///
-    /// `Media serial number` is a 60-bytes string, the first 40 bytes indicate the media serial
-    /// number, and the last 20 indicate the media manufacturer.
-    pub fn media_serial_number(&self) -> String {
-        let serial_words = &self.device_info[176..206];
-        let mut serial_bytes: Vec<u8> = alloc::vec![];
-        for word in serial_words {
-            let word_lo = (word & 0xff) as u8;
-            let word_hi = ((word >> 8) & 0xff) as u8;
-            serial_bytes.push(word_hi);
-            serial_bytes.push(word_lo);
-        }
-
-        unsafe { String::from_utf8_unchecked(serial_bytes) }
-    }
-
-    /// Returns the device's `Model Number`.
-    ///
-    /// It is a 40-bytes ATA string.
-    pub fn model_number(&self) -> String {
-        let model_words = &self.device_info[27..47];
-        let mut model_bytes: Vec<u8> = alloc::vec![];
-        for word in model_words {
-            let word_lo = (word & 0xff) as u8;
-            let word_hi = ((word >> 8) & 0xff) as u8;
-            model_bytes.push(word_hi);
-            model_bytes.push(word_lo);
-        }
-
-        unsafe { String::from_utf8_unchecked(model_bytes) }
-    }
-
-    /// Returns the device's `Serial Number`.
-    pub fn serial_number(&self) -> String {
-        let serial_words = &self.device_info[10..20];
-        let mut serial_bytes: Vec<u8> = alloc::vec![];
-        for word in serial_words {
-            let word_lo = (word & 0xff) as u8;
-            let word_hi = ((word >> 8) & 0xff) as u8;
-            serial_bytes.push(word_hi);
-            serial_bytes.push(word_lo);
-        }
-
-        unsafe { String::from_utf8_unchecked(serial_bytes) }
-    }
-
-    /// Returns the device's `Firmware Revision`
-    pub fn firmware_revision(&self) -> String {
-        let fw_words = &self.device_info[23..27];
-        let mut fw_bytes: Vec<u8> = alloc::vec![];
-        for word in fw_words {
-            let word_lo = (word & 0xff) as u8;
-            let word_hi = ((word >> 8) & 0xff) as u8;
-            fw_bytes.push(word_hi);
-            fw_bytes.push(word_lo);
-        }
-
-        unsafe { String::from_utf8_unchecked(fw_bytes) }
     }
 
     /// Sends a `IDENTIFY DEVICE` command to the corresponding device.
@@ -273,12 +220,14 @@ impl SATADrive {
     /// The device shall respond with a 512-bytes data block containing various information
     /// concerning itself.
     pub fn load_identification(&mut self) {
-        self.device_info = self.dispach_ata_identify(
-            AHCI_CONTROLLER
-                .get()
-                .unwrap()
-                .lock()
-                .read_port_register(self.ahci_data.port),
+        self.device_info = AtaIdentify::from_bytes(
+            self.dispach_ata_identify(
+                AHCI_CONTROLLER
+                    .get()
+                    .unwrap()
+                    .lock()
+                    .read_port_register(self.ahci_data.port),
+            ),
         );
     }
 
@@ -296,16 +245,16 @@ impl SATADrive {
     /// let mut buffer = [0u8; 2096];
     /// get_sata_drive(0).lock().read(0, 4, &mut buffer);
     /// ```
-    pub fn read(
-        &mut self,
+    pub fn read_to_buf(
+        &self,
         start_lba: u64,
         sectors_count: u16,
         buffer: &mut [u8],
     ) -> CanFail<IOError> {
-        (sectors_count as usize * self.logical_sector_size() as usize <= buffer.len())
+        (sectors_count as usize * self.device_info.logical_sector_size() as usize <= buffer.len())
             .then_some(())
             .ok_or(IOError::InvalidCommand)?;
-        (start_lba as usize + sectors_count as usize <= self.maximum_addressable_lba())
+        (start_lba as usize + sectors_count as usize <= self.device_info.maximum_addressable_lba())
             .then_some(())
             .ok_or(IOError::InvalidCommand)?;
 
@@ -334,8 +283,13 @@ impl SATADrive {
     /// let buffer = [1u8; 2096];
     /// get_sata_drive(0).lock().write(0, 4, &buffer);
     /// ```
-    pub fn write(&mut self, start_lba: u64, sectors_count: u16, buffer: &[u8]) -> CanFail<IOError> {
-        (start_lba as usize + sectors_count as usize <= self.maximum_addressable_lba())
+    pub fn write_from_buf(
+        &self,
+        start_lba: u64,
+        sectors_count: u16,
+        buffer: &[u8],
+    ) -> CanFail<IOError> {
+        (start_lba as usize + sectors_count as usize <= self.device_info.maximum_addressable_lba())
             .then_some(())
             .ok_or(IOError::InvalidCommand)?;
 
@@ -350,9 +304,9 @@ impl SATADrive {
         Ok(())
     }
 
-    unsafe fn write_dma(&mut self, start_lba: u64, sectors_count: u16, buffer: *const u8) -> usize {
+    unsafe fn write_dma(&self, start_lba: u64, sectors_count: u16, buffer: *const u8) -> usize {
         let mut write_fis = RegisterHostDeviceFIS::new_empty();
-        let sector_size = self.logical_sector_size();
+        let sector_size = self.device_info.logical_sector_size();
         write_fis.set_command(ATA_WRITE_DMA);
         write_fis.set_device(1 << 6);
         write_fis.set_lba(start_lba);
@@ -360,8 +314,9 @@ impl SATADrive {
         write_fis.set_command_update_bit(true);
 
         let mut ahci_transaction = AHCITransaction::new();
-        ahci_transaction
-            .set_byte_size((sectors_count as u32 * self.logical_sector_size()) as usize);
+        ahci_transaction.set_byte_size(
+            (sectors_count as u32 * self.device_info.logical_sector_size()) as usize,
+        );
 
         let mut prdtl = alloc::vec![];
         let prdt_count = (((sectors_count - 1) >> 4) + 1) as isize;
@@ -395,9 +350,9 @@ impl SATADrive {
         port.dispatch_command(ahci_transaction)
     }
 
-    unsafe fn read_dma(&mut self, start_lba: u64, sectors_count: u16, buffer: *mut u8) -> usize {
+    unsafe fn read_dma(&self, start_lba: u64, sectors_count: u16, buffer: *mut u8) -> usize {
         let mut read_fis = RegisterHostDeviceFIS::new_empty();
-        let sector_size = self.logical_sector_size();
+        let sector_size = self.device_info.logical_sector_size();
         read_fis.set_command(ATA_READ_DMA);
         read_fis.set_device(1 << 6);
         read_fis.set_lba(start_lba);
@@ -405,8 +360,9 @@ impl SATADrive {
         read_fis.set_command_update_bit(true);
 
         let mut ahci_transaction = AHCITransaction::new();
-        ahci_transaction
-            .set_byte_size((sectors_count as u32 * self.logical_sector_size()) as usize);
+        ahci_transaction.set_byte_size(
+            (sectors_count as u32 * self.device_info.logical_sector_size()) as usize,
+        );
 
         let mut prdtl = alloc::vec![];
         let prdt_count = (((sectors_count - 1) >> 4) + 1) as isize;

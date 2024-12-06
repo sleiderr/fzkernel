@@ -9,8 +9,13 @@ use core::{fmt::Write, slice};
 
 use noto_sans_mono_bitmap::{get_raster, FontWeight, RasterHeight, RasterizedChar};
 use spin::Mutex;
+use unifont::{get_glyph, Glyph};
 
-use crate::video::vesa::video_mode::{ModeInfoBlock, PixelLayout};
+use crate::{
+    boot::multiboot::mb_information::FramebufferMultibootInformation,
+    mem::{MemoryAddress, VirtAddr},
+    video::vesa::video_mode::{ModeInfoBlock, PixelLayout},
+};
 
 /// Default font char height.
 pub const CHAR_HEIGHT: RasterHeight = RasterHeight::Size16;
@@ -128,10 +133,82 @@ impl<'b> TextFrameBuffer<'b> {
         framebuffer
     }
 
+    /// Creates a `TextFrameBuffer` from information provided in a [`MultibootInformation`] block.
+    ///
+    /// The VESA mode must support a linear framebuffer.
+    pub fn from_multiboot_info(
+        info: &FramebufferMultibootInformation,
+        mapping_addr: VirtAddr,
+    ) -> Self {
+        let pixel_layout = match (
+            info.red_field_pos,
+            info.green_field_pos,
+            info.blue_field_pos,
+        ) {
+            (0, 8, 16) => PixelLayout::RGB,
+            (16, 8, 0) => PixelLayout::BGR,
+            _ => PixelLayout::RGB,
+        };
+        let metadata = FrameBufferMetadata {
+            layout: pixel_layout,
+            bytes_per_px: info.bpp as usize >> 3,
+            width: info.width as usize,
+            height: info.height as usize,
+            stride: usize::try_from(info.pitch).expect("invalid framebuffer pitch"),
+            bg_color: Some(DEFAULT_BG_COLOR),
+        };
+
+        let buffer = unsafe {
+            slice::from_raw_parts_mut(
+                mapping_addr.as_mut_ptr::<u8>(),
+                (info.bpp as usize >> 3) * info.height as usize * info.width as usize,
+            )
+        };
+
+        let mut framebuffer = Self {
+            buffer,
+            cursor: TextCursor::default(),
+            metadata,
+        };
+
+        framebuffer.clear();
+
+        framebuffer
+    }
+
     /// Write a string slice into the [`TextFrameBuffer`].
     pub fn write_str_with_color(&mut self, text: &str, color: &RgbaColor) {
         for c in text.chars() {
             self.putchar(c, Some(color));
+        }
+    }
+
+    pub fn write_str_bitmap(&mut self, text: &str) {
+        for c in text.chars() {
+            self.putchar_bitmap(c, false);
+        }
+    }
+
+    pub fn write_str_bitmap_reversed(&mut self, text: &str) {
+        for c in text.chars() {
+            self.putchar_bitmap(c, true);
+        }
+    }
+
+    pub fn write_str_bitmap_centered(&mut self, text: &str, reversed: bool) {
+        let text_width = text.len() * 8;
+        let remaining_width = self.metadata.width - text_width;
+
+        for _ in 0..remaining_width >> 4 {
+            self.putchar_bitmap(' ', false);
+        }
+
+        for c in text.chars() {
+            self.putchar_bitmap(c, reversed);
+        }
+
+        for _ in 0..remaining_width >> 4 {
+            self.putchar_bitmap(' ', false);
         }
     }
 
@@ -153,6 +230,28 @@ impl<'b> TextFrameBuffer<'b> {
                 match color {
                     Some(color) => self.write_rasterized_char_with_color(rendered, color),
                     None => self.write_rasterized_char(rendered),
+                }
+            }
+        }
+    }
+
+    fn putchar_bitmap(&mut self, ch: char, reversed: bool) {
+        match ch {
+            '\n' => self.newline(),
+            '\r' => self.carriage_return(),
+            ch => {
+                if (self.cursor.x + CHAR_WIDTH) >= self.metadata.width {
+                    self.newline();
+                }
+                if (self.cursor.y + CHAR_HEIGHT.val() + BORDER) >= self.metadata.height {
+                    self.clear();
+                }
+                if let Glyph::Halfwidth(rendered) = get_glyph(ch).unwrap() {
+                    if reversed {
+                        self.write_bitmap_char_reversed(rendered);
+                    } else {
+                        self.write_bitmap_char(rendered);
+                    }
                 }
             }
         }
@@ -184,6 +283,30 @@ impl<'b> TextFrameBuffer<'b> {
             }
         }
         self.cursor.x += char.width() + CHAR_SPACING;
+    }
+
+    fn write_bitmap_char(&mut self, char: &[u8; 16]) {
+        for (y, row) in char.iter().enumerate() {
+            for (x, bit) in (0..8).enumerate() {
+                match *row & 1 << (7 - bit) {
+                    0 => self.write_px_with_intensity(self.cursor.x + x, self.cursor.y + y, 0),
+                    _ => self.write_px_with_intensity(self.cursor.x + x, self.cursor.y + y, 255),
+                }
+            }
+        }
+        self.cursor.x += 8 + CHAR_SPACING;
+    }
+
+    fn write_bitmap_char_reversed(&mut self, char: &[u8; 16]) {
+        for (y, row) in char.iter().enumerate() {
+            for (x, bit) in (0..8).enumerate() {
+                match *row & 1 << (7 - bit) {
+                    0 => self.write_px_with_intensity(self.cursor.x + x, self.cursor.y + y, 255),
+                    _ => self.write_px_with_intensity(self.cursor.x + x, self.cursor.y + y, 0),
+                }
+            }
+        }
+        self.cursor.x += 8 + CHAR_SPACING;
     }
 
     /// Write a pixel to the `TextFrameBuffer` given an intensity.

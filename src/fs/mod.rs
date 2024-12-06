@@ -12,13 +12,56 @@
 
 use core::{fmt::Debug, slice};
 
+use crate::drivers::ide::AtaDeviceIdentifier;
+use alloc::sync::Arc;
 use alloc::{boxed::Box, string::String, vec::Vec};
+use spin::RwLock;
 
-use crate::errors::IOError;
+use crate::errors::{IOError, MountError};
+use crate::fs::ext4::LockedExt4Fs;
 
+pub(crate) mod ext4;
 pub mod partitions;
 
+/// Base [`Result`] type for I/O operations, using the corresponding custom error type.
 pub type IOResult<T> = Result<T, IOError>;
+
+/// Represents the current file-system on a [`Partition`]
+#[derive(Clone)]
+pub(crate) enum PartFS {
+    Ext4(Box<LockedExt4Fs>),
+    Unknown,
+}
+
+pub(crate) trait Fs {
+    /// Mounts a filesystem, from a disk partition.
+    ///
+    /// It initializes the main data structures of the file system, and its metadata. Afterwards, it registers it
+    /// to the filesystem registry.
+    ///
+    /// # Errors
+    ///
+    /// May return any variant of [`MountError`] in case of failure. The most frequent reason for failure are:
+    ///
+    /// - Corrupted filesystem (for instance, an invalid superblock)
+    ///
+    /// - Disk I/O error
+    fn mount(
+        drive_id: AtaDeviceIdentifier,
+        partition_id: usize,
+        partition_data: u64,
+    ) -> Result<Arc<RwLock<Self>>, MountError>;
+
+    /// Identifies a filesystem, from a disk partition.
+    ///
+    /// Returns a [`bool`] that indicates whether the filesystem on that partition corresponds to this one or not.
+    ///
+    /// # Errors
+    ///
+    /// May return any variant of [`IOError`] in case of failure.
+    /// Usually, errors are caused by disk / driver failures.
+    fn identify(drive_id: AtaDeviceIdentifier, partition_data: u64) -> IOResult<bool>;
+}
 
 /// A file-system independent file. This provides a basic set of functionalities when working with
 /// files. That should be the only file-related type useful in most situations.
@@ -52,11 +95,13 @@ impl FsFile for Box<dyn FsFile> {
 
 /// `Seek` provides a way to move the internal cursor of a file, or to retrieve the current
 /// position of the cursor using `Seek::Current`.
+#[derive(Clone, Copy, Debug, Default)]
 pub enum Seek {
     /// Moves the cursor backwards of the provided number of bytes.
     Backward(usize),
 
     /// Does not move the cursor, used to retrieve the current position.
+    #[default]
     Current,
 
     /// Moves the cursor forward of the provided number of bytes.
@@ -66,8 +111,12 @@ pub enum Seek {
 /// `DirEntry` are returned when iterating over a [`Directory`].
 ///
 /// They can either represent a [`File`], or a [`Directory`].
+#[derive(Debug)]
 pub enum DirEntry {
+    /// This directory entry corresponds to a file.
     File(File),
+
+    /// This directory entry corresponds to a directory.
     Directory(Directory),
 }
 
@@ -80,9 +129,14 @@ pub trait FsDirectory: Iterator + Debug {
     /// # Errors
     ///
     /// Fails if the directory is the file system's root directory.
-    fn parent(&self) -> IOResult<Directory>;
+    fn parent(&mut self) -> Option<Directory>;
 
     /// Returns `true` if the directory is the file system's root directory.
+    ///
+    /// # Errors
+    ///
+    /// In case of any I/O error, a generic error will be returned. An error may mean that the file
+    /// is corrupted.
     fn is_root_dir(&self) -> IOResult<bool>;
 
     /// Returns the size of the file, in bytes.
@@ -167,12 +221,12 @@ pub trait FsFile: Debug {
         let buf_len = buf.len();
         let size = self.size()?;
 
-        let bytes_read = self.read(core::slice::from_raw_parts_mut(
-            (buf.as_ptr() as *mut u8).wrapping_add(buf_len),
+        let bytes_read = self.read(slice::from_raw_parts_mut(
+            buf.as_ptr().cast_mut().wrapping_add(buf_len),
             size,
         ))?;
 
-        let extended_slice = core::slice::from_raw_parts(buf.as_ptr(), bytes_read + buf_len);
+        let extended_slice = slice::from_raw_parts(buf.as_ptr(), bytes_read + buf_len);
 
         Ok(extended_slice)
     }
@@ -272,6 +326,11 @@ pub trait FsFile: Debug {
     /// This is highly unsafe. The caller must ensure that the memory was allocated prior to the
     /// call, or that the portion of memory that is being used is free and will not be used
     /// anywhere else.
+    ///
+    /// # Errors
+    ///
+    /// In case of any I/O error, a generic error will be returned. An error may mean that the file
+    /// is corrupted.
     unsafe fn mmap(&mut self, buf: *mut u8) -> IOResult<&[u8]> {
         self.read_file_unchecked(slice::from_raw_parts_mut(buf, 0))
     }

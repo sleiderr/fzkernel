@@ -1,4 +1,8 @@
 target*
-build/boot.img
+artifacts*
 .idea
 .DS_STORE
+*.bin
+*.dd
+*.img
+*.lock

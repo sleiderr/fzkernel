@@ -8,7 +8,11 @@ workspace = "../../../build/"
 syn = { version = "2.0.28", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"
+darling = "0.20.9"
 
 [lib]
 proc-macro = true
 doc = false
+
+[features]
+x86_64 = []

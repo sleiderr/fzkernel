@@ -14,7 +14,7 @@ use core::{
     ptr::{self, NonNull},
 };
 
-const MIN_HEAP_ALIGN: usize = 4096;
+const MIN_HEAP_ALIGN: usize = 8192;
 
 /// Locked version of the [`BuddyAllocator`].
 ///
@@ -36,6 +36,7 @@ impl<const N: usize> LockedBuddyAllocator<N> {
 unsafe impl<const N: usize> GlobalAlloc for LockedBuddyAllocator<N> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let mut allocator = self.alloc.lock();
+
         allocator.allocate(layout)
     }
 
@@ -131,11 +132,12 @@ impl<const N: usize> BuddyAllocator<N> {
     /// Resizes or translates the heap.
     ///
     /// Can be used to dynamically set up the heap depending on available physical memory.
-    pub fn resize(&mut self, base_addr: NonNull<u8>, max_blk_size: usize) {
+    pub fn resize(&mut self, base_addr: NonNull<u8>, mut max_blk_size: usize) {
         let min_blk_size = max_blk_size >> (N - 1);
 
         assert!(min_blk_size >= core::mem::size_of::<FreeBlock>());
 
+        max_blk_size &= !(MIN_HEAP_ALIGN - 1);
         assert!(max_blk_size & (MIN_HEAP_ALIGN - 1) == 0);
 
         let base_addr_ptr = base_addr.as_ptr();
@@ -209,9 +211,9 @@ impl<const N: usize> BuddyAllocator<N> {
         // it's also free. We keep doing that for each level
         // until the buddy is in use.
         for level in alloc_level..self.free_lists.len() {
-            if let Some(buddy) = self.buddy(block, level as u8) {
+            if let Some(buddy) = self.buddy(full_block, level as u8) {
                 if self.remove_blk(buddy, level as u8) {
-                    full_block = cmp::min(buddy, block);
+                    full_block = cmp::min(buddy, full_block);
                     continue;
                 }
             }
@@ -220,6 +222,7 @@ impl<const N: usize> BuddyAllocator<N> {
             // list, which means it is currently in used,
             // we can stop merging here.
             self.free_blk(full_block, level as u8);
+
             return;
         }
     }
@@ -264,7 +267,7 @@ impl<const N: usize> BuddyAllocator<N> {
     /// Remove a given `FreeBlock` from free lists.
     ///
     /// Returns `false` if the operation was unsuccessful,
-    /// it usually means that the `FreeBlock is in use`.
+    /// it usually means that the `FreeBlock` is in use.
     pub fn remove_blk(&mut self, block: *mut u8, level: u8) -> bool {
         let blk_header = block as *mut FreeBlock;
 
@@ -357,7 +360,12 @@ impl<const N: usize> BuddyAllocator<N> {
     /// Buddy: 1100
     pub fn buddy(&self, block: *mut u8, level: u8) -> Option<*mut u8> {
         // Make sure the block is in our bounds.
-        assert!(block >= self.base_addr.inner);
+        assert!(
+            block >= self.base_addr.inner,
+            "{:#x} : {:#x}",
+            block as u64,
+            self.base_addr.inner as u64
+        );
         assert!(unsafe { block <= self.base_addr.inner.add(self.max_blk_size) });
 
         // The entire heap does not have a buddy
@@ -376,7 +384,7 @@ impl<const N: usize> BuddyAllocator<N> {
 /// are not [`Send`] or [`Sync`].
 /// It does nothing but simulate the implementation
 /// of `Send` and `Sync`
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct NullLock<T: Clone + Copy> {
     inner: T,
 }

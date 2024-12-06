@@ -5,10 +5,12 @@
 //!
 //! The clock is accessible through a shared [`HPETClock`], after its initialization using `hpet_clk_init`.
 
+use acpi::HpetInfo;
 use core::mem;
 
 use conquer_once::spin::OnceCell;
 
+use crate::drivers::acpi::hpet_info;
 use crate::{
     info,
     io::acpi::{sdt::ACPISDTHeader, ACPIAddress},
@@ -20,7 +22,7 @@ pub static HPET_CLK: OnceCell<HPETClock> = OnceCell::uninit();
 
 /// Initialize the global HPET clock through ACPI, if available.
 pub fn hpet_clk_init() {
-    if let Some(hpet_desc) = HPETDescriptionTable::load() {
+    if let Some(hpet_desc) = hpet_info() {
         let mut clock = HPETClock::from_acpi_table(hpet_desc);
         clock.enable_clk();
         info!("hpet", "initializing HPET clock");
@@ -39,16 +41,15 @@ pub fn hpet_clk_init() {
 }
 
 pub struct HPETClock<'t> {
-    description_table: &'static mut HPETDescriptionTable,
+    description_table: HpetInfo,
     registers: &'t mut HPETMemRegisters,
     clk_freq: f64,
 }
 
 impl<'t> HPETClock<'t> {
     /// Creates a `HPETClock` from its ACPI description as a [`HPETDescriptionTable`].
-    pub fn from_acpi_table(desc: &'static mut HPETDescriptionTable) -> Self {
-        let registers: &mut HPETMemRegisters =
-            unsafe { mem::transmute(desc.base_addr.address as u32) };
+    pub fn from_acpi_table(desc: HpetInfo) -> Self {
+        let registers: &mut HPETMemRegisters = unsafe { mem::transmute(desc.base_address) };
         let clk_freq = 1_000_000_000_f64 / (registers.__counter_clk_period()) as f64;
 
         Self {

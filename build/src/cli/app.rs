@@ -12,7 +12,6 @@ use crate::ui::{
     component::{Component, ComponentManager},
     config::ConfigSelector,
     footer::Footer,
-    main::draw_ui,
     steps::StepsBar,
 };
 

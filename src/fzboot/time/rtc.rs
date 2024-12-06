@@ -2,7 +2,7 @@
 //!
 //! Provides a way to read the current UTC time from the RTC chip.
 
-use crate::io::{inb, outb};
+use crate::io::{inb, outb, IOPort};
 use crate::{
     io::io_delay,
     time::{DateTime, Weekday},
@@ -15,11 +15,11 @@ use crate::{
 #[inline]
 fn __cmos_read(registry: u8) -> u8 {
     // Set the registry to which we read from.
-    outb(0x70, registry);
+    outb(IOPort::from(0x70), registry);
     io_delay();
 
     // Read the value of the registry.
-    inb(0x71)
+    inb(IOPort::from(0x71))
 }
 
 /// Checks if the RTC value is being updated (rolls over).

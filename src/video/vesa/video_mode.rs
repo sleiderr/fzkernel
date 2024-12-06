@@ -10,11 +10,11 @@ use crate::{
 };
 
 /// In-memory location of the [`VbeInfoBlock`] header
-pub const VESA_VBE_BUFFER: u16 = 0x4f00;
+pub const VESA_VBE_BUFFER: u16 = 0x5000;
 
 // In-memory location of the [`ModeInfoBlock`] header for the currently
 // selected display mode.
-pub const VESA_MODE_BUFFER: u16 = 0x4f00 + mem::size_of::<VbeInfoBlock>() as u16;
+pub const VESA_MODE_BUFFER: u16 = 0x5000 + mem::size_of::<VbeInfoBlock>() as u16;
 
 vbe_const!(VBE_RET_SUPPORTED, 0x4f);
 vbe_const!(VBE_RET_SUCCESS, 0x00);

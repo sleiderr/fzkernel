@@ -1,0 +1,15 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+workspace = "../../../build"
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+fzboot = { path = "../../../", features = ["alloc", "x86_64"] }
+fzproc_macros = { path = "../proc_macros", features = ["x86_64"] }

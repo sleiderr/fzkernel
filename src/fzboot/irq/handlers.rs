@@ -1,84 +1,122 @@
-use crate::io::pic::PIC;
-use core::arch::asm;
-use fzproc_macros::{interrupt, interrupt_default};
+//! Definition of Interrupt handlers related structures and types.
+//!
+//! Two types of interrupt handlers are available:
+//!
+//! - Static handler: run without overhead, directly called when receiving an interrupt with the associated [`InterruptVector`]
+//!
+//! - Dynamic handler: run with minor overhead, allows multiple dynamic handlers to be defined for a same [`InterruptVector`].
+//!
+//! Dynamic handlers are executed in decreasing order of priority, and are called by a standard handler called when any interrupt with
+//! dynamic handlers defined is raised.
 
-/// This module defines every interrupts referenced by the IDT
-///
-/// It provides several utilities to define interrupts.
-///
-/// To define a simple interrupt, precede your fn definition with the proc
-/// macro #\[interrupt].
-/// This procedural macro will wrap your routine in a naked rust function
-/// allowing custom prologue and epilogue to handle `icall` CPU instruction
-///
-/// # Examples:
-///
-/// ```
-/// #[interrupt]
-/// pub fn _int0x00() {
-///     do_something()
-/// }
-/// ```
-///
-/// The naming convention implies that interrupt are named as follows :
-///
-/// ```
-/// format!("_int0x{:x}", int_number)
-/// ```
-///
-/// In order to define a default template for interrupt that you don't want to define or
-/// that you haven't implemented yet, [`fzproc_macros`] provides a proc_macro #\[interrupt_default]
-/// This one will provide a generic variable :
-///
-/// ```
-/// let int_code : usize
-/// ```
-///
-/// usable in your default template to perform generic handle actions at runtime.
-///
-/// ```
-/// #[interrupt_default]
-/// pub fn _int_default(){
-///      print!("{}", int_code);
-/// }
-/// ```
-///
-/// This would typically print the interrupt number for each interrupt triggered
-/// The default function should always be called _int_default and is required.
-///
-/// To import [`crate::interrupts`] you will have to call a proc macro in front of your
-/// declaration in order to auto generate the IDT from your handlers module.
-/// The proc macro takes an offset as an arg to chose where you want to write the table.
-///
-/// e.g. This example shows how you would save the idt at offset 0x8
-///
-/// ```
-/// #[interrupt_descriptor_table(0x8)]
-/// mod interrupts;
-/// ```
-///
-/// Loading of the table will then be achieved by calling the following function
-/// from your main function.
-///
-/// ```
-/// generate_idt()
-/// ```
+use crate::mem::LocklessCell;
+use crate::x86::apic::InterruptVector;
+use alloc::collections::BinaryHeap;
+use alloc::vec::Vec;
+use fzproc_macros::{generate_runtime_handlers_wrapper, interrupt_handler};
 
-//A static CONTROLLER
-const CONTROLLER: PIC = PIC {
-    master_cmd_port: 0x20,
-    master_data_port: 0x21,
-    slave_cmd_port: 0xA0,
-    slave_data_port: 0xA1,
-};
+use super::manager::{get_long_interrupt_manager, get_prot_interrupt_manager};
 
-#[interrupt]
-pub fn _int0x73() {
-    crate::drivers::ahci::irq_entry();
+generate_runtime_handlers_wrapper!();
+
+/// Default interrupt handler when initializing the `InterruptManager`, corresponds to a no-op.
+#[interrupt_handler]
+pub(super) fn _default_int_handler(frame: InterruptStackFrame) {
+    ()
 }
 
-#[interrupt_default]
-pub fn _int_default() {
-    CONTROLLER.acknowledge_master();
-    CONTROLLER.acknowledge_slave();
+/// Relative priority for dynamic handlers.
+pub type InterruptHandlerPriority = u16;
+
+/// Maximum priority allowed for dynamic handlers (used when a static handler is turned into a dynamic one).
+pub const MAX_INT_PRIORITY: InterruptHandlerPriority = 0xFFFF;
+
+/// Available types of interrupt handler.
+pub enum InterruptHandler {
+    /// Static handlers run without overhead, as they are directly called when an interrupt is raised with the proper [`InterruptVector`].
+    ///
+    /// They must be defined as `interrupt_handler` using the corresponding macro, to make them directly usable as handlers (which required
+    /// naked function calls).
+    Static(StaticInterruptHandler),
+
+    /// Dynamic handlers run with minor overhead, they allow multiple handlers to be defined for a same [`InterruptVector`]. Each dynamic handler
+    /// comes with a priority, and all handlers for a same vector are run in decreasing order of priority.
+    Dynamic(RuntimeInterruptHandler),
+}
+
+/// Static interrupt handler function pointer.
+pub type StaticInterruptHandler = fn();
+
+/// Dynamic interrupt handler function pointer and corresponding priority.
+pub type DynamicInterruptHandler = (fn(), InterruptHandlerPriority);
+
+/// `RuntimeInterruptHandler` manages dynamic handlers defined for an [`InterruptVector`].
+///
+/// At this time, two types of handlers can be used:
+///
+/// - standard dynamic handlers, that are run each time an interrupt with the proper [`InterruptVector`] is raised.
+///
+/// - one-shot dynamic handlers, that are run only once.
+pub(crate) struct RuntimeInterruptHandler {
+    handlers: Vec<DynamicInterruptHandler>,
+    once_handlers: LocklessCell<BinaryHeap<DynamicInterruptHandler>>,
+}
+
+impl RuntimeInterruptHandler {
+    /// Initializes a new `RuntimeInterruptHandler`.
+    pub(crate) fn new() -> Self {
+        Self {
+            handlers: Vec::new(),
+            once_handlers: LocklessCell::new(BinaryHeap::new()),
+        }
+    }
+
+    #[inline]
+    fn exec_handlers_in_order(&self) {
+        for handler in self.handlers.iter() {
+            handler.0()
+        }
+
+        while let Some(handler) = self.once_handlers.get().pop() {
+            handler.0()
+        }
+    }
+
+    #[cold]
+    pub(super) fn insert_handler(&mut self, handler: fn(), priority: InterruptHandlerPriority) {
+        self.handlers.push((handler, priority));
+        self.handlers.sort_by(|a, b| b.1.cmp(&a.1))
+    }
+
+    pub(super) fn insert_once_handler(
+        &mut self,
+        handler: fn(),
+        priority: InterruptHandlerPriority,
+    ) {
+        self.once_handlers.get().push((handler, priority));
+    }
+}
+
+#[no_mangle]
+#[link_section = ".int"]
+extern "C" fn _runtime_int_entry(vector: InterruptVector) {
+    #[cfg(feature = "x86_64")]
+    if let InterruptHandler::Dynamic(dyn_handler) = get_long_interrupt_manager()
+        .handler_registry
+        .read()
+        .get(&vector)
+        .expect("failed to locate runtime handler for this irq")
+    {
+        dyn_handler.exec_handlers_in_order();
+    }
+
+    #[cfg(not(feature = "x86_64"))]
+    if let InterruptHandler::Dynamic(dyn_handler) = get_prot_interrupt_manager()
+        .handler_registry
+        .read()
+        .get(&vector)
+        .expect("failed to locate runtime handler for this irq")
+    {
+        dyn_handler.exec_handlers_in_order();
+    }
 }

@@ -6,35 +6,37 @@ use core::slice;
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 
+use crate::drivers::generics::dev_disk::DiskDevice;
+use crate::drivers::ide::AtaDeviceIdentifier;
 use crate::{
-    drivers::ahci::device::SATADrive,
     error,
     fs::partitions::{mbr::load_drive_mbr, Partition},
     info,
 };
 
-/// Loads a `GUID Partition Table` from a [`SATADrive`].
-pub fn load_drive_gpt(drive: &mut SATADrive) -> Option<GUIDPartitionTable> {
+/// Loads a `GUID Partition Table` from a [`AHCIDrive`].
+pub fn load_drive_gpt<D: DiskDevice>(drive: &D) -> Option<GUIDPartitionTable> {
     let pmbr = load_drive_mbr(drive, 0);
 
     if !pmbr.is_pmbr() {
         return None;
     }
 
-    let mut gpt_header_bytes = alloc::vec![0u8; drive.logical_sector_size() as usize];
-    drive.read(1, 1, &mut gpt_header_bytes).ok()?;
-    let mut gpt_header = unsafe { core::ptr::read(gpt_header_bytes.as_ptr() as *mut GPTHeader) };
+    let mut gpt_header_raw_bytes = drive.read(1, 1).complete().data?;
+    let mut gpt_header_bytes = gpt_header_raw_bytes.as_slice();
+
+    let mut gpt_header =
+        unsafe { core::ptr::read_unaligned(gpt_header_bytes.as_ptr() as *mut GPTHeader) };
 
     // fallback to backup header
     if !gpt_header.is_valid() {
         error!("gpt", "invalid primary gpt header");
-        drive
-            .read(
-                drive.maximum_addressable_lba() as u64 - 1,
-                1,
-                &mut gpt_header_bytes,
-            )
-            .ok()?;
+        gpt_header_raw_bytes = drive
+            .read(u64::try_from(drive.max_sector()).ok()? - 1, 1)
+            .complete()
+            .data?;
+
+        gpt_header_bytes = gpt_header_raw_bytes.as_slice();
         gpt_header = unsafe { core::ptr::read(gpt_header_bytes.as_ptr() as *mut GPTHeader) };
 
         if !gpt_header.is_valid() {
@@ -44,18 +46,16 @@ pub fn load_drive_gpt(drive: &mut SATADrive) -> Option<GUIDPartitionTable> {
     }
 
     let gpt_entries_buffer_size_in_sectors =
-        ((gpt_header.partitions_count + gpt_header.part_entry_size) / 0x200) + 1;
-    let mut gpt_entries_buffer: Vec<u8> =
-        alloc::vec![0; (gpt_header.part_entry_size * gpt_header.partitions_count) as usize];
+        ((gpt_header.partitions_count * gpt_header.part_entry_size) / 0x200) + 1;
 
     let mut partitions: Vec<GPTPartitionEntry> = alloc::vec![];
-    drive
+    let gpt_entries_buffer = drive
         .read(
             gpt_header.part_entry_lba,
             gpt_entries_buffer_size_in_sectors as u16,
-            &mut gpt_entries_buffer,
         )
-        .ok()?;
+        .complete()
+        .data?;
 
     for i in 0..gpt_header.partitions_count {
         let part_buffer = &gpt_entries_buffer[((i * gpt_header.part_entry_size) as usize)
@@ -86,7 +86,7 @@ pub fn load_drive_gpt(drive: &mut SATADrive) -> Option<GUIDPartitionTable> {
         "loading disk guid partition table ({} partitions found)",
         partitions.len()
     );
-    let gpt = Box::new(GPT::new(gpt_header, partitions));
+    let gpt = Box::new(GPT::new(drive.identifier(), gpt_header, partitions));
     Some(gpt)
 }
 
@@ -97,23 +97,36 @@ pub type GUIDPartitionTable = Box<GPT>;
 /// Contains a GPT Header, as well as the list of all used partitions described in the table.
 #[derive(Debug)]
 pub struct GPT {
+    drive_id: AtaDeviceIdentifier,
     header: GPTHeader,
     partitions: Vec<GPTPartitionEntry>,
 }
 
 impl GPT {
-    pub fn new(header: GPTHeader, partitions: Vec<GPTPartitionEntry>) -> Self {
-        Self { header, partitions }
+    pub fn new(
+        drive_id: AtaDeviceIdentifier,
+        header: GPTHeader,
+        partitions: Vec<GPTPartitionEntry>,
+    ) -> Self {
+        Self {
+            drive_id,
+            header,
+            partitions,
+        }
     }
 
     /// Returns a [`Partition`] structure for each valid partition entry in this `GPT`.
     pub fn get_partitions(&self) -> Vec<Partition> {
         let mut partitions = alloc::vec![];
 
-        for partition in &self.partitions {
-            partitions.push(Partition::from_metadata(super::PartitionMetadata::GPT(
-                *partition,
-            )));
+        for (i, partition) in self.partitions.iter().enumerate() {
+            let mut part = Partition::from_metadata(
+                i,
+                self.drive_id,
+                super::PartitionMetadata::GPT(*partition),
+            )
+            .unwrap();
+            partitions.push(part);
         }
 
         partitions
@@ -192,7 +205,6 @@ impl GPTHeader {
             error!("gpt", "gpt header invalid signature");
             return false;
         }
-
         let crc_32 = self.checksum;
         self.checksum = 0;
 
@@ -211,6 +223,7 @@ impl GPTHeader {
 
             return false;
         }
+
         self.checksum = crc_32;
 
         true
@@ -393,7 +406,7 @@ const CRC_32_ANSI_TAB: [u32; 256] = [
     0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94, 0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d,
 ];
 
-fn crc32_calc(buf: &[u8]) -> u32 {
+pub fn crc32_calc(buf: &[u8]) -> u32 {
     let mut crc_32: u32 = 0xFFFFFFFF;
 
     for &b in buf {
@@ -401,4 +414,32 @@ fn crc32_calc(buf: &[u8]) -> u32 {
     }
 
     !crc_32
+}
+
+/// Defines usual `GPT Partition Type` field values.
+macro_rules! gpt_part_type {
+    ($([$name: tt, $id: literal]), *) => {
+        pub enum GPTPartType {
+            $($name,)*
+            Unknown
+        }
+
+        impl From<u128> for GPTPartType {
+            fn from(value: u128) -> GPTPartType {
+                match value {
+                    $($id => Self::$name,)*
+                    _ => Self::Unknown
+                }
+            }
+        }
+
+        impl From<GPTPartType> for u128 {
+            fn from(value: GPTPartType) -> u128 {
+                match value {
+                    $(GPTPartType::$name => $id,)*
+                    GPTPartType::Unknown => 0,
+                }
+            }
+        }
+    };
 }

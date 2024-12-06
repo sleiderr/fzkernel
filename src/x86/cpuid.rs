@@ -480,8 +480,35 @@ pub fn cpu_id(eax: u32) -> Option<[u32; 4]> {
         return None;
     }
 
+    #[cfg(not(feature = "x86_64"))]
     unsafe {
         asm!("cpuid", inout("eax") eax => result[0], out("ebx") result[1], out("ecx") result[2], out("edx") result[3]);
+    }
+
+    #[cfg(feature = "x86_64")]
+    unsafe {
+        asm!("push rbx", "cpuid", "mov edi, ebx", "pop rbx", inout("eax") eax => result[0], out("edi") result[1], out("ecx") result[2], out("edx") result[3]);
+    }
+
+    Some(result)
+}
+
+pub fn cpu_id_subleaf(eax: u32, ecx: u32) -> Option<[u32; 4]> {
+    let mut result = [0u32; 4];
+
+    // Check if the CPUID instruction is supported, and if the requested leaf is available.
+    if !(cpu_id_support() & cpu_id_leaf_support(eax)) {
+        return None;
+    }
+
+    #[cfg(not(feature = "x86_64"))]
+    unsafe {
+        asm!("cpuid", inout("eax") eax => result[0], out("ebx") result[1], inout("ecx") ecx => result[2], out("edx") result[3]);
+    }
+
+    #[cfg(feature = "x86_64")]
+    unsafe {
+        asm!("push rbx", "cpuid", "mov edi, ebx", "pop rbx", inout("eax") eax => result[0], out("edi") result[1], inout("ecx") ecx => result[2], out("edx") result[3]);
     }
 
     Some(result)
@@ -500,8 +527,14 @@ pub fn cpu_id_leaf_support(val: u32) -> bool {
 pub fn cpu_id_max_leaf() -> u32 {
     let result: u32;
 
-    unsafe {
-        asm!("xor eax, eax", "cpuid", out("eax") result);
+    if cfg!(feature = "x86_64") {
+        unsafe {
+            asm!("push rbx", "xor eax, eax", "cpuid", "pop rbx", out("eax") result);
+        }
+    } else {
+        unsafe {
+            asm!("xor eax, eax", "cpuid", out("eax") result);
+        }
     }
 
     result
@@ -511,8 +544,14 @@ pub fn cpu_id_max_leaf() -> u32 {
 pub fn cpu_id_max_extended_leaf() -> u32 {
     let result_ext: u32;
 
-    unsafe {
-        asm!("xor eax, eax", "cpuid", out("eax") result_ext);
+    if cfg!(feature = "x86_64") {
+        unsafe {
+            asm!("push rbx", "mov eax, 0x80000000", "cpuid", "pop rbx", out("eax") result_ext);
+        }
+    } else {
+        unsafe {
+            asm!("mov eax, 0x80000000", "cpuid", out("eax") result_ext);
+        }
     }
 
     result_ext
@@ -525,6 +564,7 @@ pub fn cpu_id_support() -> bool {
     let eax: u32;
 
     unsafe {
+        #[cfg(not(feature = "x86_64"))]
         asm!(
             // Save the EFLAGS register.
             "pushfd",
@@ -541,6 +581,28 @@ pub fn cpu_id_support() -> bool {
             // And finally we compare it to the value after the bit flip.
             "xor eax, [esp]",
             "popfd",
+            // If eax != 0, the bit flip was successful.
+            "and eax, 0x200000",
+            out("eax") eax
+        );
+
+        #[cfg(feature = "x86_64")]
+        asm!(
+            // Save the EFLAGS register.
+            "pushfq",
+            // Push it again, this time to modify it.
+            "pushfq",
+            // We flip the bit 21 of the EFLAGS register.
+            "xor dword ptr [rsp], 0x200000",
+            // We put it back in the EFLAGS register.
+            "popfq",
+            // We push it again, to check if the bit flip succeeded.
+            "pushfq",
+            // We put the initial EFLAGS value into eax.
+            "pop rax",
+            // And finally we compare it to the value after the bit flip.
+            "xor eax, [rsp]",
+            "popfq",
             // If eax != 0, the bit flip was successful.
             "and eax, 0x200000",
             out("eax") eax

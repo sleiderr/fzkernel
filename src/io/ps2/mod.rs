@@ -1,18 +1,18 @@
 use core::arch::asm;
 
 use crate::errors::{CanFail, IOError};
-use crate::io::{inb, outb};
+use crate::io::{inb, outb, IOPort};
 
 pub fn send_data(data: u8) {
-    outb(0x60, data);
+    outb(IOPort::from(0x60), data);
 }
 
 pub fn read_ps2() -> u8 {
-    inb(0x60)
+    inb(IOPort::from(0x60))
 }
 
 pub fn send_ps2(cmd: u8) {
-    outb(0x64, cmd);
+    outb(IOPort::from(0x64), cmd);
 }
 
 pub fn input_wait(mut loops: u16) -> CanFail<IOError> {

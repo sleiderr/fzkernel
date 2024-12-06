@@ -1,11 +1,15 @@
 //! ACPI implementation and related utils.
 //!
 //! Based on the following specification: <https://uefi.org/sites/default/files/resources/ACPI_Spec_6_5_Aug29.pdf>
+use acpi::hpet::HpetTable;
+use acpi::{AcpiHandler, AcpiTables, PhysicalMapping};
+use core::ops::Deref;
+use core::ptr::NonNull;
 use core::{mem, ptr, slice};
 
 use conquer_once::spin::OnceCell;
 
-use crate::{error, info};
+use crate::{error, info, println};
 
 pub mod hpet;
 pub mod sdt;

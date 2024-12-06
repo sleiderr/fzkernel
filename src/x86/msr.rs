@@ -6,8 +6,6 @@
 //! The availability of MSRs vary greatly between the different processor implementation, and
 //! should be check before attempting to read an MSR.
 //!
-//!
-//!
 //! # Safety
 //!
 //! All MSR reading-related instructions can be used safely. Writing to a Model-specific register
@@ -29,7 +27,12 @@
 //! println!("{}", tsc.unwrap());
 //! ```
 
+#![allow(clippy::must_use_candidate)]
+
+use crate::mem::PhyAddr32;
 use core::arch::asm;
+use modular_bitfield::bitfield;
+use modular_bitfield::prelude::{B2, B24, B28, B52, B7, B8};
 
 use crate::x86::cpuid::{cpu_feature_support, CPU_FEAT_MSR};
 
@@ -88,11 +91,115 @@ pub unsafe fn msr_write(msr: u32, value: u64) {
     let hi_val = ((value >> 32) & 0xffffffff) as u32;
     let lo_val = (value & 0xffffffff) as u32;
 
+    /*
     if cpu_feature_support(CPU_FEAT_MSR).is_none() || !cpu_feature_support(CPU_FEAT_MSR).unwrap() {
         return;
-    }
+    }*/
 
     unsafe {
         asm!("wrmsr", in("ecx") msr, in("edx") hi_val, in("eax") lo_val, options(nostack, nomem));
+    }
+}
+
+pub trait ModelSpecificRegister: Sized {
+    fn read() -> Option<Self>;
+    fn write(self);
+}
+
+pub(crate) const IA32_EFER: u32 = 0xC000_0080;
+
+#[bitfield]
+#[derive(Clone, Copy, Debug)]
+#[repr(u64)]
+pub struct Ia32ExtendedFeature {
+    pub syscall_enable: bool,
+    #[skip]
+    __: B7,
+    pub ia32e_enable: bool,
+    #[skip]
+    __: bool,
+    pub ia32e_active: bool,
+    pub nxe: bool,
+    #[skip]
+    __: B52,
+}
+
+impl ModelSpecificRegister for Ia32ExtendedFeature {
+    fn read() -> Option<Self> {
+        Some(Self::from(msr_read(IA32_EFER)?))
+    }
+
+    fn write(self) {
+        unsafe { msr_write(IA32_EFER, u64::from(self)) }
+    }
+}
+
+pub(crate) const IA32_APIC_BASE: u32 = 0x1B;
+
+/// `IA32_APIC_BASE` structure.
+///
+/// It has the following structure :
+///
+/// ```plaintext
+/// 63                           36 35                   12 11  10  9  8          0
+///  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+/// | //////////////////////////// |    APIC BASE >> 12    |   | /// |   | ////// |
+///  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+///                                                          |         |
+///                                                          |          - - - - BSP flag
+///                                                           - - - - - - - - - Enable/Disable flag
+///```
+///
+#[bitfield]
+#[derive(Clone, Copy, Debug)]
+#[repr(u64)]
+pub(crate) struct Ia32ApicBase {
+    #[skip]
+    __: B8,
+    pub(crate) is_bsp: bool,
+    #[skip]
+    __: B2,
+    global_enable_flag: bool,
+    base_phy_addr: B24,
+    #[skip]
+    __: B28,
+}
+
+impl Ia32ApicBase {
+    pub(crate) fn read() -> Option<Self> {
+        Some(Self::from(msr_read(IA32_APIC_BASE)?))
+    }
+
+    pub(crate) fn write(self) {
+        unsafe { msr_write(IA32_APIC_BASE, u64::from(self)) };
+    }
+
+    pub(crate) fn update(&mut self) {
+        let msr = Self::read().expect("failed to load APIC MSR");
+        self.set_global_enable_flag(msr.global_enable_flag());
+        self.set_is_bsp(msr.is_bsp());
+        self.set_base_phy_addr(msr.base_phy_addr());
+    }
+
+    pub(crate) fn global_enable(&mut self) {
+        self.set_global_enable_flag(true);
+        self.write();
+    }
+
+    pub(crate) fn global_disable(&mut self) {
+        self.set_global_enable_flag(false);
+        self.write();
+    }
+
+    pub(crate) fn apic_register_base(self) -> PhyAddr32 {
+        PhyAddr32::from(self.base_phy_addr() << 12)
+    }
+
+    pub(crate) fn set_apic_register_base(&mut self, new_addr: PhyAddr32) {
+        // Ensures that the new address is 4Kbytes-aligned.
+        assert_eq!(new_addr & ((1 << 12) - 1), 0);
+
+        self.set_base_phy_addr(new_addr >> 12);
+        self.write();
     }
 }
