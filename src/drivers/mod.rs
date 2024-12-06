@@ -5,6 +5,7 @@ pub mod ahci;
 pub mod ide;
 #[cfg(feature = "alloc")]
 pub mod pci;
+pub mod ps2;
 
 #[cfg(feature = "alloc")]
 pub mod generics;
