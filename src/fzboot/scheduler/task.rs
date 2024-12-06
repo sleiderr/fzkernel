@@ -1,5 +1,5 @@
 use core::{
-    arch::asm,
+    arch::{asm, naked_asm},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -172,7 +172,7 @@ macro_rules! task_switch {
 #[no_mangle]
 #[naked]
 pub unsafe extern "C" fn __task_state_snapshot() {
-    asm!(
+    naked_asm!(
         "push rsp",
         "push r15
         push r14
@@ -194,7 +194,6 @@ pub unsafe extern "C" fn __task_state_snapshot() {
         "call perform_task_switch",
         "mov rdx, rdx",
         "ret",
-        options(noreturn)
     )
 }
 

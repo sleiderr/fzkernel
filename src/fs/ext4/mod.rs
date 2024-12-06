@@ -17,9 +17,9 @@ use alloc::boxed::Box;
 use alloc::sync::{Arc, Weak};
 use alloc::{string::String, vec::Vec};
 use core::cell::RefCell;
-use core::mem;
+use core::mem::{self, transmute};
+use dir::GenericExt4Directory;
 
-use bytemuck::from_bytes;
 use hashbrown::HashMap;
 
 use spin::RwLock;
@@ -160,10 +160,12 @@ impl Ext4Fs {
     /// In case of any I/O error, a generic error will be returned. An error may mean that the filesystem
     /// is corrupted.
     pub(crate) fn root_dir(&self) -> IOResult<Directory> {
-        Ok(Box::new(Ext4Directory::from_inode_id(
-            self.fs_ptr.upgrade().ok_or(IOError::Unknown)?,
-            InodeNumber::ROOT_DIR,
-        )?))
+        Ok(Box::new(GenericExt4Directory {
+            dir: Ext4Directory::from_inode_id(
+                self.fs_ptr.upgrade().ok_or(IOError::Unknown)?,
+                InodeNumber::ROOT_DIR,
+            )?,
+        }))
     }
 
     /// Allocates a growable buffer (a [`Vec`]), initialized with a capacity corresponding to the block size
@@ -225,7 +227,8 @@ impl Fs for Ext4Fs {
 
         let raw_sb_buffer = raw_sb.complete().data.ok_or(MountError::IOError)?;
 
-        let ext4_sb = *from_bytes(&raw_sb_buffer);
+        let ext4_sb =
+            unsafe { *transmute::<*const u8, *const Ext4Superblock>(raw_sb_buffer.as_ptr()) };
         let sb = Superblock {
             ext4_superblock: ext4_sb,
         };
@@ -291,7 +294,8 @@ impl Fs for Ext4Fs {
 
         let raw_sb_buffer = raw_sb.data.ok_or(IOError::Unknown)?;
 
-        let ext4_sb: Ext4Superblock = *from_bytes(&raw_sb_buffer);
+        let ext4_sb =
+            unsafe { *transmute::<*const u8, *const Ext4Superblock>(raw_sb_buffer.as_ptr()) };
 
         Ok(ext4_sb.magic.is_valid())
     }

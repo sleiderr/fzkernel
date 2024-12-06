@@ -50,13 +50,15 @@ impl Ext4DirectoryEntry {
     ///
     /// The file type associated with the entry must be [`Ext4DirectoryFileType::DIRECTORY`].
     #[must_use]
-    pub(crate) fn as_directory(&self) -> Option<Ext4Directory> {
+    pub(crate) fn as_directory(&self) -> Option<GenericExt4Directory> {
         if let Some(file_type) = self.file_type {
             if file_type == Ext4DirectoryFileType::DIRECTORY {
                 let fs = self.fs.read();
                 let inode = fs.get_inode(self.inode_number)?;
                 drop(fs);
-                return Ext4Directory::from_inode(self.fs.clone(), &inode).ok();
+                return Some(GenericExt4Directory {
+                    dir: Ext4Directory::from_inode(self.fs.clone(), &inode).ok()?,
+                });
             }
         }
 
@@ -253,18 +255,31 @@ impl Iterator for Ext4Directory {
     }
 }
 
-impl FsDirectory for Ext4Directory {
+#[derive(Debug)]
+pub(crate) struct GenericExt4Directory {
+    pub(super) dir: Ext4Directory,
+}
+
+impl Iterator for GenericExt4Directory {
+    type Item = DirEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.dir.next()?.try_into().ok()
+    }
+}
+
+impl FsDirectory for GenericExt4Directory {
     fn parent(&mut self) -> Option<Directory> {
-        Some(Box::new(self.search("..".into())?.as_directory()?))
+        Some(Box::new(self.dir.search("..".into())?.as_directory()?))
     }
 
     fn is_root_dir(&self) -> IOResult<bool> {
-        let inode = self.inode.read();
+        let inode = self.dir.inode.read();
         Ok(inode.number == InodeNumber::ROOT_DIR)
     }
 
     fn size(&self) -> IOResult<usize> {
-        let inode = self.inode.read();
+        let inode = self.dir.inode.read();
         Ok(usize::try_from(cast::<InodeSize, u64>(inode.size())).expect("invalid file size"))
     }
 }

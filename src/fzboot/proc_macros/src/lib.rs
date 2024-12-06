@@ -204,9 +204,9 @@ pub fn interrupt_handler(
         #[naked]
         pub fn #wrapper_ident () {
             unsafe {
-                core::arch::asm!(
+                core::arch::naked_asm!(
                     #wrapper
-                , options(noreturn))
+                )
             }
         }
     };
@@ -307,9 +307,9 @@ pub fn generate_runtime_handlers_wrapper(_item: TokenStream) -> TokenStream {
             #[naked]
             pub fn #wrapper_name () {
                 unsafe {
-                    core::arch::asm!(
+                    core::arch::naked_asm!(
                         #wrapper
-                    , options(noreturn))
+                    )
                 }
             }
         };

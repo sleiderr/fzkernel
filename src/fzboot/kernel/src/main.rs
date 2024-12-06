@@ -10,6 +10,7 @@ extern crate alloc;
 
 use core::{arch::asm, panic::PanicInfo};
 
+use alloc::format;
 use fzboot::{
     boot::multiboot::mb_information,
     exceptions::{panic::panic_entry_no_exception, register_exception_handlers},
@@ -71,6 +72,7 @@ pub extern "C" fn _start() -> ! {
 #[no_mangle]
 #[inline(never)]
 extern "C" fn _kmain() -> ! {
+    loop {}
     unsafe {
         get_memory_mapper()
             .lock()
@@ -109,13 +111,5 @@ unsafe fn mem_init(mb_information: &mb_information::MultibootInformation) {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    if let Some(panic_msg) = info.message() {
-        panic_entry_no_exception(panic_msg.as_str().unwrap());
-    }
-
-    if let Some(panic_msg) = info.payload().downcast_ref::<&str>() {
-        panic_entry_no_exception(panic_msg);
-    } else {
-        panic_entry_no_exception("Unknown exception");
-    }
+    panic_entry_no_exception(&format!("{}", info.message()));
 }

@@ -11,10 +11,8 @@
 #![feature(
     maybe_uninit_array_assume_init,
     maybe_uninit_uninit_array,
-    const_maybe_uninit_array_assume_init,
     const_maybe_uninit_write,
-    const_mut_refs,
-    const_maybe_uninit_uninit_array
+    const_mut_refs
 )]
 #![feature(non_null_convenience)]
 #![warn(missing_copy_implementations)]

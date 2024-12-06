@@ -17,6 +17,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use bytemuck::{bytes_of, cast, Pod, Zeroable};
 use core::cmp::Ordering;
+use core::mem::transmute;
 use core::ops::{Deref, DerefMut};
 use spin::RwLock;
 
@@ -682,7 +683,7 @@ pub(crate) struct Ext4SuperblockChksum(u32);
 /// Most `ext4` related data structures have their own copy of that pointer.
 pub(super) type LockedSuperblock = Arc<RwLock<Superblock>>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub(crate) struct Superblock {
     pub(crate) ext4_superblock: Ext4Superblock,
@@ -708,8 +709,8 @@ impl DerefMut for Superblock {
 /// A copy of the partition's `Ext4Superblock` is kept in all groups, except if the `sparse_super`
 /// feature is enabled, in which case it is only kept in groups whose group number is either 0 or a
 /// power of 3, 5, 7.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Pod, Zeroable)]
-#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[repr(align(0x8))]
 pub(crate) struct Ext4Superblock {
     /// Inodes count
     pub(crate) inodes_count: InodeCount,
@@ -1134,7 +1135,12 @@ impl Ext4Superblock {
     }
 
     fn compute_chksum(&self) -> Ext4SuperblockChksum {
-        let sb_bytes = bytes_of(self);
+        let sb_bytes = unsafe {
+            core::slice::from_raw_parts(
+                transmute::<*const Ext4Superblock, *const u8>(self),
+                size_of::<Self>(),
+            )
+        };
         // we remove the checksum bytes from the calculation
         let sb_chk_bytes = &sb_bytes[..sb_bytes.len() - 4];
 
