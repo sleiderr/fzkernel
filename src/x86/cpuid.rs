@@ -37,7 +37,10 @@
 //! assert!(cpuid::cpu_feature_support(cpuid::CPU_FEAT_SSE3));
 //! ```
 
-use core::arch::asm;
+use core::{
+    arch::asm,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec::Vec};
@@ -381,6 +384,8 @@ impl From<u8> for IntelCpuModel {
     }
 }
 
+pub static CPUID_AVAILABLE: AtomicBool = AtomicBool::new(true);
+
 /// Check if a CPU feature is supported.
 ///
 /// Uses the `CPUID` instruction, that may not be supported on some systems.
@@ -476,7 +481,7 @@ pub fn cpu_id(eax: u32) -> Option<[u32; 4]> {
     let mut result = [0u32; 4];
 
     // Check if the CPUID instruction is supported, and if the requested leaf is available.
-    if !(cpu_id_support() & cpu_id_leaf_support(eax)) {
+    if !(CPUID_AVAILABLE.load(Ordering::Relaxed) & cpu_id_leaf_support(eax)) {
         return None;
     }
 
@@ -497,7 +502,7 @@ pub fn cpu_id_subleaf(eax: u32, ecx: u32) -> Option<[u32; 4]> {
     let mut result = [0u32; 4];
 
     // Check if the CPUID instruction is supported, and if the requested leaf is available.
-    if !(cpu_id_support() & cpu_id_leaf_support(eax)) {
+    if !(CPUID_AVAILABLE.load(Ordering::Relaxed) & cpu_id_leaf_support(eax)) {
         return None;
     }
 
@@ -529,11 +534,11 @@ pub fn cpu_id_max_leaf() -> u32 {
 
     if cfg!(feature = "x86_64") {
         unsafe {
-            asm!("push rbx", "xor eax, eax", "cpuid", "pop rbx", out("eax") result);
+            asm!("push rbx", "xor eax, eax", "cpuid", "pop rbx", out("eax") result, out("ecx") _, out("edx") _);
         }
     } else {
         unsafe {
-            asm!("xor eax, eax", "cpuid", out("eax") result);
+            asm!("push ebx", "xor eax, eax", "cpuid", "pop ebx", out("eax") result, out("ecx") _, out("edx") _);
         }
     }
 
@@ -546,11 +551,11 @@ pub fn cpu_id_max_extended_leaf() -> u32 {
 
     if cfg!(feature = "x86_64") {
         unsafe {
-            asm!("push rbx", "mov eax, 0x80000000", "cpuid", "pop rbx", out("eax") result_ext);
+            asm!("push rbx", "mov eax, 0x80000000", "cpuid", "pop rbx", out("eax") result_ext, out("ecx") _, out("edx") _);
         }
     } else {
         unsafe {
-            asm!("mov eax, 0x80000000", "cpuid", out("eax") result_ext);
+            asm!("push ebx", "mov eax, 0x80000000", "cpuid", "pop ebx", out("eax") result_ext, out("ecx") _, out("edx") _);
         }
     }
 

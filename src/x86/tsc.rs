@@ -111,7 +111,7 @@ impl TSCClock {
         let high_msr: u32;
 
         unsafe {
-            asm!("lfence", "rdtsc", "lfence", out("eax") low_msr, out("edx") high_msr, options(nostack, nomem));
+            asm!("lfence", "rdtsc", out("eax") low_msr, out("edx") high_msr, options(nostack, nomem));
         }
 
         ((high_msr as u64) << 32) + low_msr as u64
