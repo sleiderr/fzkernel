@@ -6,11 +6,13 @@
 //! The clock is accessible through a shared [`HPETClock`], after its initialization using `hpet_clk_init`.
 
 use acpi::HpetInfo;
-use core::mem;
+use core::mem::offset_of;
+use core::ptr::{read_volatile, write_volatile};
 
 use conquer_once::spin::OnceCell;
 
 use crate::drivers::acpi::hpet_info;
+use crate::mem::VirtAddr;
 use crate::{
     info,
     io::acpi::{sdt::ACPISDTHeader, ACPIAddress},
@@ -40,16 +42,18 @@ pub fn hpet_clk_init() {
     }
 }
 
-pub struct HPETClock<'t> {
+pub struct HPETClock {
     description_table: HpetInfo,
-    registers: &'t mut HPETMemRegisters,
+    registers: HPETMemRegisters,
     clk_freq: f64,
 }
 
-impl<'t> HPETClock<'t> {
+impl HPETClock {
     /// Creates a `HPETClock` from its ACPI description as a [`HPETDescriptionTable`].
     pub fn from_acpi_table(desc: HpetInfo) -> Self {
-        let registers: &mut HPETMemRegisters = unsafe { mem::transmute(desc.base_address) };
+        let registers = HPETMemRegisters {
+            address: VirtAddr::new(desc.base_address as u64),
+        };
         let clk_freq = 1_000_000_000_f64 / (registers.__counter_clk_period()) as f64;
 
         Self {
@@ -68,6 +72,7 @@ impl<'t> HPETClock<'t> {
     }
 
     /// Enables the `HPETClock` main counter.
+    #[inline(always)]
     pub fn enable_clk(&mut self) {
         self.registers.__set_enable_cnf(0x1);
     }
@@ -94,7 +99,7 @@ impl<'t> HPETClock<'t> {
     /// never be less that the first one, unless the counter rolled over (for a 32-bits wide clock
     /// counter).
     pub fn clk_time(&self) -> f64 {
-        self.registers.main_counter_value as f64 / self.clk_freq
+        self.registers.__read_main_counter() as f64 / self.clk_freq
     }
 }
 
@@ -108,9 +113,8 @@ pub struct HPETDescriptionTable {
     pub page_prot_oem_attr: u8,
 }
 
-#[derive(Debug)]
 #[repr(C, packed)]
-pub struct HPETMemRegisters {
+struct InternalHPETMemRegisters {
     data: u64,
     reserved_1: u64,
     general_conf: u64,
@@ -124,6 +128,185 @@ pub struct HPETMemRegisters {
     timer1: HPETTimerData,
     reserved_6: u64,
     timer2: HPETTimerData,
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct HPETMemRegisters {
+    address: VirtAddr,
+}
+
+impl HPETMemRegisters {
+    /// Main Counter Register.
+    ///
+    /// 32-bits counter will always return 0 for the upper 32-bits of this register.
+    #[inline(always)]
+    fn __read_main_counter(&self) -> u64 {
+        unsafe {
+            read_volatile(
+                self.address
+                    .as_ptr::<u64>()
+                    .byte_add(offset_of!(InternalHPETMemRegisters, main_counter_value)),
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn __read_data(&self) -> u64 {
+        unsafe {
+            read_volatile(
+                self.address
+                    .as_ptr::<u64>()
+                    .byte_add(offset_of!(InternalHPETMemRegisters, data)),
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn __read_general_int_status(&self) -> u64 {
+        unsafe {
+            read_volatile(
+                self.address
+                    .as_ptr::<u64>()
+                    .byte_add(offset_of!(InternalHPETMemRegisters, general_int_status)),
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn __read_general_conf(&self) -> u64 {
+        unsafe {
+            read_volatile(
+                self.address
+                    .as_ptr::<u64>()
+                    .byte_add(offset_of!(InternalHPETMemRegisters, general_conf)),
+            )
+        }
+    }
+
+    /// Set the Timer N Interrupt Active bit.
+    /// The functionnality of this bit depends on the mode used for this timer.
+    ///
+    /// In level-triggered mode, this bit defaults to 0, and will be set by hardware
+    /// if the corresponding timer interrupt is active. When this bit is set, it can be
+    /// cleared by writing a 1 to the same position (a write of 0 has no effect).
+    ///
+    /// In edge-triggered mode, this bit should be ignored.
+    fn __write_tn_int_sts(&mut self, n: u8) {
+        let new_cnf = (self.__read_general_int_status()) | (1 << n);
+        unsafe {
+            write_volatile(
+                self.address
+                    .as_mut_ptr::<u64>()
+                    .add(offset_of!(InternalHPETMemRegisters, general_int_status)),
+                new_cnf,
+            );
+        }
+    }
+
+    /// Timer N Interrupt Active.
+    ///
+    /// The functionnality of this bit depends on the mode used for this timer.
+    ///
+    /// In level-triggered mode, this bit defaults to 0, and will be set by hardware
+    /// if the corresponding timer interrupt is active. When this bit is set, it can be
+    /// cleared by writing a 1 to the same position (a write of 0 has no effect).
+    ///
+    /// In edge-triggered mode, this bit should be ignored.
+    fn __tn_int_sts(&self, n: u8) -> u8 {
+        ((self.__read_general_int_status() >> n) & 0x1) as u8
+    }
+
+    /// Set the LegacyReplacement Route bit.
+    ///
+    /// If this bit is set, LegacyReplacement Route are supported.
+    ///
+    /// If both this bit and `ENABLE_CNF` are set:
+    ///
+    /// - Timer 0 will be routed to IRQ0 in Non-APIC or IRQ2 in I/O APIC
+    /// - Timer 1 will be routed to IRQ8 in Non-APIC or IRQ8 in I/O APIC
+    ///
+    /// If this bit is not set, the individual routing bits for each timer will
+    /// be used.
+    fn __set_leg_rt_cnf(&mut self, val: u8) {
+        let new_cnf = (self.__read_general_conf() | 0x2) & ((val << 1) as u64);
+        unsafe {
+            write_volatile(
+                self.address
+                    .as_mut_ptr::<u64>()
+                    .add(offset_of!(InternalHPETMemRegisters, general_conf)),
+                new_cnf,
+            );
+        }
+    }
+
+    /// LegacyReplacement Route.
+    ///
+    /// If this bit is set, LegacyReplacement Route are supported.
+    ///
+    /// If both this bit and `ENABLE_CNF` are set:
+    ///
+    /// - Timer 0 will be routed to IRQ0 in Non-APIC or IRQ2 in I/O APIC
+    /// - Timer 1 will be routed to IRQ8 in Non-APIC or IRQ8 in I/O APIC
+    ///
+    /// If this bit is not set, the individual routing bits for each timer will
+    /// be used.
+    fn __leg_rt_cnf(&self) -> u8 {
+        (self.__read_general_conf() & 0x2) as u8
+    }
+
+    /// Set the Overall Enable bit.
+    ///
+    /// This bit must be set for the main counter to increment, and for any of the
+    /// timer to generate interrupts.
+    /// If set to 0, the main counter will halt.
+    fn __set_enable_cnf(&mut self, val: u8) {
+        let new_cnf = (self.__read_general_conf() | 0x1) & (val as u64);
+        unsafe {
+            write_volatile(
+                self.address
+                    .as_mut_ptr::<u64>()
+                    .byte_add(offset_of!(InternalHPETMemRegisters, general_conf)),
+                new_cnf,
+            );
+        }
+    }
+
+    /// Overall Enable.
+    ///
+    /// This bit must be set for the main counter to increment, and for any of the
+    /// timer to generate interrupts.
+    /// If set to 0, the main counter will halt.
+    fn __enable_cnf(&self) -> u8 {
+        (self.__read_general_conf() & 0x1) as u8
+    }
+
+    /// Number of timers.
+    ///
+    /// This number indicates the last timer (eg: a value of 0x2 means 3 timers).
+    fn __num_tim_cap(&self) -> u8 {
+        ((self.__read_data() >> 8) & 0x1f) as u8
+    }
+
+    /// Counter Size.
+    ///
+    /// If this bit is set (= 1), the main counter is 64 bits wide.
+    /// Otherwise it is 32 bits wide and cannot operate in 64 bits mode.
+    fn __count_size_cap(&self) -> u8 {
+        (self.__read_data() >> 13 & 0x1) as u8
+    }
+
+    /// LegacyReplacement Route Capable.
+    ///
+    /// If set, this bit indicates the support of the LegacyReplacement Interrupt
+    /// Route option.
+    fn __leg_rt_cap(&self) -> u8 {
+        ((self.__read_data() >> 15) & 0x1) as u8
+    }
+
+    fn __counter_clk_period(&self) -> u32 {
+        ((self.__read_data() >> 32) & 0xffffffff) as u32
+    }
 }
 
 #[repr(C, packed)]
@@ -306,118 +489,6 @@ impl HPETTimerData {
     /// interrupt.
     fn __tn_fsb_int_del_cap(&self) -> u8 {
         ((self.data >> 15) & 0x1) as u8
-    }
-}
-
-impl HPETMemRegisters {
-    /// Main Counter Register.
-    ///
-    /// 32-bits counter will always return 0 for the upper 32-bits of this register.
-    fn __read_main_counter(&self) -> u64 {
-        self.main_counter_value
-    }
-
-    /// Set the Timer N Interrupt Active bit.
-    /// The functionnality of this bit depends on the mode used for this timer.
-    ///
-    /// In level-triggered mode, this bit defaults to 0, and will be set by hardware
-    /// if the corresponding timer interrupt is active. When this bit is set, it can be
-    /// cleared by writing a 1 to the same position (a write of 0 has no effect).
-    ///
-    /// In edge-triggered mode, this bit should be ignored.
-    fn __write_tn_int_sts(&mut self, n: u8) {
-        let new_cnf = (self.general_int_status) | (1 << n);
-        self.general_int_status = new_cnf;
-    }
-
-    /// Timer N Interrupt Active.
-    ///
-    /// The functionnality of this bit depends on the mode used for this timer.
-    ///
-    /// In level-triggered mode, this bit defaults to 0, and will be set by hardware
-    /// if the corresponding timer interrupt is active. When this bit is set, it can be
-    /// cleared by writing a 1 to the same position (a write of 0 has no effect).
-    ///
-    /// In edge-triggered mode, this bit should be ignored.
-    fn __tn_int_sts(&self, n: u8) -> u8 {
-        ((self.general_int_status >> n) & 0x1) as u8
-    }
-
-    /// Set the LegacyReplacement Route bit.
-    ///
-    /// If this bit is set, LegacyReplacement Route are supported.
-    ///
-    /// If both this bit and `ENABLE_CNF` are set:
-    ///
-    /// - Timer 0 will be routed to IRQ0 in Non-APIC or IRQ2 in I/O APIC
-    /// - Timer 1 will be routed to IRQ8 in Non-APIC or IRQ8 in I/O APIC
-    ///
-    /// If this bit is not set, the individual routing bits for each timer will
-    /// be used.
-    fn __set_leg_rt_cnf(&mut self, val: u8) {
-        let new_cnf = (self.general_conf | 0x2) & ((val << 1) as u64);
-        self.general_conf = new_cnf;
-    }
-
-    /// LegacyReplacement Route.
-    ///
-    /// If this bit is set, LegacyReplacement Route are supported.
-    ///
-    /// If both this bit and `ENABLE_CNF` are set:
-    ///
-    /// - Timer 0 will be routed to IRQ0 in Non-APIC or IRQ2 in I/O APIC
-    /// - Timer 1 will be routed to IRQ8 in Non-APIC or IRQ8 in I/O APIC
-    ///
-    /// If this bit is not set, the individual routing bits for each timer will
-    /// be used.
-    fn __leg_rt_cnf(&self) -> u8 {
-        (self.general_conf & 0x2) as u8
-    }
-
-    /// Set the Overall Enable bit.
-    ///
-    /// This bit must be set for the main counter to increment, and for any of the
-    /// timer to generate interrupts.
-    /// If set to 0, the main counter will halt.
-    fn __set_enable_cnf(&mut self, val: u8) {
-        let new_cnf = (self.general_conf | 0x1) & (val as u64);
-        self.general_conf = new_cnf;
-    }
-
-    /// Overall Enable.
-    ///
-    /// This bit must be set for the main counter to increment, and for any of the
-    /// timer to generate interrupts.
-    /// If set to 0, the main counter will halt.
-    fn __enable_cnf(&self) -> u8 {
-        (self.general_conf & 0x1) as u8
-    }
-
-    /// Number of timers.
-    ///
-    /// This number indicates the last timer (eg: a value of 0x2 means 3 timers).
-    fn __num_tim_cap(&self) -> u8 {
-        ((self.data >> 8) & 0x1f) as u8
-    }
-
-    /// Counter Size.
-    ///
-    /// If this bit is set (= 1), the main counter is 64 bits wide.
-    /// Otherwise it is 32 bits wide and cannot operate in 64 bits mode.
-    fn __count_size_cap(&self) -> u8 {
-        (self.data >> 13 & 0x1) as u8
-    }
-
-    /// LegacyReplacement Route Capable.
-    ///
-    /// If set, this bit indicates the support of the LegacyReplacement Interrupt
-    /// Route option.
-    fn __leg_rt_cap(&self) -> u8 {
-        ((self.data >> 15) & 0x1) as u8
-    }
-
-    fn __counter_clk_period(&self) -> u32 {
-        ((self.data >> 32) & 0xffffffff) as u32
     }
 }
 
